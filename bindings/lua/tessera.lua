@@ -89,6 +89,8 @@ typedef struct { float move_s, add_s, remove_s, tile_s, reflow_s, camera_s, spee
 typedef enum { TESSERA_SHADOW_NONE=0, TESSERA_SHADOW_BLOB=1, TESSERA_SHADOW_MAP=2 } TesseraShadowMode;
 typedef struct { TesseraShadowMode shadows; int msaa; float render_scale; } TesseraQuality;
 typedef struct { float dir[3]; float color[3]; float intensity; float ambient[3]; } TesseraLight;
+typedef enum { TESSERA_PROJECTION_PERSPECTIVE=0, TESSERA_PROJECTION_ISOMETRIC=1 } TesseraProjection;
+typedef struct { bool enabled; float focus_distance, focus_range, blur_strength; } TesseraFocus;
 
 TesseraEngine* tessera_create(const TesseraConfig*);
 void           tessera_destroy(TesseraEngine*);
@@ -112,6 +114,8 @@ void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
 bool tessera_is_idle(TesseraEngine*);
 void tessera_set_quality(TesseraEngine*, const TesseraQuality*);
 void tessera_set_light(TesseraEngine*, const TesseraLight*);
+void tessera_set_projection(TesseraEngine*, TesseraProjection mode);
+void tessera_set_focus(TesseraEngine*, const TesseraFocus*);
 
 void tessera__debug_orbit(TesseraEngine*, float dyaw, float dpitch, float dzoom);
 bool tessera_capture_png(TesseraEngine*, int w, int h, const char* png_path);

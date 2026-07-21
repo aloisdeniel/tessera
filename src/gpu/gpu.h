@@ -75,13 +75,19 @@ typedef struct {
     SDL_GPUTexture*      depth_texture;
     uint32_t             depth_w, depth_h;
 
+    /* Offscreen HDR-ish scene target for post-processing (depth-of-field, M7+). */
+    SDL_GPUTexture*      scene_color;
+    uint32_t             scene_w, scene_h;
+
     /* Pipelines (created in pipeline.c). */
     SDL_GPUGraphicsPipeline* mesh_pipeline;   /* static lit mesh (cel/flat) */
     SDL_GPUGraphicsPipeline* skinned_pipeline;/* GPU-skinned mesh (M5)       */
     SDL_GPUGraphicsPipeline* blob_pipeline;   /* blob-shadow decal (M7)      */
     SDL_GPUGraphicsPipeline* particle_add;    /* additive particles (M6)     */
     SDL_GPUGraphicsPipeline* particle_alpha;  /* alpha particles (M6)        */
+    SDL_GPUGraphicsPipeline* dof_pipeline;    /* depth-of-field post pass     */
     SDL_GPUSampler*          linear_sampler;
+    SDL_GPUSampler*          point_sampler;   /* nearest, for depth sampling  */
 
     int   width, height;
     float pixel_density;
@@ -123,7 +129,23 @@ bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz);
 bool ts_gpu_create_blob_pipeline(TsGpu* g, char* err, size_t err_sz);       /* M7 */
 bool ts_gpu_create_particle_pipelines(TsGpu* g, char* err, size_t err_sz);  /* M6 */
 bool ts_gpu_create_skinned_pipeline(TsGpu* g, char* err, size_t err_sz);    /* M5 */
+bool ts_gpu_create_dof_pipeline(TsGpu* g, char* err, size_t err_sz);        /* DoF */
 void ts_gpu_release_pipelines(TsGpu* g);
+
+/* Ensure the offscreen scene color target matches (w,h). Returns false on fail. */
+bool ts_gpu_ensure_scene_target(TsGpu* g, uint32_t w, uint32_t h);
+
+/* Depth-of-field parameters resolved for a frame (world units + clip planes). */
+typedef struct {
+    float znear, zfar, focus_dist, focus_range, blur_px;
+    bool  ortho;
+} TsDofParams;
+
+/* Run the DoF post pass: sample `src_color` + `depth` and write the blurred
+ * result into `dst_color` (own render pass, no depth target). */
+void ts_gpu_dof_post(TsGpu* g, SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src_color,
+                     SDL_GPUTexture* dst_color, SDL_GPUTexture* depth,
+                     uint32_t w, uint32_t h, const TsDofParams* p);
 /* Load a shader (matches device format to a compiled/MSL blob on disk). */
 SDL_GPUShader* ts_gpu_load_shader(TsGpu* g, const char* name,
                                   SDL_GPUShaderStage stage,

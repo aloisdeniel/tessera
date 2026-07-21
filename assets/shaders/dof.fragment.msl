@@ -1,0 +1,56 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+struct DofUniform {
+    float znear, zfar;        // camera clip planes (for linear-depth reconstruct)
+    float focus_dist;         // world distance to the sharp plane
+    float focus_range;        // half-depth kept fully sharp
+    float blur_px;            // max blur radius (pixels) at full CoC
+    float texel_x, texel_y;   // 1/width, 1/height
+    float ortho;              // 1 = orthographic depth (linear), 0 = perspective
+};
+
+// Reconstruct eye-space distance from a 0..1 depth (SDL_GPU / *_rh_zo).
+static float linear_depth(float d, float n, float f, float ortho) {
+    if (ortho > 0.5) return n + d * (f - n);      // ortho depth is already linear
+    return (n * f) / (f + d * (n - f));
+}
+
+fragment float4 fs_main(VSOut in [[stage_in]],
+                        constant DofUniform& u [[buffer(0)]],
+                        texture2d<float> scene   [[texture(0)]],
+                        depth2d<float>   depthTex [[texture(1)]],
+                        sampler samp  [[sampler(0)]],
+                        sampler dsamp [[sampler(1)]])
+{
+    float3 col = scene.sample(samp, in.uv).rgb;
+
+    float d  = depthTex.sample(dsamp, in.uv);
+    float lz = linear_depth(d, u.znear, u.zfar, u.ortho);
+
+    // Circle of confusion: 0 within the sharp band, ramping to 1 over one more
+    // focus_range beyond it.
+    float dist = abs(lz - u.focus_dist);
+    float coc  = clamp((dist - u.focus_range) / max(u.focus_range, 0.5), 0.0, 1.0);
+    float radius = coc * u.blur_px;
+    if (radius < 0.75) return float4(col, 1.0);
+
+    // 22-tap golden-angle spiral disc blur, radius scaled by CoC.
+    const int N = 22;
+    const float golden = 2.39996323;
+    float3 sum = col;
+    float total = 1.0;
+    for (int i = 0; i < N; ++i) {
+        float a = golden * float(i);
+        float r = radius * sqrt((float(i) + 0.5) / float(N));
+        float2 off = float2(cos(a), sin(a)) * r * float2(u.texel_x, u.texel_y);
+        sum += scene.sample(samp, in.uv + off).rgb;
+        total += 1.0;
+    }
+    return float4(sum / total, 1.0);
+}

@@ -70,6 +70,20 @@ static void record_blobs(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
     }
 }
 
+/* Depth-of-field is active only when enabled with a real blur and a pipeline. */
+bool ts_engine_dof_active(const TesseraEngine* e) {
+    return e->focus.enabled && e->gpu.dof_pipeline && e->focus.blur_strength > 0.0f;
+}
+
+void ts_engine_resolve_dof(const TesseraEngine* e, TsDofParams* p) {
+    p->znear = e->camera.znear;
+    p->zfar = e->camera.zfar;
+    p->focus_dist = e->focus.focus_distance > 0.0f ? e->focus.focus_distance : e->camera.distance;
+    p->focus_range = e->focus.focus_range > 0.0f ? e->focus.focus_range : 1.0f;
+    p->blur_px = e->focus.blur_strength;
+    p->ortho = e->camera.ortho;
+}
+
 void ts_engine_render(TesseraEngine* e) {
     TsGpu* g = &e->gpu;
     if (!g->device || !g->window) return;
@@ -96,8 +110,10 @@ void ts_engine_render(TesseraEngine* e) {
     /* Build + upload particle geometry before the render pass (copy pass). */
     ts_fx_prepare(e, cmd);
 
+    bool dof = ts_engine_dof_active(e) && ts_gpu_ensure_scene_target(g, sw, sh);
+
     SDL_GPUColorTargetInfo color = {
-        .texture = swap,
+        .texture = dof ? g->scene_color : swap,
         .clear_color = (SDL_FColor){0.08f, 0.10f, 0.14f, 1.0f},
         .load_op = SDL_GPU_LOADOP_CLEAR,
         .store_op = SDL_GPU_STOREOP_STORE,
@@ -106,7 +122,8 @@ void ts_engine_render(TesseraEngine* e) {
         .texture = g->depth_texture,
         .clear_depth = 1.0f,
         .load_op = SDL_GPU_LOADOP_CLEAR,
-        .store_op = SDL_GPU_STOREOP_DONT_CARE,
+        /* keep depth when a post pass will sample it */
+        .store_op = dof ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE,
         .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
         .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
     };
@@ -114,6 +131,12 @@ void ts_engine_render(TesseraEngine* e) {
     SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &color, 1, &depth);
     ts_engine_record_draws(e, cmd, pass, (uint32_t)g->width, (uint32_t)g->height);
     SDL_EndGPURenderPass(pass);
+
+    if (dof) {
+        TsDofParams p; ts_engine_resolve_dof(e, &p);
+        ts_gpu_dof_post(g, cmd, g->scene_color, swap, g->depth_texture, sw, sh, &p);
+    }
+
     SDL_SubmitGPUCommandBuffer(cmd);
     e->have_rendered = true;
 }

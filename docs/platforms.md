@@ -63,7 +63,8 @@ render (main) thread.
 | `tessera_capture_png` | render thread (GPU) |
 | `tessera__debug_orbit` | render thread |
 | `tessera_set_state` | **any thread** (deep-copies, mutex-guarded) |
-| `tessera_set_timing` / `tessera_set_light` / `tessera_set_quality` | render thread (unsynchronised POD writes read live by the tick) |
+| `tessera_set_timing` / `tessera_set_light` / `tessera_set_quality` / `tessera_set_projection` / `tessera_set_focus` | render thread (unsynchronised POD writes read live by the tick) |
+| `tessera_pick` | render thread (reads live scene + camera) |
 | `tessera_is_idle` | any thread |
 | `tessera_last_error` / `tessera_backend_name` | any thread |
 | `tessera_version` / `tessera_version_string` | any thread (pure) |

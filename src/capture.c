@@ -30,7 +30,7 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
 
     SDL_GPUTextureCreateInfo dci = {
         .type = SDL_GPU_TEXTURETYPE_2D, .format = g->depth_format,
-        .usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        .usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
         .width = w, .height = h, .layer_count_or_depth = 1,
         .num_levels = 1, .sample_count = SDL_GPU_SAMPLECOUNT_1 };
     depth = SDL_CreateGPUTexture(g->device, &dci);
@@ -50,19 +50,28 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
 
     ts_fx_prepare(e, cmd);
 
+    /* DoF renders the scene offscreen, then blurs into the capture color. */
+    bool dof = ts_engine_dof_active(e) && ts_gpu_ensure_scene_target(g, w, h);
+
     SDL_GPUColorTargetInfo ct = {
-        .texture = color,
+        .texture = dof ? g->scene_color : color,
         .clear_color = (SDL_FColor){0.08f, 0.10f, 0.14f, 1.0f},
         .load_op = SDL_GPU_LOADOP_CLEAR, .store_op = SDL_GPU_STOREOP_STORE };
     SDL_GPUDepthStencilTargetInfo dt = {
         .texture = depth, .clear_depth = 1.0f,
-        .load_op = SDL_GPU_LOADOP_CLEAR, .store_op = SDL_GPU_STOREOP_DONT_CARE,
+        .load_op = SDL_GPU_LOADOP_CLEAR,
+        .store_op = dof ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE,
         .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
         .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE };
 
     SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     ts_engine_record_draws(e, cmd, pass, w, h);
     SDL_EndGPURenderPass(pass);
+
+    if (dof) {
+        TsDofParams dp; ts_engine_resolve_dof(e, &dp);
+        ts_gpu_dof_post(g, cmd, g->scene_color, color, depth, w, h, &dp);
+    }
 
     SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
     SDL_GPUTextureRegion region = { .texture = color, .w = w, .h = h, .d = 1 };

@@ -82,7 +82,8 @@ bool ts_gpu_ensure_depth(TsGpu* g, uint32_t w, uint32_t h) {
     SDL_GPUTextureCreateInfo info = {0};
     info.type = SDL_GPU_TEXTURETYPE_2D;
     info.format = g->depth_format;
-    info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    /* SAMPLER too: the depth-of-field post pass reads depth as a texture. */
+    info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
     info.width = w;
     info.height = h;
     info.layer_count_or_depth = 1;

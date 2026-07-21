@@ -14,6 +14,7 @@ typedef struct {
     float distance, yaw, pitch;
     float fov;         /* vertical, radians */
     float znear, zfar;
+    bool  ortho;       /* true = orthographic (isometric look), false = perspective */
     /* cached outputs */
     mat4  view, proj, view_proj;
     vec3  eye;         /* world-space eye position (recomputed on update) */

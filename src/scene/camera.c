@@ -36,7 +36,16 @@ void ts_camera_update(TsCamera* c, float aspect) {
     ts_orbit_eye(c->focus, c->distance, c->yaw, c->pitch, eye);
     glm_vec3_copy(eye, c->eye);
     ts_look_at(eye, c->focus, (vec3){0.0f, 1.0f, 0.0f}, c->view);
-    ts_perspective(c->fov, aspect, c->znear, c->zfar, c->proj);
+    if (c->ortho) {
+        /* Match the perspective framing at the focus distance: the ortho half
+         * height equals what the fov subtends there, so switching modes keeps
+         * the board roughly the same on-screen size. */
+        float half_h = c->distance * tanf(c->fov * 0.5f);
+        float half_w = half_h * aspect;
+        glm_ortho_rh_zo(-half_w, half_w, -half_h, half_h, c->znear, c->zfar, c->proj);
+    } else {
+        ts_perspective(c->fov, aspect, c->znear, c->zfar, c->proj);
+    }
     glm_mat4_mul(c->proj, c->view, c->view_proj);
     c->dirty = false;
 }

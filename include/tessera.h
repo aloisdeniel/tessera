@@ -282,6 +282,38 @@ TESSERA_API void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q);
 TESSERA_API void tessera_set_light(TesseraEngine* e, const TesseraLight* l);
 
 /* =======================================================================
+ *  Camera projection
+ * ===================================================================== */
+
+typedef enum {
+    TESSERA_PROJECTION_PERSPECTIVE = 0, /* default: perspective foreshortening */
+    TESSERA_PROJECTION_ISOMETRIC   = 1  /* orthographic — flat, board-game look */
+} TesseraProjection;
+
+/* Choose the camera projection. Isometric uses an orthographic projection sized
+ * to match the perspective framing at the focus distance, so the board keeps a
+ * similar on-screen size when toggling. The orbit yaw/pitch still apply. */
+TESSERA_API void tessera_set_projection(TesseraEngine* e, TesseraProjection mode);
+
+/* =======================================================================
+ *  Depth of field (focal blur)
+ * ===================================================================== */
+
+/* A focal field: geometry within `focus_range` of the focal plane stays sharp;
+ * everything nearer/farther blurs, ramping to full blur one more range beyond.
+ * Distances are world units measured from the camera (eye). */
+typedef struct {
+    bool  enabled;         /* master on/off (default off)                        */
+    float focus_distance;  /* distance to the sharp plane; <=0 = auto (orbit focus) */
+    float focus_range;     /* half-depth kept fully sharp (world units)          */
+    float blur_strength;   /* max blur radius in pixels at full defocus          */
+} TesseraFocus;
+
+/* Configure depth-of-field. Passing NULL or {.enabled=false} disables it (the
+ * scene renders directly, no post pass). Applied on the next frame. */
+TESSERA_API void tessera_set_focus(TesseraEngine* e, const TesseraFocus* focus);
+
+/* =======================================================================
  *  Debug / dev hooks
  * ===================================================================== */
 

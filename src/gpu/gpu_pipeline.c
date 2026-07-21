@@ -162,6 +162,7 @@ bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz) {
     if (!ts_gpu_create_blob_pipeline(g, err, err_sz)) return false;
     if (!ts_gpu_create_particle_pipelines(g, err, err_sz)) return false;
     if (!ts_gpu_create_skinned_pipeline(g, err, err_sz)) return false;
+    if (!ts_gpu_create_dof_pipeline(g, err, err_sz)) return false;
     return true;
 }
 
@@ -173,10 +174,14 @@ void ts_gpu_release_pipelines(TsGpu* g) {
     if (g->blob_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->blob_pipeline);
     if (g->particle_add)      SDL_ReleaseGPUGraphicsPipeline(g->device, g->particle_add);
     if (g->particle_alpha)    SDL_ReleaseGPUGraphicsPipeline(g->device, g->particle_alpha);
+    if (g->dof_pipeline)      SDL_ReleaseGPUGraphicsPipeline(g->device, g->dof_pipeline);
+    if (g->scene_color)       SDL_ReleaseGPUTexture(g->device, g->scene_color);
     if (g->linear_sampler)    SDL_ReleaseGPUSampler(g->device, g->linear_sampler);
+    if (g->point_sampler)     SDL_ReleaseGPUSampler(g->device, g->point_sampler);
     g->mesh_pipeline = g->skinned_pipeline = g->blob_pipeline = NULL;
-    g->particle_add = g->particle_alpha = NULL;
-    g->linear_sampler = NULL;
+    g->particle_add = g->particle_alpha = g->dof_pipeline = NULL;
+    g->scene_color = NULL; g->scene_w = g->scene_h = 0;
+    g->linear_sampler = g->point_sampler = NULL;
 }
 
 /* Shared standard interleaved-vertex input description (pos/normal/uv). */

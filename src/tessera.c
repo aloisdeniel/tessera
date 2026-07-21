@@ -172,6 +172,16 @@ void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q) {
 void tessera_set_light(TesseraEngine* e, const TesseraLight* l) {
     if (e && l) e->light = *l;
 }
+void tessera_set_projection(TesseraEngine* e, TesseraProjection mode) {
+    if (!e) return;
+    e->camera.ortho = (mode == TESSERA_PROJECTION_ISOMETRIC);
+    e->camera.dirty = true;
+}
+void tessera_set_focus(TesseraEngine* e, const TesseraFocus* focus) {
+    if (!e) return;
+    if (focus) e->focus = *focus;
+    else       e->focus = (TesseraFocus){0};
+}
 void tessera__debug_orbit(TesseraEngine* e, float dyaw, float dpitch, float dzoom) {
     if (e) ts_camera_orbit(&e->camera, dyaw, dpitch, dzoom);
 }

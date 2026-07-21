@@ -44,6 +44,7 @@ struct TesseraEngine {
     TesseraTiming timing;
     TesseraLight  light;
     TesseraQuality quality;
+    TesseraFocus  focus;        /* depth-of-field (off by default) */
 
     /* thread-safety for set_state handoff */
     SDL_Mutex*    state_mutex;
@@ -98,5 +99,9 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
 /* Screen-ray pick against the live scene (scene/pick.c). Fills *out; returns
  * true if a tile or entity was hit. */
 bool ts_engine_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick* out);
+
+/* Depth-of-field helpers shared by the render + capture paths. */
+bool ts_engine_dof_active(const TesseraEngine* e);
+void ts_engine_resolve_dof(const TesseraEngine* e, TsDofParams* p);
 
 #endif /* TESSERA_ENGINE_H */

@@ -219,6 +219,19 @@ final class TesseraLight extends Struct {
   @Array(3) external Array<Float> ambient;
 }
 
+// enum TesseraProjection { PERSPECTIVE=0, ISOMETRIC=1 }
+abstract final class TesseraProjection {
+  static const int perspective = 0;
+  static const int isometric = 1;
+}
+
+final class TesseraFocus extends Struct {
+  @Bool() external bool enabled;
+  @Float() external double focusDistance; // <=0 = auto (orbit focus)
+  @Float() external double focusRange;
+  @Float() external double blurStrength;
+}
+
 // ======================================================================
 //  Function typedefs (C signature / Dart signature pairs)
 // ======================================================================
@@ -262,6 +275,10 @@ typedef _SetQualityC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraQual
 typedef _SetQualityD = void Function(Pointer<TesseraEngine>, Pointer<TesseraQuality>);
 typedef _SetLightC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraLight>);
 typedef _SetLightD = void Function(Pointer<TesseraEngine>, Pointer<TesseraLight>);
+typedef _SetProjectionC = Void Function(Pointer<TesseraEngine>, Int32);
+typedef _SetProjectionD = void Function(Pointer<TesseraEngine>, int);
+typedef _SetFocusC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraFocus>);
+typedef _SetFocusD = void Function(Pointer<TesseraEngine>, Pointer<TesseraFocus>);
 
 typedef _OrbitC = Void Function(Pointer<TesseraEngine>, Float, Float, Float);
 typedef _OrbitD = void Function(Pointer<TesseraEngine>, double, double, double);
@@ -312,6 +329,10 @@ class Tessera {
       _lib.lookupFunction<_SetQualityC, _SetQualityD>('tessera_set_quality');
   late final _SetLightD _setLight =
       _lib.lookupFunction<_SetLightC, _SetLightD>('tessera_set_light');
+  late final _SetProjectionD _setProjection =
+      _lib.lookupFunction<_SetProjectionC, _SetProjectionD>('tessera_set_projection');
+  late final _SetFocusD _setFocus =
+      _lib.lookupFunction<_SetFocusC, _SetFocusD>('tessera_set_focus');
 
   late final _OrbitD _debugOrbit =
       _lib.lookupFunction<_OrbitC, _OrbitD>('tessera__debug_orbit');
@@ -367,6 +388,12 @@ class Tessera {
   bool get isIdle => _isIdle(_engine);
   void setQuality(Pointer<TesseraQuality> q) => _setQuality(_engine, q);
   void setLight(Pointer<TesseraLight> l) => _setLight(_engine, l);
+
+  /// Camera projection: TesseraProjection.perspective / .isometric.
+  void setProjection(int mode) => _setProjection(_engine, mode);
+
+  /// Depth-of-field; pass nullptr to disable.
+  void setFocus(Pointer<TesseraFocus> focus) => _setFocus(_engine, focus);
 
   // ---- dev hooks ----
   void debugOrbit(double dyaw, double dpitch, double dzoom) =>

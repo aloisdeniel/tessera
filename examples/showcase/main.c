@@ -4,6 +4,10 @@
  *   C     : glide the camera to focus the next entity (loops around)
  *   R     : reset the camera to the state's overview pose
  *   S     : cycle shadow quality (blob -> none -> blob)   [M7]
+ *   P     : toggle perspective / isometric projection
+ *   F     : toggle depth-of-field (focal blur)
+ *   [ ]   : move the focal plane nearer / farther
+ *   - =   : narrow / widen the sharp focus range
  *   click : ray-pick the tile / entity under the cursor and print it
  *   arrows: orbit the camera manually
  *   ESC   : quit
@@ -178,6 +182,22 @@ static int run_demo(TesseraEngine* e, const char* dir) {
     settle(e, 1.0);
     snprintf(p, sizeof p, "%s/showcase_4_cam_focused.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s (idle=%d)\n", p, tessera_is_idle(e));
+
+    /* depth-of-field: overview board, focal plane on the mid distance */
+    build_state(3); push_current(e); settle(e, 1.4);
+    tessera_set_focus(e, &(TesseraFocus){ .enabled = true, .focus_distance = 16.0f,
+                                          .focus_range = 2.5f, .blur_strength = 14.0f });
+    settle(e, 0.05);
+    snprintf(p, sizeof p, "%s/showcase_5_dof.png", dir);
+    tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
+
+    /* isometric projection (DoF off) */
+    tessera_set_focus(e, NULL);
+    tessera_set_projection(e, TESSERA_PROJECTION_ISOMETRIC);
+    settle(e, 0.05);
+    snprintf(p, sizeof p, "%s/showcase_6_isometric.png", dir);
+    tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
+    tessera_set_projection(e, TESSERA_PROJECTION_PERSPECTIVE);
     return 0;
 }
 
@@ -212,10 +232,14 @@ int main(int argc, char** argv) {
     }
 
     int state_idx = 0, cam_ent = -1, shadow_mode = TESSERA_SHADOW_BLOB;
+    bool iso = false;
+    TesseraFocus focus = { .enabled = false, .focus_distance = 12.0f,
+                           .focus_range = 2.5f, .blur_strength = 14.0f };
     build_state(state_idx);
     push_current(e);
 
-    printf("SPACE=next state  C=focus entity  R=overview  S=toggle shadows  ESC=quit\n");
+    printf("SPACE=state  C=focus  R=overview  S=shadows  P=projection  "
+           "F=DoF  []=focal dist  -=/+=range  click=pick  ESC=quit\n");
 
     Uint64 prev = SDL_GetPerformanceCounter();
     double freq = (double)SDL_GetPerformanceFrequency();
@@ -275,6 +299,34 @@ int main(int argc, char** argv) {
                     printf("shadows: %s\n", shadow_mode == TESSERA_SHADOW_BLOB ? "blob" : "off");
                     break;
                 }
+                case SDLK_P:
+                    iso = !iso;
+                    tessera_set_projection(e, iso ? TESSERA_PROJECTION_ISOMETRIC
+                                                  : TESSERA_PROJECTION_PERSPECTIVE);
+                    printf("projection: %s\n", iso ? "isometric" : "perspective");
+                    break;
+                case SDLK_F:
+                    focus.enabled = !focus.enabled;
+                    tessera_set_focus(e, &focus);
+                    printf("depth-of-field: %s (dist %.1f, range %.1f)\n",
+                           focus.enabled ? "on" : "off", focus.focus_distance, focus.focus_range);
+                    break;
+                case SDLK_LEFTBRACKET:
+                    focus.focus_distance = focus.focus_distance > 2.0f ? focus.focus_distance - 1.0f : 1.0f;
+                    if (focus.enabled) { tessera_set_focus(e, &focus); printf("focal dist %.1f\n", focus.focus_distance); }
+                    break;
+                case SDLK_RIGHTBRACKET:
+                    focus.focus_distance += 1.0f;
+                    if (focus.enabled) { tessera_set_focus(e, &focus); printf("focal dist %.1f\n", focus.focus_distance); }
+                    break;
+                case SDLK_MINUS:
+                    focus.focus_range = focus.focus_range > 0.75f ? focus.focus_range - 0.5f : 0.5f;
+                    if (focus.enabled) { tessera_set_focus(e, &focus); printf("focus range %.1f\n", focus.focus_range); }
+                    break;
+                case SDLK_EQUALS:
+                    focus.focus_range += 0.5f;
+                    if (focus.enabled) { tessera_set_focus(e, &focus); printf("focus range %.1f\n", focus.focus_range); }
+                    break;
                 case SDLK_LEFT:  tessera__debug_orbit(e, -0.12f, 0, 0); break;
                 case SDLK_RIGHT: tessera__debug_orbit(e,  0.12f, 0, 0); break;
                 case SDLK_UP:    tessera__debug_orbit(e, 0, -0.08f, 0); break;

@@ -169,10 +169,17 @@ OFF_IS(TesseraLight, color, 12);
 OFF_IS(TesseraLight, intensity, 24);
 OFF_IS(TesseraLight, ambient, 28);
 
+SIZE_IS(TesseraFocus, 16);
+OFF_IS(TesseraFocus, enabled, 0);
+OFF_IS(TesseraFocus, focus_distance, 4);
+OFF_IS(TesseraFocus, focus_range, 8);
+OFF_IS(TesseraFocus, blur_strength, 12);
+
 /* Enums are plain int (4 bytes) in this ABI. */
 SIZE_IS(TesseraEmitMode, 4);
 SIZE_IS(TesseraBlendMode, 4);
 SIZE_IS(TesseraShadowMode, 4);
+SIZE_IS(TesseraProjection, 4);
 SIZE_IS(TesseraLogLevel, 4);
 
 /* Scalar handle types the bindings depend on. */
