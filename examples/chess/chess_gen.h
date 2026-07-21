@@ -75,10 +75,12 @@ static void cm_lathe(ChessMesh* m, const ChessPP* p, int n) {
         if (p[i].r < 1e-5f && p[i + 1].r < 1e-5f) continue;
         for (int s = 0; s < S; ++s) {
             int s2 = (s + 1) % S;
-            cm_quad(m, ring[i] + s, ring[i] + s2, ring[i + 1] + s2, ring[i + 1] + s);
+            /* wound CCW-outward (matches build_box) so back-face culling keeps
+             * the outer shell rather than the interior. */
+            cm_quad(m, ring[i] + s, ring[i + 1] + s, ring[i + 1] + s2, ring[i] + s2);
         }
     }
-    /* bottom cap (fan) */
+    /* bottom cap (fan), facing -Y */
     if (p[0].r > 1e-5f) {
         int c = cm_vert(m, 0, p[0].y, 0, 0, -1, 0);
         for (int s = 0; s < S; ++s) {
@@ -87,10 +89,10 @@ static void cm_lathe(ChessMesh* m, const ChessPP* p, int n) {
                                p[0].r * sinf(6.2831853f * s / S), 0, -1, 0);
             int b = cm_vert(m, p[0].r * cosf(6.2831853f * s2 / S), p[0].y,
                                p[0].r * sinf(6.2831853f * s2 / S), 0, -1, 0);
-            cm_tri(m, c, b, a);
+            cm_tri(m, c, a, b);
         }
     }
-    /* top cap (fan) */
+    /* top cap (fan), facing +Y */
     if (p[n - 1].r > 1e-5f) {
         float ty = p[n - 1].y, tr = p[n - 1].r;
         int c = cm_vert(m, 0, ty, 0, 0, 1, 0);
@@ -100,7 +102,7 @@ static void cm_lathe(ChessMesh* m, const ChessPP* p, int n) {
                                tr * sinf(6.2831853f * s / S), 0, 1, 0);
             int b = cm_vert(m, tr * cosf(6.2831853f * s2 / S), ty,
                                tr * sinf(6.2831853f * s2 / S), 0, 1, 0);
-            cm_tri(m, c, a, b);
+            cm_tri(m, c, b, a);
         }
     }
 }
