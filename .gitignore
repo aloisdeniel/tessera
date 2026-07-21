@@ -1,0 +1,11 @@
+/build/
+/build-*/
+*.o
+*.a
+*.dylib
+*.so
+*.spv
+*.dxil
+compile_commands.json
+.DS_Store
+/plan/scratch/

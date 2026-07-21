@@ -1,0 +1,123 @@
+-- tessera.lua — LuaJIT FFI binding for the Tessera renderer.
+--
+-- Usage:
+--   local tessera = require("tessera")           -- loads libtessera
+--   local eng = tessera.create{ width=1280, height=720 }
+--   ... register defs, push states ...
+--
+-- Requires LuaJIT (uses the FFI library). The struct layout below MUST match
+-- include/tessera.h exactly; a self-test in bindings/lua/test.lua asserts sizes.
+
+local ffi = require("ffi")
+
+ffi.cdef[[
+typedef struct TesseraEngine TesseraEngine;
+typedef uint32_t TesseraDefId;
+typedef uint64_t TesseraEntityId;
+typedef void (*TesseraLogFn)(void* userdata, int level, const char* msg);
+
+typedef struct {
+    void*  native_window;
+    int    width, height;
+    float  pixel_density;
+    bool   engine_driven_loop;
+    bool   debug;
+    TesseraLogFn log; void* log_userdata;
+} TesseraConfig;
+
+typedef struct { const void* data; size_t size; const char* path; const char* debug_name; } TesseraBytes;
+typedef struct { float u0, v0, u1, v1; } TesseraRect;
+
+typedef struct {
+    TesseraDefId atlas;
+    TesseraRect  top, side, bottom;
+    float        tint[4];
+    float        thickness;
+} TesseraTileDef;
+
+typedef struct {
+    TesseraBytes gltf;
+    TesseraDefId atlas;
+    float        scale;
+    float        pivot[3];
+    int32_t      default_anim, move_anim, spawn_anim, despawn_anim;
+    TesseraDefId on_spawn_effect, on_despawn_effect;
+} TesseraEntityDef;
+
+typedef enum { TESSERA_EMIT_BURST = 0, TESSERA_EMIT_CONTINUOUS = 1 } TesseraEmitMode;
+typedef enum { TESSERA_BLEND_ALPHA = 0, TESSERA_BLEND_ADD = 1 } TesseraBlendMode;
+
+typedef struct {
+    TesseraDefId     atlas;
+    TesseraRect      sprite;
+    TesseraEmitMode  mode;
+    uint32_t         count;
+    float            lifetime_s, lifetime_var, speed, speed_var, spread_deg, gravity;
+    float            size_start, size_end, color_start[4], color_end[4];
+    TesseraBlendMode blend;
+    float            duration_s;
+} TesseraParticleSpec;
+
+typedef struct { TesseraParticleSpec on_add, on_remove; } TesseraEffectDef;
+
+typedef struct { int32_t x, y; } TesseraCoord;
+typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; } TesseraTilePlacement;
+typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; uint16_t facing; uint32_t anim; } TesseraEntityPlacement;
+typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; TesseraEntityId attach_entity_id; } TesseraEffectPlacement;
+typedef struct { TesseraCoord focus; float distance, yaw, pitch, fov; } TesseraCamera;
+
+typedef struct {
+    const TesseraTilePlacement*   tiles;    size_t tile_count;
+    const TesseraEntityPlacement* entities; size_t entity_count;
+    const TesseraEffectPlacement* effects;  size_t effect_count;
+    TesseraCamera camera;
+    uint64_t      epoch;
+} TesseraState;
+
+typedef struct { float move_s, add_s, remove_s, tile_s, reflow_s, camera_s, speed_multiplier; } TesseraTiming;
+typedef enum { TESSERA_SHADOW_NONE=0, TESSERA_SHADOW_BLOB=1, TESSERA_SHADOW_MAP=2 } TesseraShadowMode;
+typedef struct { TesseraShadowMode shadows; int msaa; float render_scale; } TesseraQuality;
+typedef struct { float dir[3]; float color[3]; float intensity; float ambient[3]; } TesseraLight;
+
+TesseraEngine* tessera_create(const TesseraConfig*);
+void           tessera_destroy(TesseraEngine*);
+void           tessera_resize(TesseraEngine*, int, int, float);
+void           tessera_tick(TesseraEngine*, double);
+const char*    tessera_last_error(TesseraEngine*);
+const char*    tessera_backend_name(TesseraEngine*);
+uint32_t       tessera_version(void);
+const char*    tessera_version_string(void);
+
+TesseraDefId tessera_register_atlas(TesseraEngine*, const TesseraBytes*);
+TesseraDefId tessera_register_tile_def(TesseraEngine*, const TesseraTileDef*);
+TesseraDefId tessera_register_entity_def(TesseraEngine*, const TesseraEntityDef*);
+TesseraDefId tessera_register_effect_def(TesseraEngine*, const TesseraEffectDef*);
+uint32_t     tessera_entity_def_anim_count(TesseraEngine*, TesseraDefId);
+const char*  tessera_entity_def_anim_name(TesseraEngine*, TesseraDefId, uint32_t);
+
+void tessera_set_state(TesseraEngine*, const TesseraState*);
+void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
+bool tessera_is_idle(TesseraEngine*);
+void tessera_set_quality(TesseraEngine*, const TesseraQuality*);
+void tessera_set_light(TesseraEngine*, const TesseraLight*);
+]]
+
+local lib = ffi.load("tessera")
+
+local M = { C = lib, ffi = ffi }
+
+-- Convenience wrapper: pass a Lua table of config fields.
+function M.create(cfg)
+    cfg = cfg or {}
+    local c = ffi.new("TesseraConfig")
+    c.width = cfg.width or 1280
+    c.height = cfg.height or 720
+    c.pixel_density = cfg.pixel_density or 1.0
+    c.debug = cfg.debug and true or false
+    c.engine_driven_loop = cfg.engine_driven_loop and true or false
+    local e = lib.tessera_create(c)
+    if e == nil then error("tessera_create failed") end
+    return e
+end
+
+return M

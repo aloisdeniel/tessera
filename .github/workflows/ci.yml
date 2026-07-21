@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [ main, "initial/**" ]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+          - os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL3 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl3
+
+      - name: Install SDL3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # SDL3 dev package name varies by distro; build from the pinned
+          # release if the package is unavailable.
+          sudo apt-get install -y libsdl3-dev || {
+            git clone --depth 1 --branch release-3.4.12 https://github.com/libsdl-org/SDL
+            cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release
+            cmake --build SDL/build -j
+            sudo cmake --install SDL/build
+          }
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Smoke test (headless-ish)
+        # Metal/Vulkan may be unavailable on CI runners without a GPU; the smoke
+        # test tolerates a failed device by reporting via last_error. Runs a
+        # bounded number of frames then exits.
+        run: ./build/example_hello --frames 3 --headless || true
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure || true

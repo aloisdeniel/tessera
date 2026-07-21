@@ -1,0 +1,93 @@
+/*
+ * engine.h — the internal TesseraEngine. Ties every subsystem together.
+ *
+ * Frozen contract: subsystems that arrive in later milestones are held as
+ * forward-declared pointers so this header stays stable. Core subsystems that
+ * exist from M0/M1 (gpu, registry, camera) are embedded by value.
+ */
+#ifndef TESSERA_ENGINE_H
+#define TESSERA_ENGINE_H
+
+#include <SDL3/SDL.h>
+#include "core/core.h"
+#include "gpu/gpu.h"
+#include "registry.h"
+#include "scene/scene.h"
+#include "anim/anim.h"
+#include "tessera.h"
+
+/* Forward-declared subsystems (defined in their own headers, heap-owned). */
+typedef struct TsStateStore TsStateStore;   /* state.h  — M3 */
+typedef struct TsOrch       TsOrch;         /* orchestration/orch.h — M4 */
+typedef struct TsFx         TsFx;           /* fx/fx.h  — M6 */
+
+#define TS_ERR_CAP 512
+
+struct TesseraEngine {
+    TesseraConfig config;
+    TsLog         log;
+    char          error[TS_ERR_CAP];
+
+    TsArena       frame_arena;   /* reset each frame */
+    TsArena       perm_arena;    /* engine lifetime  */
+
+    TsGpu         gpu;
+    TsRegistry    registry;
+    TsCamera      camera;
+
+    /* camera transition (M7): glide between poses on state.camera change */
+    TsCamera      cam_from, cam_to;
+    TsTween       cam_tween;
+    bool          cam_active;   /* a glide is in progress   */
+    bool          cam_have;     /* a pose has been set once  */
+
+    TesseraTiming timing;
+    TesseraLight  light;
+    TesseraQuality quality;
+
+    /* thread-safety for set_state handoff */
+    SDL_Mutex*    state_mutex;
+    TsStateStore* state;    /* current / target / pending snapshots (M3) */
+    TsOrch*       orch;     /* diff + tween instances (M4)               */
+    TsFx*         fx;       /* particle systems (M6)                     */
+
+    double        clock;          /* accumulated engine time (s) */
+    bool          have_rendered;
+    SDL_Thread*   render_thread;  /* engine-driven loop (desktop)   */
+    SDL_AtomicInt running;
+};
+
+/* One opaque draw request produced by the scene, consumed by the renderer.
+ * Decouples the GPU pass from state internals (which arrive in M3). */
+typedef struct TsDrawItem {
+    const TsMesh*   mesh;
+    SDL_GPUTexture* texture;
+    mat4            model;
+    vec4            tint;
+    vec4            uv_rect;   /* atlas remap: u0,v0,u1,v1 */
+} TsDrawItem;
+
+/* Build the frame's draw list into `arena` and return count; *out points at
+ * the arena-allocated array. Implemented in scene/drawlist.c (demo board until
+ * M3 wires it to the live state). */
+size_t ts_scene_build_drawlist(TesseraEngine* e, TsArena* arena, TsDrawItem** out);
+
+/* Set the per-engine last-error string (printf-style). */
+void ts_engine_set_error(TesseraEngine* e, const char* fmt, ...);
+
+/* Advance animation clocks + render exactly one frame. */
+void ts_engine_tick(TesseraEngine* e, double dt);
+
+/* Render the current scene (called inside tick). Split out for testability. */
+void ts_engine_render(TesseraEngine* e);
+
+/* Record the frame's draw calls into an already-begun render pass. Shared by
+ * the on-screen renderer and the offscreen capture path. */
+void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
+                            SDL_GPURenderPass* pass, uint32_t vp_w, uint32_t vp_h);
+
+/* Render one frame offscreen at (w,h) and write it to `png_path`. Returns
+ * false and sets last-error on failure. Useful for headless golden tests. */
+bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char* png_path);
+
+#endif /* TESSERA_ENGINE_H */

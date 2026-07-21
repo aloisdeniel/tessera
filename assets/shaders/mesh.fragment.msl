@@ -1,0 +1,29 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;    // xyz direction the light travels
+    float4   ambient;      // rgb ambient
+    float4   light_color;  // rgb color, a = intensity
+};
+struct VSOut {
+    float4 position [[position]];
+    float3 normal;
+    float2 uv;
+    float4 tint;
+};
+
+fragment float4 fs_main(VSOut in [[stage_in]],
+                        constant FrameUniform& frame [[buffer(0)]],
+                        texture2d<float> tex [[texture(0)]],
+                        sampler samp [[sampler(0)]])
+{
+    float3 n   = normalize(in.normal);
+    float3 L   = normalize(-frame.light_dir.xyz);
+    float  ndl = max(dot(n, L), 0.0);
+    float4 base = tex.sample(samp, in.uv) * in.tint;
+    float3 lit  = base.rgb * (frame.ambient.rgb +
+                              frame.light_color.rgb * frame.light_color.a * ndl);
+    return float4(lit, base.a);
+}
