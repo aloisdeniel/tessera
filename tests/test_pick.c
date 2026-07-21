@@ -30,9 +30,11 @@ int main(void) {
      * a unique instance id so it can be projected back to screen. */
     TesseraTilePlacement tiles[25]; size_t nt = 0;
     TesseraTileId tile00_id = 0;
+    TesseraTileId corners[4]; int nc = 0;
     for (int z = -2; z <= 2; ++z) for (int x = -2; x <= 2; ++x) {
         TesseraTileId tid = (TesseraTileId)(nt + 1);   /* nonzero */
         if (x == 0 && z == 0) tile00_id = tid;
+        if ((x == -2 || x == 2) && (z == -2 || z == 2)) corners[nc++] = tid;
         tiles[nt++] = (TesseraTilePlacement){ .coord = {x, z}, .tile_def = tile, .id = tid };
     }
     TesseraEntityPlacement ents[1] = { { .id = 42, .def = unit, .coord = {0, 0} } };
@@ -109,9 +111,51 @@ int main(void) {
     CHECK(tessera_entity_screen_position(NULL, 42, &nf) == false);
     CHECK(tessera_world_to_screen(e, NULL, &nf) == false);
 
+    /* ---- fit camera distance to a set of targets ---- */
+    /* The camera starts at distance 10 with the 5x5 board comfortably framed.
+     * Fitting tightly to the four corners must (a) succeed, (b) return a finite
+     * positive distance, and (c) actually keep all four corners on screen when
+     * applied. It should also be tighter (smaller) than the roomy start. */
+    float fit_d = 0.0f;
+    CHECK(tessera_camera_fit_distance(e, corners, 4, NULL, 0, 0.06f, &fit_d));
+    CHECK(fit_d > 0.0f && fit_d < 1.0e5f);
+    CHECK(fit_d < 10.0f);
+
+    TesseraCamera fitcam = cam; fitcam.distance = fit_d;
+    TesseraState s2 = s; s2.camera = fitcam; s2.epoch = 2;
+    tessera_set_state(e, &s2);
+    settle(e, 1.0);
+    for (int i = 0; i < 4; ++i) {
+        TesseraScreenPos csp;
+        CHECK(tessera_tile_screen_position(e, corners[i], &csp));
+        CHECK(csp.onscreen);
+        CHECK(csp.x >= 0.0f && csp.x <= W && csp.y >= 0.0f && csp.y <= H);
+    }
+    /* fitting a strict superset (every tile) can only need >= the corner fit */
+    TesseraTileId all[25];
+    for (int i = 0; i < 25; ++i) all[i] = (TesseraTileId)(i + 1);
+    float fit_all = 0.0f;
+    CHECK(tessera_camera_fit_distance(e, all, 25, NULL, 0, 0.06f, &fit_all));
+    CHECK(fit_all >= fit_d - 1e-2f);
+
+    /* a larger padding must frame no tighter than a smaller one (more border =>
+     * pull back at least as far). Exercises the padding knob deterministically;
+     * aspect sensitivity itself needs a real window resize (see chess example). */
+    float fit_pad = 0.0f;
+    CHECK(tessera_camera_fit_distance(e, corners, 4, NULL, 0, 0.25f, &fit_pad));
+    CHECK(fit_pad >= fit_d - 1e-2f);
+
+    /* empty / unresolved target lists report failure */
+    float fit_none = 123.0f;
+    CHECK(tessera_camera_fit_distance(e, NULL, 0, NULL, 0, 0.06f, &fit_none) == false);
+    TesseraTileId bogus[1] = { 99999 };
+    CHECK(tessera_camera_fit_distance(e, bogus, 1, NULL, 0, 0.06f, &fit_none) == false);
+
     /* null-arg safety */
     CHECK(tessera_pick(NULL, 0, 0, &p) == false);
     CHECK(tessera_pick(e, 0, 0, NULL) == false);
+    CHECK(tessera_camera_fit_distance(NULL, corners, 4, NULL, 0, 0, &fit_d) == false);
+    CHECK(tessera_camera_fit_distance(e, corners, 4, NULL, 0, 0, NULL) == false);
 
     tessera_destroy(e);
     if (g_fail == 0) { printf("all pick tests passed\n"); return 0; }

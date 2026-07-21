@@ -291,6 +291,28 @@ TESSERA_API bool tessera_entity_screen_position(TesseraEngine* e, TesseraEntityI
 TESSERA_API bool tessera_tile_screen_position(TesseraEngine* e, TesseraTileId id,
                                               TesseraScreenPos* out);
 
+/* Compute the orbit-camera `distance` (zoom) at which every listed tile and
+ * entity is on screen — the smallest distance that still keeps them all inside
+ * the viewport, so the framing is as tight as possible. Keeps the current
+ * camera focus / yaw / pitch / fov / projection and uses the live drawable
+ * aspect, so it re-frames correctly after a window resize. `padding` is a
+ * fractional screen margin kept clear around the targets (0 = flush to the
+ * edges, 0.1 ≈ a 10%% border); it is clamped to [0, 0.9]. Tiles are bounded by
+ * their footprint, entities by an approximate standing box. Pass tiles/entities
+ * as (pointer, count) pairs; either may be NULL/0. Writes the distance to
+ * *out_distance and returns true when at least one target resolves to a live
+ * instance; returns false (and leaves the camera to you) otherwise.
+ *
+ * This is a pure query — it does NOT move the camera. Feed the result into the
+ * `distance` of the TesseraCamera you push via tessera_set_state (or reuse your
+ * existing pose with the new distance). Call it after pushing the state whose
+ * tiles/entities you are fitting, and after tessera_resize, so the live scene
+ * and aspect are current. Not thread-safe with the tick. */
+TESSERA_API bool tessera_camera_fit_distance(TesseraEngine* e,
+                                             const TesseraTileId* tiles, size_t tile_count,
+                                             const TesseraEntityId* entities, size_t entity_count,
+                                             float padding, float* out_distance);
+
 /* =======================================================================
  *  Transitions & timing
  * ===================================================================== */

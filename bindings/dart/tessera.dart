@@ -296,6 +296,10 @@ typedef _TileScreenC =
     Bool Function(Pointer<TesseraEngine>, Uint64, Pointer<TesseraScreenPos>);
 typedef _TileScreenD =
     bool Function(Pointer<TesseraEngine>, int, Pointer<TesseraScreenPos>);
+typedef _FitDistanceC = Bool Function(Pointer<TesseraEngine>, Pointer<Uint64>, Size,
+    Pointer<Uint64>, Size, Float, Pointer<Float>);
+typedef _FitDistanceD = bool Function(Pointer<TesseraEngine>, Pointer<Uint64>, int,
+    Pointer<Uint64>, int, double, Pointer<Float>);
 typedef _SetTimingC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _SetTimingD = void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _IsIdleC = Bool Function(Pointer<TesseraEngine>);
@@ -357,6 +361,8 @@ class Tessera {
       .lookupFunction<_EntityScreenC, _EntityScreenD>('tessera_entity_screen_position');
   late final _TileScreenD _tileScreenPosition =
       _lib.lookupFunction<_TileScreenC, _TileScreenD>('tessera_tile_screen_position');
+  late final _FitDistanceD _cameraFitDistance =
+      _lib.lookupFunction<_FitDistanceC, _FitDistanceD>('tessera_camera_fit_distance');
   late final _SetTimingD _setTiming =
       _lib.lookupFunction<_SetTimingC, _SetTimingD>('tessera_set_timing');
   late final _IsIdleD _isIdle = _lib.lookupFunction<_IsIdleC, _IsIdleD>('tessera_is_idle');
@@ -432,6 +438,13 @@ class Tessera {
   /// Screen position of a live tile by its instance id (0 = unqueryable).
   bool tileScreenPosition(int id, Pointer<TesseraScreenPos> out) =>
       _tileScreenPosition(_engine, id, out);
+
+  /// Orbit distance (zoom) that keeps every listed tile/entity id on screen with
+  /// a fractional [padding] margin. Pure query; feed the result into your
+  /// camera's distance. Pass nullptr/0 for an unused id list.
+  bool cameraFitDistance(Pointer<Uint64> tiles, int tileCount, Pointer<Uint64> entities,
+          int entityCount, double padding, Pointer<Float> outDistance) =>
+      _cameraFitDistance(_engine, tiles, tileCount, entities, entityCount, padding, outDistance);
   void setTiming(Pointer<TesseraTiming> t) => _setTiming(_engine, t);
   bool get isIdle => _isIdle(_engine);
   void setQuality(Pointer<TesseraQuality> q) => _setQuality(_engine, q);

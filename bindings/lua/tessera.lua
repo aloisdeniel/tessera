@@ -119,6 +119,7 @@ bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* o
 bool tessera_world_to_screen(TesseraEngine*, const float world[3], TesseraScreenPos* out);
 bool tessera_entity_screen_position(TesseraEngine*, TesseraEntityId id, TesseraScreenPos* out);
 bool tessera_tile_screen_position(TesseraEngine*, TesseraTileId id, TesseraScreenPos* out);
+bool tessera_camera_fit_distance(TesseraEngine*, const TesseraTileId* tiles, size_t tile_count, const TesseraEntityId* entities, size_t entity_count, float padding, float* out_distance);
 void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
 bool tessera_is_idle(TesseraEngine*);
 void tessera_set_quality(TesseraEngine*, const TesseraQuality*);

@@ -5,13 +5,19 @@
  * reporting the nearest hit of each. See tessera_pick() in the public header. */
 #include "engine.h"
 #include "orchestration/orch.h"
+#include "scene/scene.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Default tile box: full tile footprint, standard thickness, top at y=0. */
 #define TS_PICK_TILE_THICKNESS 0.25f
 /* One bounding sphere for every entity, sitting on the ground (y=0). */
 #define TS_PICK_ENTITY_RADIUS  (0.45f * TS_TILE_SIZE)
+/* Bounding radii used when fitting the camera to a set of targets. Tiles use the
+ * circumscribed circle of the square footprint; entities a rough standing box. */
+#define TS_FIT_TILE_RADIUS     (0.70711f * TS_TILE_SIZE)
+#define TS_FIT_ENTITY_RADIUS   (0.9f * TS_TILE_SIZE)
 
 /* Slab test: ray (o + t*d) vs AABB [mn,mx]. Returns nearest t>=0 in *t_out. */
 static bool ray_aabb(const vec3 o, const vec3 d, const vec3 mn, const vec3 mx, float* t_out) {
@@ -47,16 +53,20 @@ static bool ray_sphere(const vec3 o, const vec3 d, const vec3 c, float r, float*
     return true;
 }
 
-/* Logical window size (the space SDL mouse/touch events use — not the pixel
- * drawable, so hosts can feed input straight through on hi-DPI displays; aspect
- * is identical either way) and a camera refresh so the mapping matches the pose
- * currently on screen. Returns false on a zero-sized viewport. */
-static bool pick_viewport(TesseraEngine* e, float* W, float* H) {
+/* Logical window size — the space SDL mouse/touch events use, not the pixel
+ * drawable, so hosts can feed input straight through on hi-DPI displays (aspect
+ * is identical either way). Returns false on a zero-sized viewport. */
+static bool pick_logical_size(TesseraEngine* e, float* W, float* H) {
     int lw = 0, lh = 0;
     if (e->gpu.window) SDL_GetWindowSize(e->gpu.window, &lw, &lh);
     *W = lw > 0 ? (float)lw : (float)e->gpu.width;
     *H = lh > 0 ? (float)lh : (float)e->gpu.height;
-    if (*W <= 0.0f || *H <= 0.0f) return false;
+    return *W > 0.0f && *H > 0.0f;
+}
+
+/* As above, plus a camera refresh so the mapping matches the pose on screen. */
+static bool pick_viewport(TesseraEngine* e, float* W, float* H) {
+    if (!pick_logical_size(e, W, H)) return false;
     e->camera.dirty = true;
     ts_camera_update(&e->camera, *W / *H);
     return true;
@@ -189,4 +199,109 @@ bool ts_engine_tile_screen_position(TesseraEngine* e, TesseraTileId id,
     vec3 p;
     if (!ts_orch_tile_pos(e->orch, id, p)) return false;
     return ts_engine_world_to_screen(e, p, out);
+}
+
+/* ------------------------------------------------------------- fit camera */
+/* True if, at orbit distance `d`, every target sphere projects inside the
+ * viewport with `pad` fractional margin. Works on a COPY of the camera so the
+ * live pose is untouched. Monotonic in `d`: as the camera pulls back, targets
+ * shrink toward the focus (which projects to screen centre), so once they fit
+ * they keep fitting — the search below relies on this. */
+static bool fit_ok(const TsCamera* base, float d, float aspect,
+                   const vec3* ctr, const float* rad, size_t n, float pad) {
+    TsCamera c = *base;
+    c.distance = d;
+    c.dirty = true;
+    ts_camera_update(&c, aspect);
+
+    /* screen-aligned basis to expand each sphere along the view right/up axes */
+    vec3 fwd; glm_vec3_sub(c.focus, c.eye, fwd);
+    if (glm_vec3_norm(fwd) < 1e-6f) return false;
+    glm_vec3_normalize(fwd);
+    vec3 wup = { 0.0f, 1.0f, 0.0f };
+    vec3 right; glm_vec3_cross(fwd, wup, right);
+    if (glm_vec3_norm(right) < 1e-6f) { right[0] = 1.0f; right[1] = 0.0f; right[2] = 0.0f; }
+    glm_vec3_normalize(right);
+    vec3 up; glm_vec3_cross(right, fwd, up); glm_vec3_normalize(up);
+
+    float lim = 1.0f - pad;
+    for (size_t i = 0; i < n; ++i) {
+        vec3 pr, pu;
+        glm_vec3_scale(right, rad[i], pr);
+        glm_vec3_scale(up,    rad[i], pu);
+        vec3 samples[5];
+        glm_vec3_copy((float*)ctr[i], samples[0]);
+        glm_vec3_add((float*)ctr[i], pr, samples[1]);
+        glm_vec3_sub((float*)ctr[i], pr, samples[2]);
+        glm_vec3_add((float*)ctr[i], pu, samples[3]);
+        glm_vec3_sub((float*)ctr[i], pu, samples[4]);
+        for (int k = 0; k < 5; ++k) {
+            vec4 clip;
+            glm_mat4_mulv(c.view_proj,
+                          (vec4){ samples[k][0], samples[k][1], samples[k][2], 1.0f }, clip);
+            if (clip[3] <= 1e-6f) return false;           /* behind the camera */
+            if (fabsf(clip[0] / clip[3]) > lim ||
+                fabsf(clip[1] / clip[3]) > lim) return false;
+        }
+    }
+    return true;
+}
+
+bool ts_engine_fit_distance(TesseraEngine* e,
+                            const TesseraTileId* tiles, size_t tile_count,
+                            const TesseraEntityId* entities, size_t entity_count,
+                            float padding, float* out_distance) {
+    if (!e || !out_distance || !e->orch) return false;
+    *out_distance = 0.0f;
+
+    float W, H;
+    if (!pick_logical_size(e, &W, &H)) return false;
+    float aspect = W / H;
+
+    size_t cap = tile_count + entity_count;
+    if (cap == 0) return false;
+
+    vec3*  ctr = (vec3*)malloc(cap * sizeof(vec3));
+    float* rad = (float*)malloc(cap * sizeof(float));
+    if (!ctr || !rad) { free(ctr); free(rad); return false; }
+
+    size_t n = 0;
+    for (size_t i = 0; i < tile_count; ++i) {
+        vec3 p;
+        if (!ts_orch_tile_pos(e->orch, tiles[i], p)) continue;
+        glm_vec3_copy(p, ctr[n]);
+        rad[n] = TS_FIT_TILE_RADIUS;
+        ++n;
+    }
+    for (size_t i = 0; i < entity_count; ++i) {
+        vec3 p;
+        if (!ts_orch_entity_pos(e->orch, entities[i], p)) continue;
+        p[1] += TS_FIT_ENTITY_RADIUS;   /* raise to the body centre */
+        glm_vec3_copy(p, ctr[n]);
+        rad[n] = TS_FIT_ENTITY_RADIUS;
+        ++n;
+    }
+    if (n == 0) { free(ctr); free(rad); return false; }
+
+    float pad = padding < 0.0f ? 0.0f : (padding > 0.9f ? 0.9f : padding);
+
+    /* Bisect for the smallest fitting distance (fit_ok is monotonic in d). */
+    float lo = fmaxf(0.1f, e->camera.znear);
+    float hi = 1.0e5f;
+    if (fit_ok(&e->camera, lo, aspect, ctr, rad, n, pad)) {
+        *out_distance = lo;
+    } else if (!fit_ok(&e->camera, hi, aspect, ctr, rad, n, pad)) {
+        *out_distance = hi;             /* never fits (targets behind camera): best effort */
+    } else {
+        for (int it = 0; it < 48; ++it) {
+            float mid = 0.5f * (lo + hi);
+            if (fit_ok(&e->camera, mid, aspect, ctr, rad, n, pad)) hi = mid;
+            else lo = mid;
+        }
+        *out_distance = hi;
+    }
+
+    free(ctr);
+    free(rad);
+    return true;
 }

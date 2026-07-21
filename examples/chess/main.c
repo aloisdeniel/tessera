@@ -426,14 +426,33 @@ static void register_defs(TesseraEngine* e) {
     }
 }
 
+/* Orbit distance (zoom); auto-fitted to the board corners on resize. */
+static float g_cam_distance = 11.5f;
+
+/* Stable per-tile instance id, so the corners can be projected / fitted. Board
+ * square s is placed at coord (file+BOARD_OFF, rank+BOARD_OFF); id = s + 1 (1 =
+ * a1 .. 64 = h8; 0 is reserved for "no id"). */
+static TesseraTileId tile_id(int square) { return (TesseraTileId)(square + 1); }
+
 /* Camera pose for the side to move: it swings behind that player. */
 static TesseraCamera side_camera(int side) {
     /* yaw = PI puts the eye on white's side (-z); yaw = 0 on black's side (+z). */
     float yaw = (side == WHITE) ? 3.14159f : 0.0f;
     /* Board files/ranks 0..7 map to grid -4..3, so the true centre of the board
      * sits between tiles at (-0.5, -0.5) rather than on any single tile. */
-    return (TesseraCamera){ .focus = { BOARD_OFF + 3.5f, BOARD_OFF + 3.5f }, .distance = 11.5f,
+    return (TesseraCamera){ .focus = { BOARD_OFF + 3.5f, BOARD_OFF + 3.5f }, .distance = g_cam_distance,
                             .yaw = yaw, .pitch = 0.82f, .fov = 0.72f };
+}
+
+/* Zoom so all four board corners stay on screen at the current window size. */
+static void refit_camera(TesseraEngine* e) {
+    TesseraTileId corners[4] = {
+        tile_id(sq_of(0, 0)), tile_id(sq_of(7, 0)),
+        tile_id(sq_of(0, 7)), tile_id(sq_of(7, 7)),
+    };
+    float d;
+    if (tessera_camera_fit_distance(e, corners, 4, NULL, 0, 0.06f, &d))
+        g_cam_distance = d;
 }
 
 /* Build a VisualState from the rules state + id grid, and push it. */
@@ -445,7 +464,8 @@ static void build_and_push(TesseraEngine* e, const Game* c) {
     for (int r = 0; r < 8; ++r) for (int f = 0; f < 8; ++f) {
         TesseraDefId td = ((f + r) & 1) ? d_tile_light : d_tile_dark;
         tiles[nt++] = (TesseraTilePlacement){
-            .coord = { f + BOARD_OFF, r + BOARD_OFF }, .tile_def = td };
+            .coord = { f + BOARD_OFF, r + BOARD_OFF }, .tile_def = td,
+            .id = tile_id(sq_of(f, r)) };
     }
     for (int s = 0; s < 64; ++s) {
         int8_t v = c->state.sq[s];
@@ -572,8 +592,11 @@ int main(int argc, char** argv) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
-            else if (ev.type == SDL_EVENT_WINDOW_RESIZED)
+            else if (ev.type == SDL_EVENT_WINDOW_RESIZED) {
                 tessera_resize(e, ev.window.data1, ev.window.data2, 1.0f);
+                refit_camera(e);       /* zoom to keep the whole board on screen */
+                build_and_push(e, &c); /* re-push so the new distance takes effect */
+            }
             else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                      ev.button.button == SDL_BUTTON_LEFT && !c.game_over) {
                 TesseraPick pk;

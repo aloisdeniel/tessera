@@ -106,6 +106,13 @@ bool ts_engine_world_to_screen(TesseraEngine* e, const vec3 world, TesseraScreen
 bool ts_engine_entity_screen_position(TesseraEngine* e, TesseraEntityId id, TesseraScreenPos* out);
 bool ts_engine_tile_screen_position(TesseraEngine* e, TesseraTileId id, TesseraScreenPos* out);
 
+/* Smallest orbit distance at which every listed tile + entity fits the viewport
+ * (scene/pick.c). Writes *out_distance; returns false if nothing resolves. */
+bool ts_engine_fit_distance(TesseraEngine* e,
+                            const TesseraTileId* tiles, size_t tile_count,
+                            const TesseraEntityId* entities, size_t entity_count,
+                            float padding, float* out_distance);
+
 /* Depth-of-field helpers shared by the render + capture paths. */
 bool ts_engine_dof_active(const TesseraEngine* e);
 void ts_engine_resolve_dof(const TesseraEngine* e, TsDofParams* p);

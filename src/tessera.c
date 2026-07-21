@@ -206,6 +206,15 @@ bool tessera_tile_screen_position(TesseraEngine* e, TesseraTileId id, TesseraScr
     return ts_engine_tile_screen_position(e, id, out);
 }
 
+bool tessera_camera_fit_distance(TesseraEngine* e,
+                                 const TesseraTileId* tiles, size_t tile_count,
+                                 const TesseraEntityId* entities, size_t entity_count,
+                                 float padding, float* out_distance) {
+    if (!e || !out_distance) return false;
+    return ts_engine_fit_distance(e, tiles, tile_count, entities, entity_count,
+                                  padding, out_distance);
+}
+
 bool tessera_capture_png(TesseraEngine* e, int w, int h, const char* png_path) {
     if (!e || !e->gpu.device || w <= 0 || h <= 0 || !png_path) return false;
     return ts_engine_capture_png(e, (uint32_t)w, (uint32_t)h, png_path);
