@@ -138,6 +138,13 @@ final class TesseraCoord extends Struct {
   @Int32() external int y;
 }
 
+/// Continuous board position: whole numbers land on tile centres, fractions
+/// interpolate — (0.5, 0.5) is the corner shared by tiles (0,0) and (1,1).
+final class TesseraCoordF extends Struct {
+  @Float() external double x;
+  @Float() external double y;
+}
+
 final class TesseraTilePlacement extends Struct {
   external TesseraCoord coord;
   @Uint32() external int tileDef; // 0 = no tile (hole)
@@ -160,7 +167,7 @@ final class TesseraEffectPlacement extends Struct {
 }
 
 final class TesseraCamera extends Struct {
-  external TesseraCoord focus;
+  external TesseraCoordF focus;
   @Float() external double distance;
   @Float() external double yaw; // radians
   @Float() external double pitch; // radians

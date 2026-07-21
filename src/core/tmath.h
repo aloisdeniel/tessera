@@ -65,6 +65,14 @@ static inline void ts_grid_to_world(int32_t x, int32_t y, vec3 out) {
     out[2] = TS_TILE_SIZE * (float)y;
 }
 
+/* Continuous grid position -> world position. Whole numbers land on tile
+ * centres; (0.5,0.5) is the corner between tiles (0,0) and (1,1). */
+static inline void ts_grid_to_world_f(float x, float y, vec3 out) {
+    out[0] = TS_TILE_SIZE * x;
+    out[1] = 0.0f;
+    out[2] = TS_TILE_SIZE * y;
+}
+
 /* Facing quadrant (0..3) -> Y-axis rotation quaternion. */
 static inline void ts_facing_quat(uint16_t facing, versor out) {
     float angle = (float)(facing & 3u) * (GLM_PI_2f);

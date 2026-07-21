@@ -219,7 +219,7 @@ static float finite_or(float v, float fallback) {
 static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
     float cyaw   = finite_or(c->yaw, e->camera.yaw);
     float cpitch = finite_or(c->pitch, e->camera.pitch);
-    vec3 focus; ts_grid_to_world(c->focus.x, c->focus.y, focus);
+    vec3 focus; ts_grid_to_world_f(c->focus.x, c->focus.y, focus);
     float fov  = (isfinite(c->fov) && c->fov > 0.0f) ? c->fov : e->camera.fov;
     float dist = (isfinite(c->distance) && c->distance > 0.1f) ? c->distance : e->camera.distance;
 

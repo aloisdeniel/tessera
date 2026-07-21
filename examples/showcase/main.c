@@ -175,7 +175,8 @@ static int run_demo(TesseraEngine* e, const char* dir) {
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
 
     /* camera focus glide onto the first unit */
-    g_cam.focus = g_ents[0].coord; g_cam.distance = 7.0f; push_current(e);
+    g_cam.focus = (TesseraCoordF){ (float)g_ents[0].coord.x, (float)g_ents[0].coord.y };
+    g_cam.distance = 7.0f; push_current(e);
     settle(e, 0.35);
     snprintf(p, sizeof p, "%s/showcase_3_cam_gliding.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s (idle=%d)\n", p, tessera_is_idle(e));
@@ -279,14 +280,15 @@ int main(int argc, char** argv) {
                 case SDLK_C:
                     if (g_ecount > 0) {
                         cam_ent = (cam_ent + 1) % (int)g_ecount;
-                        g_cam.focus = g_ents[cam_ent].coord;
+                        g_cam.focus = (TesseraCoordF){ (float)g_ents[cam_ent].coord.x,
+                                                       (float)g_ents[cam_ent].coord.y };
                         g_cam.distance = 8.0f;
                         push_current(e);
                     }
                     break;
                 case SDLK_R:
                     cam_ent = -1;
-                    g_cam.focus = (TesseraCoord){0, 0};
+                    g_cam.focus = (TesseraCoordF){0, 0};
                     g_cam.distance = 16.0f;
                     push_current(e);
                     break;

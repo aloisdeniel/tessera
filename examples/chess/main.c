@@ -430,7 +430,9 @@ static void register_defs(TesseraEngine* e) {
 static TesseraCamera side_camera(int side) {
     /* yaw = PI puts the eye on white's side (-z); yaw = 0 on black's side (+z). */
     float yaw = (side == WHITE) ? 3.14159f : 0.0f;
-    return (TesseraCamera){ .focus = { 0, 0 }, .distance = 11.5f,
+    /* Board files/ranks 0..7 map to grid -4..3, so the true centre of the board
+     * sits between tiles at (-0.5, -0.5) rather than on any single tile. */
+    return (TesseraCamera){ .focus = { BOARD_OFF + 3.5f, BOARD_OFF + 3.5f }, .distance = 11.5f,
                             .yaw = yaw, .pitch = 0.82f, .fov = 0.72f };
 }
 

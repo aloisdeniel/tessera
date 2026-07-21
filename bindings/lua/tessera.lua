@@ -66,10 +66,11 @@ typedef struct {
 typedef struct { TesseraParticleSpec on_add, on_remove; } TesseraEffectDef;
 
 typedef struct { int32_t x, y; } TesseraCoord;
+typedef struct { float x, y; } TesseraCoordF;
 typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; } TesseraTilePlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; uint16_t facing; uint32_t anim; } TesseraEntityPlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; TesseraEntityId attach_entity_id; } TesseraEffectPlacement;
-typedef struct { TesseraCoord focus; float distance, yaw, pitch, fov; } TesseraCamera;
+typedef struct { TesseraCoordF focus; float distance, yaw, pitch, fov; } TesseraCamera;
 
 typedef struct {
     const TesseraTilePlacement*   tiles;    size_t tile_count;

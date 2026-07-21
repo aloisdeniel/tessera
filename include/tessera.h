@@ -170,6 +170,12 @@ TESSERA_API const char* tessera_entity_def_anim_name(TesseraEngine* e, TesseraDe
 
 typedef struct { int32_t x, y; } TesseraCoord;
 
+/* A continuous board position. Whole numbers land on tile centres, fractions
+ * interpolate between them: (0,0) is the centre of tile (0,0), and (0.5,0.5)
+ * is the corner shared by tiles (0,0) and (1,1). Used for the camera focus so
+ * it can sit between tiles (e.g. centred on an even-sized board). */
+typedef struct { float x, y; } TesseraCoordF;
+
 typedef struct {
     TesseraCoord coord;
     TesseraDefId tile_def;   /* 0 = no tile (hole)                */
@@ -192,7 +198,7 @@ typedef struct {
 } TesseraEffectPlacement;
 
 typedef struct {
-    TesseraCoord focus;
+    TesseraCoordF focus;        /* continuous grid focus; may sit between tiles */
     float distance, yaw, pitch; /* orbit params (radians for yaw/pitch) */
     float fov;                  /* vertical fov in radians              */
 } TesseraCamera;
