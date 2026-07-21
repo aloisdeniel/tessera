@@ -179,6 +179,21 @@ final class TesseraState extends Struct {
 }
 
 // ======================================================================
+//  Picking (screen ray -> scene)
+// ======================================================================
+final class TesseraPick extends Struct {
+  @Bool() external bool hitTile;
+  external TesseraCoord tile;
+  @Float() external double tileDistance;
+  @Bool() external bool hitEntity;
+  @Uint64() external int entity;
+  @Float() external double entityDistance;
+  @Array(3) external Array<Float> rayOrigin;
+  @Array(3) external Array<Float> rayDir;
+  @Array(3) external Array<Float> point;
+}
+
+// ======================================================================
 //  Timing / quality / lighting
 // ======================================================================
 final class TesseraTiming extends Struct {
@@ -237,6 +252,8 @@ typedef _AnimNameD = Pointer<Utf8> Function(Pointer<TesseraEngine>, int, int);
 
 typedef _SetStateC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
 typedef _SetStateD = void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
+typedef _PickC = Bool Function(Pointer<TesseraEngine>, Float, Float, Pointer<TesseraPick>);
+typedef _PickD = bool Function(Pointer<TesseraEngine>, double, double, Pointer<TesseraPick>);
 typedef _SetTimingC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _SetTimingD = void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _IsIdleC = Bool Function(Pointer<TesseraEngine>);
@@ -286,6 +303,8 @@ class Tessera {
 
   late final _SetStateD _setState =
       _lib.lookupFunction<_SetStateC, _SetStateD>('tessera_set_state');
+  late final _PickD _pick =
+      _lib.lookupFunction<_PickC, _PickD>('tessera_pick');
   late final _SetTimingD _setTiming =
       _lib.lookupFunction<_SetTimingC, _SetTimingD>('tessera_set_timing');
   late final _IsIdleD _isIdle = _lib.lookupFunction<_IsIdleC, _IsIdleD>('tessera_is_idle');
@@ -340,6 +359,10 @@ class Tessera {
 
   // ---- state / timing / quality / light ----
   void setState(Pointer<TesseraState> s) => _setState(_engine, s);
+
+  /// Ray-pick the tile/entity under a logical window pixel (SDL input space).
+  bool pick(double screenX, double screenY, Pointer<TesseraPick> out) =>
+      _pick(_engine, screenX, screenY, out);
   void setTiming(Pointer<TesseraTiming> t) => _setTiming(_engine, t);
   bool get isIdle => _isIdle(_engine);
   void setQuality(Pointer<TesseraQuality> q) => _setQuality(_engine, q);

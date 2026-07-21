@@ -210,6 +210,40 @@ typedef struct {
 TESSERA_API void tessera_set_state(TesseraEngine* e, const TesseraState* state);
 
 /* =======================================================================
+ *  Picking / hit-testing (screen ray -> scene)
+ * ===================================================================== */
+
+/* Result of a screen-space pick. A ray is cast from the camera through the
+ * given pixel and tested against the live (currently animating) scene: each
+ * tile against its axis-aligned bounding box (the default tile box — full tile
+ * footprint, standard thickness, top at y=0) and each entity against one fixed
+ * bounding sphere (identical radius for every entity). The nearest tile and the
+ * nearest entity are reported independently, so a caller can prefer whichever is
+ * closer, or use the tile for movement and the entity for selection. */
+typedef struct {
+    bool            hit_tile;
+    TesseraCoord    tile;            /* grid coord of the nearest hit tile        */
+    float           tile_distance;   /* ray distance to that tile (world units)   */
+
+    bool            hit_entity;
+    TesseraEntityId entity;          /* id of the nearest hit entity              */
+    float           entity_distance; /* ray distance to that entity (world units) */
+
+    float           ray_origin[3];   /* world-space ray origin (camera)           */
+    float           ray_dir[3];      /* normalized world-space ray direction      */
+    float           point[3];        /* world-space point of the nearest hit      */
+} TesseraPick;
+
+/* Cast a ray from the camera through (screen_x, screen_y) — logical window
+ * coordinates with the origin at the top-left, i.e. the same space as SDL mouse
+ * / touch events (feed input coordinates straight through, even on hi-DPI) — and
+ * fill *out with the nearest tile and entity hit. Returns true if either a tile
+ * or an entity was hit. The ray fields in *out are always populated (even on a
+ * miss) for custom tests. Uses the current camera pose; call after ticking so
+ * the pose matches what is on screen. Not thread-safe with the tick. */
+TESSERA_API bool tessera_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick* out);
+
+/* =======================================================================
  *  Transitions & timing
  * ===================================================================== */
 

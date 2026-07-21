@@ -176,6 +176,11 @@ void tessera__debug_orbit(TesseraEngine* e, float dyaw, float dpitch, float dzoo
     if (e) ts_camera_orbit(&e->camera, dyaw, dpitch, dzoom);
 }
 
+bool tessera_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick* out) {
+    if (!e || !out) return false;
+    return ts_engine_pick(e, screen_x, screen_y, out);
+}
+
 bool tessera_capture_png(TesseraEngine* e, int w, int h, const char* png_path) {
     if (!e || !e->gpu.device || w <= 0 || h <= 0 || !png_path) return false;
     return ts_engine_capture_png(e, (uint32_t)w, (uint32_t)h, png_path);

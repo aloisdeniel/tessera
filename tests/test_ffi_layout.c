@@ -133,6 +133,20 @@ OFF_IS(TesseraState, camera, 48);
 OFF_IS(TesseraState, epoch, 72);
 
 /* ======================================================================= *
+ *  Picking
+ * ======================================================================= */
+SIZE_IS(TesseraPick, 72);
+OFF_IS(TesseraPick, hit_tile, 0);
+OFF_IS(TesseraPick, tile, 4);
+OFF_IS(TesseraPick, tile_distance, 12);
+OFF_IS(TesseraPick, hit_entity, 16);
+OFF_IS(TesseraPick, entity, 24);
+OFF_IS(TesseraPick, entity_distance, 32);
+OFF_IS(TesseraPick, ray_origin, 36);
+OFF_IS(TesseraPick, ray_dir, 48);
+OFF_IS(TesseraPick, point, 60);
+
+/* ======================================================================= *
  *  Timing / quality / lighting
  * ======================================================================= */
 SIZE_IS(TesseraTiming, 28);

@@ -4,6 +4,7 @@
  *   C     : glide the camera to focus the next entity (loops around)
  *   R     : reset the camera to the state's overview pose
  *   S     : cycle shadow quality (blob -> none -> blob)   [M7]
+ *   click : ray-pick the tile / entity under the cursor and print it
  *   arrows: orbit the camera manually
  *   ESC   : quit
  *
@@ -225,6 +226,21 @@ int main(int argc, char** argv) {
             if (ev.type == SDL_EVENT_QUIT) running = false;
             else if (ev.type == SDL_EVENT_WINDOW_RESIZED)
                 tessera_resize(e, ev.window.data1, ev.window.data2, 1.0f);
+            else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                     ev.button.button == SDL_BUTTON_LEFT) {
+                TesseraPick pick;
+                bool any = tessera_pick(e, ev.button.x, ev.button.y, &pick);
+                if (!any) {
+                    printf("pick (%.0f,%.0f): nothing\n", ev.button.x, ev.button.y);
+                } else {
+                    if (pick.hit_entity)
+                        printf("pick: entity %llu @ dist %.2f\n",
+                               (unsigned long long)pick.entity, pick.entity_distance);
+                    if (pick.hit_tile)
+                        printf("pick: tile (%d,%d) @ dist %.2f\n",
+                               pick.tile.x, pick.tile.y, pick.tile_distance);
+                }
+            }
             else if (ev.type == SDL_EVENT_KEY_DOWN) {
                 switch (ev.key.key) {
                 case SDLK_ESCAPE: running = false; break;

@@ -79,6 +79,12 @@ typedef struct {
     uint64_t      epoch;
 } TesseraState;
 
+typedef struct {
+    bool            hit_tile;    TesseraCoord tile;   float tile_distance;
+    bool            hit_entity;  TesseraEntityId entity; float entity_distance;
+    float           ray_origin[3]; float ray_dir[3]; float point[3];
+} TesseraPick;
+
 typedef struct { float move_s, add_s, remove_s, tile_s, reflow_s, camera_s, speed_multiplier; } TesseraTiming;
 typedef enum { TESSERA_SHADOW_NONE=0, TESSERA_SHADOW_BLOB=1, TESSERA_SHADOW_MAP=2 } TesseraShadowMode;
 typedef struct { TesseraShadowMode shadows; int msaa; float render_scale; } TesseraQuality;
@@ -101,6 +107,7 @@ uint32_t     tessera_entity_def_anim_count(TesseraEngine*, TesseraDefId);
 const char*  tessera_entity_def_anim_name(TesseraEngine*, TesseraDefId, uint32_t);
 
 void tessera_set_state(TesseraEngine*, const TesseraState*);
+bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* out);
 void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
 bool tessera_is_idle(TesseraEngine*);
 void tessera_set_quality(TesseraEngine*, const TesseraQuality*);

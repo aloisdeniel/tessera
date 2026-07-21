@@ -95,4 +95,8 @@ void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
  * false and sets last-error on failure. Useful for headless golden tests. */
 bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char* png_path);
 
+/* Screen-ray pick against the live scene (scene/pick.c). Fills *out; returns
+ * true if a tile or entity was hit. */
+bool ts_engine_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick* out);
+
 #endif /* TESSERA_ENGINE_H */
