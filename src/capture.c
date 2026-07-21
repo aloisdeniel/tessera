@@ -1,6 +1,7 @@
 /* capture.c — offscreen render to an RGBA texture, download, write PNG.
  * Headless-friendly; the basis for golden-image tests (M9). */
 #include "engine.h"
+#include "fx/fx.h"
 #include "stb_image_write.h"
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +42,13 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
     if (!dl) { ts_engine_set_error(e, "capture: transfer buffer failed"); goto done; }
 
     ts_arena_reset(&e->frame_arena);
+    /* Refresh the camera (and its cached eye) so particle billboards face it. */
+    e->camera.dirty = true;
+    ts_camera_update(&e->camera, (h > 0) ? (float)w / (float)h : 1.7778f);
+
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(g->device);
+
+    ts_fx_prepare(e, cmd);
 
     SDL_GPUColorTargetInfo ct = {
         .texture = color,

@@ -16,6 +16,7 @@ typedef struct {
     float znear, zfar;
     /* cached outputs */
     mat4  view, proj, view_proj;
+    vec3  eye;         /* world-space eye position (recomputed on update) */
     bool  dirty;
 } TsCamera;
 

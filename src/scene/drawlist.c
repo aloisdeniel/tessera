@@ -6,9 +6,11 @@
  * layout solver. The single symbol `ts_scene_build_drawlist` is the contract. */
 #include "engine.h"
 #include "orchestration/orch.h"
+#include <string.h>
 
 static void push_tile(TsDrawItem* it, const TsMesh* mesh, SDL_GPUTexture* tex,
                       int x, int z, float r, float g, float b) {
+    memset(it, 0, sizeof *it);
     vec3 world; ts_grid_to_world(x, z, world);
     mat4 m; glm_translate_make(m, world);
     glm_mat4_copy(m, it->model);

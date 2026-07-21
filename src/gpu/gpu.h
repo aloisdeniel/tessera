@@ -17,6 +17,22 @@ typedef struct {
     float uv[2];
 } TesseraVertex;
 
+/* Expanded, camera-facing particle vertex (built per-frame on the CPU). */
+typedef struct {
+    float pos[3];
+    float uv[2];
+    float color[4];   /* premultiplied-ish RGBA fade over life */
+} TsParticleVertex;
+
+/* Skinned mesh vertex: static attributes plus 4 joint indices + weights. */
+typedef struct {
+    float   pos[3];
+    float   normal[3];
+    float   uv[2];
+    uint8_t joints[4];
+    float   weights[4];
+} TsSkinnedVertex;
+
 /* A GPU mesh: vertex + index buffers already uploaded. */
 typedef struct {
     SDL_GPUBuffer* vbo;
@@ -38,6 +54,7 @@ typedef struct {
     vec4 light_dir;   /* xyz dir, w unused */
     vec4 ambient;     /* rgb ambient, a intensity */
     vec4 light_color; /* rgb, a intensity */
+    vec4 camera_pos;  /* xyz eye position, w unused (M7 rim/specular) */
 } TsFrameUniform;
 
 /* Per-object uniform. */
@@ -59,7 +76,11 @@ typedef struct {
     uint32_t             depth_w, depth_h;
 
     /* Pipelines (created in pipeline.c). */
-    SDL_GPUGraphicsPipeline* mesh_pipeline;   /* static lit mesh */
+    SDL_GPUGraphicsPipeline* mesh_pipeline;   /* static lit mesh (cel/flat) */
+    SDL_GPUGraphicsPipeline* skinned_pipeline;/* GPU-skinned mesh (M5)       */
+    SDL_GPUGraphicsPipeline* blob_pipeline;   /* blob-shadow decal (M7)      */
+    SDL_GPUGraphicsPipeline* particle_add;    /* additive particles (M6)     */
+    SDL_GPUGraphicsPipeline* particle_alpha;  /* alpha particles (M6)        */
     SDL_GPUSampler*          linear_sampler;
 
     int   width, height;
@@ -76,6 +97,10 @@ bool ts_gpu_ensure_depth(TsGpu* g, uint32_t w, uint32_t h);
 /* ---- buffers / meshes (gpu_resources.c) ---- */
 bool ts_gpu_upload_mesh(TsGpu* g, const TesseraVertex* verts, uint32_t vcount,
                         const uint32_t* indices, uint32_t icount, TsMesh* out);
+/* Upload a mesh with an arbitrary interleaved vertex stride (e.g. skinned). */
+bool ts_gpu_upload_mesh_raw(TsGpu* g, const void* verts, uint32_t vcount,
+                            uint32_t vstride, const uint32_t* indices,
+                            uint32_t icount, TsMesh* out);
 void ts_gpu_free_mesh(TsGpu* g, TsMesh* m);
 /* Upload RGBA8 pixels into a new GPU texture (mipmapped). */
 bool ts_gpu_upload_texture(TsGpu* g, const uint8_t* rgba, uint32_t w, uint32_t h,
@@ -88,9 +113,17 @@ void ts_build_tile_mesh(float thickness, TesseraVertex** out_v, uint32_t* out_vc
 /* Build a unit cube centered on the ground (fallback entity mesh). */
 void ts_build_unit_cube(TesseraVertex** out_v, uint32_t* out_vc,
                         uint32_t** out_i, uint32_t* out_ic);
+/* Build a unit quad in the XZ plane (y=0, extent +/-0.5, +Y normal, uv 0..1).
+ * Used for blob shadows (M7). Caller owns result. */
+void ts_build_quad_xz(TesseraVertex** out_v, uint32_t* out_vc,
+                      uint32_t** out_i, uint32_t* out_ic);
 
 /* ---- pipelines (gpu_pipeline.c) ---- */
 bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz);
+bool ts_gpu_create_blob_pipeline(TsGpu* g, char* err, size_t err_sz);       /* M7 */
+bool ts_gpu_create_particle_pipelines(TsGpu* g, char* err, size_t err_sz);  /* M6 */
+bool ts_gpu_create_skinned_pipeline(TsGpu* g, char* err, size_t err_sz);    /* M5 */
+void ts_gpu_release_pipelines(TsGpu* g);
 /* Load a shader (matches device format to a compiled/MSL blob on disk). */
 SDL_GPUShader* ts_gpu_load_shader(TsGpu* g, const char* name,
                                   SDL_GPUShaderStage stage,

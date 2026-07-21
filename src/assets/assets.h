@@ -10,6 +10,7 @@
 
 #include "core/core.h"
 #include "gpu/gpu.h"
+#include "anim/skeleton.h"
 
 typedef struct {
     char*    name;       /* arena-owned */
@@ -21,8 +22,9 @@ typedef struct {
     bool        has_mesh;
     bool        skinned;     /* has a skin (skeletal); animated in M5 */
     uint32_t    joint_count;
-    TsClipInfo* clips;       /* arena-owned array */
+    TsClipInfo* clips;       /* arena-owned array (names + durations) */
     uint32_t    clip_count;
+    TsSkinData* skin;        /* arena-owned runtime skeleton + clips (NULL if static) */
     float       base_color[4];
 } TsGltfResult;
 

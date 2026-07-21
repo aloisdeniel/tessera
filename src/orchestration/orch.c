@@ -10,6 +10,7 @@
 
 #include "engine.h"
 #include "scene/scene.h"
+#include "anim/skeleton.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -252,8 +253,31 @@ static float tile_cur_alpha(const TsTileInst* t) {
     return ts_lerpf(t->from_alpha, t->to_alpha, ts_tween_value01(&t->tween));
 }
 
+/* -------------------------------------------------------- anim state */
+/* Resolve the move clip role for an entity def (-1 if none/def missing). */
+static int32_t resolve_move_anim(TesseraEngine* e, TesseraDefId def) {
+    TsDef* d = ts_registry_get(&e->registry, def, TS_DEF_ENTITY);
+    return d ? d->as.entity.spec.move_anim : -1;
+}
+
+/* Configure the animation state machine for an instance after a diff step. */
+static void setup_anim(TsEntityInst* inst, TesseraEngine* e,
+                       const TesseraEntityPlacement* ep, bool moving, bool fresh) {
+    inst->base_anim = (int32_t)ep->anim;
+    inst->move_anim = resolve_move_anim(e, ep->def);
+    inst->anim_moving = moving;
+    if (fresh) {
+        inst->cur_clip = -1;        /* forces initial (blend-free) select */
+        inst->clip_time = 0.0f;
+        inst->blend_clip = -1;
+        inst->blend_from_time = 0.0f;
+        inst->blend_t = 1.0f;
+        inst->blend_dur = 0.0f;
+    }
+}
+
 /* --------------------------------------------------------- on_promote */
-void ts_orch_on_promote(struct TsOrch* o, const TsSnapshot* prev,
+void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* prev,
                         const TsSnapshot* next, const TesseraTiming* timing) {
     if (!next) return;
 
@@ -280,6 +304,7 @@ void ts_orch_on_promote(struct TsOrch* o, const TsSnapshot* prev,
         for (size_t i = 0; i < n; ++i) {
             TsEntityInst* inst = orch_add_entity(o);
             entity_snap(inst, &next->entities[i], &targets[i]);
+            setup_anim(inst, e, &next->entities[i], false, true);
         }
         for (size_t i = 0; i < next->tile_count; ++i) {
             const TesseraTilePlacement* tp = &next->tiles[i];
@@ -316,9 +341,11 @@ void ts_orch_on_promote(struct TsOrch* o, const TsSnapshot* prev,
                 changed = (dx * dx + dz * dz) > (0.5f * TS_TILE_SIZE) * (0.5f * TS_TILE_SIZE);
             }
             entity_retarget(inst, ep, &targets[i], changed, timing);
+            setup_anim(inst, e, ep, changed, false);
         } else {
             TsEntityInst* ni = orch_add_entity(o);
             entity_spawn(ni, ep, &targets[i], timing->add_s);
+            setup_anim(ni, e, ep, false, true);
         }
     }
 
@@ -378,6 +405,31 @@ void ts_orch_on_promote(struct TsOrch* o, const TsSnapshot* prev,
     free(targets);
 }
 
+/* Advance the per-entity animation clock + crossfade (M5). dt already scaled. */
+static void advance_anim(TsEntityInst* inst, float dt) {
+    int32_t desired = (inst->anim_moving && inst->move_anim >= 0)
+                      ? inst->move_anim : inst->base_anim;
+    if (desired != inst->cur_clip) {
+        if (inst->cur_clip >= 0) {
+            inst->blend_clip = inst->cur_clip;
+            inst->blend_from_time = inst->clip_time;
+            inst->blend_t = 0.0f;
+            inst->blend_dur = 0.18f;
+        } else {
+            inst->blend_clip = -1;
+            inst->blend_t = 1.0f;
+        }
+        inst->cur_clip = desired;
+        inst->clip_time = 0.0f;
+    }
+    inst->clip_time += dt;
+    if (inst->blend_clip >= 0) {
+        inst->blend_from_time += dt;
+        if (inst->blend_dur > 0.0f) inst->blend_t += dt / inst->blend_dur;
+        if (inst->blend_t >= 1.0f) { inst->blend_t = 1.0f; inst->blend_clip = -1; }
+    }
+}
+
 /* ----------------------------------------------------------- advance */
 void ts_orch_advance(struct TsOrch* o, float dt) {
     /* entities */
@@ -391,6 +443,11 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
         glm_quat_slerp(inst->from_rot, inst->to_rot, p, inst->rot);
         inst->scale = ts_lerpf(inst->from_scale, inst->to_scale, p);
         inst->alpha = ts_lerpf(inst->from_alpha, inst->to_alpha, p);
+
+        /* clear the "moving" flag when the positional tween completes so the
+         * clip crossfades back from walk to idle. */
+        if (inst->anim_moving && ts_tween_done(&inst->tween)) inst->anim_moving = false;
+        advance_anim(inst, dt);
 
         if (inst->removing && ts_tween_done(&inst->tween)) {
             o->entities[i] = o->entities[o->entity_count - 1];
@@ -430,6 +487,16 @@ bool ts_orch_has_content(const struct TsOrch* o) {
     return o->entity_count > 0 || o->tile_count > 0;
 }
 
+bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out) {
+    for (size_t i = 0; i < o->entity_count; ++i) {
+        if (o->entities[i].id == id) {
+            glm_vec3_copy((float*)o->entities[i].pos, out);
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ----------------------------------------------------------- drawlist */
 static bool tint_is_zero(const float t[4]) {
     return t[0] == 0.0f && t[1] == 0.0f && t[2] == 0.0f && t[3] == 0.0f;
@@ -452,6 +519,7 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         const TesseraTileDef* spec = &d->as.tile.spec;
 
         TsDrawItem* it = &items[w];
+        memset(it, 0, sizeof *it);
         it->mesh = &e->registry.tile_mesh;
         it->texture = ts_registry_atlas_texture(&e->registry, spec->atlas);
 
@@ -495,12 +563,40 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         const TesseraEntityDef* spec = &d->as.entity.spec;
 
         TsDrawItem* it = &items[w];
+        memset(it, 0, sizeof *it);
         if (d->as.entity.has_mesh && d->as.entity.mesh.vertex_count > 0)
             it->mesh = &d->as.entity.mesh;
         else
             it->mesh = &e->registry.cube_mesh;
 
         it->texture = ts_registry_atlas_texture(&e->registry, spec->atlas);
+
+        /* Skinned meshes carry the skinned vertex format, so they MUST be drawn
+         * with the skinned pipeline. Flag the format up front; the renderer skips
+         * a skinned item that lacks a palette rather than binding it to the
+         * static pipeline (vertex-layout mismatch). */
+        if (d->as.entity.skinned) {
+            it->skinned = true;
+            TsSkinData* sd = (TsSkinData*)d->as.entity.skin_data;
+            uint32_t jc = sd ? sd->skeleton.joint_count : 0;
+            mat4* palette = jc > 0 ? TS_ARENA_ARR(arena, mat4, jc) : NULL;
+            if (palette) {
+                TsJointPose poseA[TS_MAX_JOINTS], poseB[TS_MAX_JOINTS], poseF[TS_MAX_JOINTS];
+                const TsClip* cur = (inst->cur_clip >= 0 && (uint32_t)inst->cur_clip < sd->clip_count)
+                                    ? &sd->clips[inst->cur_clip] : NULL;
+                ts_clip_sample(&sd->skeleton, cur, inst->clip_time, true, poseA);
+                if (inst->blend_clip >= 0 && (uint32_t)inst->blend_clip < sd->clip_count) {
+                    ts_clip_sample(&sd->skeleton, &sd->clips[inst->blend_clip],
+                                   inst->blend_from_time, true, poseB);
+                    ts_pose_blend(poseB, poseA, inst->blend_t, jc, poseF);
+                    ts_skeleton_skinning(&sd->skeleton, poseF, palette);
+                } else {
+                    ts_skeleton_skinning(&sd->skeleton, poseA, palette);
+                }
+                it->joints = palette;
+                it->joint_count = jc;
+            }
+        }
 
         float ds = spec->scale > 0.0f ? spec->scale : 1.0f;
         float s = inst->scale * ds;
@@ -516,5 +612,37 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         ++w;
     }
 
+    return w;
+}
+
+/* ----------------------------------------------------------- blob shadows */
+size_t ts_orch_build_blobs(struct TsOrch* o, TesseraEngine* e,
+                           TsArena* arena, TsBlob** out) {
+    *out = NULL;
+    if (o->entity_count == 0) return 0;
+    TsBlob* blobs = TS_ARENA_ARR(arena, TsBlob, o->entity_count);
+    if (!blobs) return 0;
+    *out = blobs;
+
+    size_t w = 0;
+    for (size_t i = 0; i < o->entity_count; ++i) {
+        TsEntityInst* inst = &o->entities[i];
+        TsDef* d = ts_registry_get(&e->registry, inst->def, TS_DEF_ENTITY);
+        if (!d) continue;
+        float ds = d->as.entity.spec.scale > 0.0f ? d->as.entity.spec.scale : 1.0f;
+        float s = inst->scale * ds;
+        if (s <= 0.001f || inst->alpha <= 0.02f) continue;
+
+        TsBlob* b = &blobs[w++];
+        b->center[0] = inst->pos[0];
+        b->center[1] = 0.02f;            /* just above the tile surface */
+        b->center[2] = inst->pos[2];
+        b->radius = 0.55f * s * TS_TILE_SIZE;
+        /* fade the shadow as the entity hops (higher = fainter, larger) */
+        float lift = inst->pos[1] > 0.0f ? inst->pos[1] : 0.0f;
+        float lift_fade = 1.0f / (1.0f + lift * 1.5f);
+        b->radius *= (1.0f + lift * 0.4f);
+        b->alpha = 0.38f * inst->alpha * lift_fade;
+    }
     return w;
 }

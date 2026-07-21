@@ -67,10 +67,15 @@ typedef struct {
     TsGpu*    gpu;
     TsArena*  arena;      /* for clip names etc. */
     const TsLog* log;
-    TsTexture white;      /* 1x1 white fallback for untextured draws */
-    TsMesh    tile_mesh;  /* shared thin-box tile mesh */
-    TsMesh    cube_mesh;  /* fallback entity mesh */
+    TsTexture white;        /* 1x1 white fallback for untextured draws */
+    TsTexture particle_dot; /* soft radial sprite for untextured particles (M6) */
+    TsMesh    tile_mesh;    /* shared thin-box tile mesh */
+    TsMesh    cube_mesh;    /* fallback entity mesh */
+    TsMesh    quad_mesh;    /* unit XZ quad for blob shadows (M7) */
 } TsRegistry;
+
+/* Texture to bind for a particle emitter's atlas (soft dot when atlas==0). */
+SDL_GPUTexture* ts_registry_particle_texture(TsRegistry* r, TesseraDefId atlas);
 
 /* Resolve the texture to bind for a def's atlas id (falls back to white). */
 SDL_GPUTexture* ts_registry_atlas_texture(TsRegistry* r, TesseraDefId atlas);

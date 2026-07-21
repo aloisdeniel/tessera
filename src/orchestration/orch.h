@@ -37,6 +37,17 @@ typedef struct {
     bool    alive;
     /* current interpolated (recomputed each advance) */
     vec3    pos; versor rot; float scale; float alpha;
+
+    /* skeletal animation state machine (M5) */
+    int32_t base_anim;        /* state-selected clip (idle/…) */
+    int32_t move_anim;        /* resolved move clip, or -1     */
+    bool    anim_moving;      /* a positional move is underway  */
+    int32_t cur_clip;         /* currently playing clip, or -1  */
+    float   clip_time;        /* playback time of cur_clip      */
+    int32_t blend_clip;       /* crossfade source clip, or -1   */
+    float   blend_from_time;  /* frozen time of the source clip */
+    float   blend_t;          /* crossfade progress 0..1        */
+    float   blend_dur;        /* crossfade duration (s)         */
 } TsEntityInst;
 
 /* Live per-tile instance (keyed by coord). */
@@ -61,12 +72,13 @@ struct TsOrch* ts_orch_create(void);
 void ts_orch_destroy(struct TsOrch* o);
 
 /* Diff prev->next and (re)start transitions. `prev` may be NULL (first state:
- * snap in). timing drives durations; camera handled by the engine. */
-void ts_orch_on_promote(struct TsOrch* o, const TsSnapshot* prev,
+ * snap in). timing drives durations; camera handled by the engine. `e` gives
+ * access to entity defs (for resolving move/idle clip roles). */
+void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* prev,
                         const TsSnapshot* next, const TesseraTiming* timing);
 
 /* Advance all tweens by dt (already scaled by speed_multiplier by the caller)
- * and recompute interpolated transforms; cull completed removals. */
+ * and recompute interpolated transforms + animation clocks; cull removals. */
 void ts_orch_advance(struct TsOrch* o, float dt);
 
 /* True when no transitions are active. */
@@ -75,8 +87,23 @@ bool ts_orch_is_idle(const struct TsOrch* o);
 /* True once any state has been promoted (there are live instances to draw). */
 bool ts_orch_has_content(const struct TsOrch* o);
 
+/* Current interpolated world position of a live entity by id. Returns false if
+ * the id is not present. Used by the fx system to follow attached emitters. */
+bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out);
+
 /* Build the frame draw list from live instances into `arena`. Returns count. */
 size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
                               TsArena* arena, struct TsDrawItem** out);
+
+/* A blob-shadow decal cast by an entity onto the ground plane (M7). */
+typedef struct {
+    vec3  center;   /* world position; y is forced to the ground offset */
+    float radius;   /* disc half-extent in world units */
+    float alpha;    /* opacity (fades with the entity) */
+} TsBlob;
+
+/* Emit one blob per live entity into `arena`. Returns count. */
+size_t ts_orch_build_blobs(struct TsOrch* o, TesseraEngine* e,
+                           TsArena* arena, TsBlob** out);
 
 #endif /* TESSERA_ORCH_H */

@@ -6,10 +6,17 @@
 /* ---- mesh upload ------------------------------------------------------ */
 bool ts_gpu_upload_mesh(TsGpu* g, const TesseraVertex* verts, uint32_t vcount,
                         const uint32_t* indices, uint32_t icount, TsMesh* out) {
-    memset(out, 0, sizeof *out);
-    if (!verts || vcount == 0 || !indices || icount == 0) return false;
+    return ts_gpu_upload_mesh_raw(g, verts, vcount, (uint32_t)sizeof(TesseraVertex),
+                                  indices, icount, out);
+}
 
-    const uint32_t vbytes = vcount * (uint32_t)sizeof(TesseraVertex);
+bool ts_gpu_upload_mesh_raw(TsGpu* g, const void* verts, uint32_t vcount,
+                            uint32_t vstride, const uint32_t* indices,
+                            uint32_t icount, TsMesh* out) {
+    memset(out, 0, sizeof *out);
+    if (!verts || vcount == 0 || !indices || icount == 0 || vstride == 0) return false;
+
+    const uint32_t vbytes = vcount * vstride;
     const uint32_t ibytes = icount * (uint32_t)sizeof(uint32_t);
 
     SDL_GPUBufferCreateInfo vci = { .usage = SDL_GPU_BUFFERUSAGE_VERTEX, .size = vbytes };
@@ -148,4 +155,19 @@ void ts_build_unit_cube(TesseraVertex** ov, uint32_t* ovc,
     const float half = 0.35f * TS_TILE_SIZE;
     /* stands on the ground: y in [0, 2*half] */
     build_box(half, 0.0f, 2.0f * half, half, ov, ovc, oi, oic);
+}
+
+void ts_build_quad_xz(TesseraVertex** ov, uint32_t* ovc,
+                      uint32_t** oi, uint32_t* oic) {
+    TesseraVertex* v = (TesseraVertex*)malloc(4 * sizeof(TesseraVertex));
+    uint32_t* idx = (uint32_t*)malloc(6 * sizeof(uint32_t));
+    /* +Y-facing quad, CCW seen from above (matches tile top winding) */
+    v[0] = (TesseraVertex){{-0.5f, 0.0f, -0.5f}, {0, 1, 0}, {0, 0}};
+    v[1] = (TesseraVertex){{-0.5f, 0.0f,  0.5f}, {0, 1, 0}, {0, 1}};
+    v[2] = (TesseraVertex){{ 0.5f, 0.0f,  0.5f}, {0, 1, 0}, {1, 1}};
+    v[3] = (TesseraVertex){{ 0.5f, 0.0f, -0.5f}, {0, 1, 0}, {1, 0}};
+    idx[0] = 0; idx[1] = 1; idx[2] = 2;
+    idx[3] = 0; idx[4] = 2; idx[5] = 3;
+    *ov = v; *ovc = 4;
+    *oi = idx; *oic = 6;
 }

@@ -2,6 +2,7 @@
 #include "engine.h"
 #include "state.h"
 #include "orchestration/orch.h"
+#include "fx/fx.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,6 +58,7 @@ TesseraEngine* tessera_create(const TesseraConfig* cfg) {
 void tessera_destroy(TesseraEngine* e) {
     if (!e) return;
     if (e->gpu.device) SDL_WaitForGPUIdle(e->gpu.device);
+    if (e->fx) ts_fx_destroy(e->fx, &e->gpu);
     if (e->orch) ts_orch_destroy(e->orch);
     if (e->state) ts_state_destroy(e->state);
     if (e->registry.defs.items) ts_registry_shutdown(&e->registry);
@@ -145,6 +147,10 @@ void tessera_set_state(TesseraEngine* e, const TesseraState* state) {
     SDL_UnlockMutex(e->state_mutex);
 }
 
+/* set_timing/set_quality/set_light write small POD structs the tick reads live
+ * without a lock — call them on the tick/render thread (or before starting an
+ * engine-driven loop), not concurrently with tick. Only set_state is any-thread.
+ * See docs/platforms.md. */
 void tessera_set_timing(TesseraEngine* e, const TesseraTiming* t) {
     if (e && t) e->timing = *t;
 }
@@ -157,6 +163,7 @@ bool tessera_is_idle(TesseraEngine* e) {
     pending = e->state && e->state->has_pending;
     SDL_UnlockMutex(e->state_mutex);
     if (pending) return false;
+    if (e->fx && !ts_fx_is_idle(e->fx)) return false;
     return !e->orch || ts_orch_is_idle(e->orch);
 }
 void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q) {

@@ -5,6 +5,7 @@
 #include "registry.h"
 #include "assets/assets.h"
 #include "stb_image.h"
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,6 +54,19 @@ bool ts_registry_init(TsRegistry* r, TsGpu* gpu, TsArena* arena, const TsLog* lo
     uint8_t white_px[4] = {255, 255, 255, 255};
     ts_gpu_upload_texture(gpu, white_px, 1, 1, &r->white);
 
+    /* soft radial particle sprite (white RGB, gaussian-ish alpha) */
+    enum { PD = 32 };
+    uint8_t dot[PD * PD * 4];
+    for (int y = 0; y < PD; ++y) for (int x = 0; x < PD; ++x) {
+        float dx = (x + 0.5f) / PD - 0.5f, dy = (y + 0.5f) / PD - 0.5f;
+        float d = sqrtf(dx * dx + dy * dy) * 2.0f;   /* 0 centre .. 1 edge */
+        float a = 1.0f - d; if (a < 0) a = 0; a = a * a;
+        uint8_t* p = &dot[(y * PD + x) * 4];
+        p[0] = p[1] = p[2] = 255;
+        p[3] = (uint8_t)(a * 255.0f + 0.5f);
+    }
+    ts_gpu_upload_texture(gpu, dot, PD, PD, &r->particle_dot);
+
     /* shared meshes */
     TesseraVertex* v; uint32_t vc; uint32_t* i; uint32_t ic;
     ts_build_tile_mesh(0.25f, &v, &vc, &i, &ic);
@@ -60,6 +74,9 @@ bool ts_registry_init(TsRegistry* r, TsGpu* gpu, TsArena* arena, const TsLog* lo
     free(v); free(i);
     ts_build_unit_cube(&v, &vc, &i, &ic);
     ts_gpu_upload_mesh(gpu, v, vc, i, ic, &r->cube_mesh);
+    free(v); free(i);
+    ts_build_quad_xz(&v, &vc, &i, &ic);
+    ts_gpu_upload_mesh(gpu, v, vc, i, ic, &r->quad_mesh);
     free(v); free(i);
     return true;
 }
@@ -75,8 +92,10 @@ void ts_registry_shutdown(TsRegistry* r) {
             ts_gpu_free_mesh(r->gpu, &d->as.entity.mesh);
     }
     ts_gpu_free_texture(r->gpu, &r->white);
+    ts_gpu_free_texture(r->gpu, &r->particle_dot);
     ts_gpu_free_mesh(r->gpu, &r->tile_mesh);
     ts_gpu_free_mesh(r->gpu, &r->cube_mesh);
+    ts_gpu_free_mesh(r->gpu, &r->quad_mesh);
     ts_slotmap_destroy(&r->defs);
 }
 
@@ -93,6 +112,14 @@ SDL_GPUTexture* ts_registry_atlas_texture(TsRegistry* r, TesseraDefId atlas) {
         if (d && d->as.atlas.valid) return d->as.atlas.tex.texture;
     }
     return r->white.texture;
+}
+
+SDL_GPUTexture* ts_registry_particle_texture(TsRegistry* r, TesseraDefId atlas) {
+    if (atlas) {
+        TsDef* d = ts_registry_get(r, atlas, TS_DEF_ATLAS);
+        if (d && d->as.atlas.valid) return d->as.atlas.tex.texture;
+    }
+    return r->particle_dot.texture;   /* soft dot instead of hard white quad */
 }
 
 TesseraDefId ts_registry_add_atlas(TsRegistry* r, const TesseraBytes* image,
@@ -173,6 +200,7 @@ TesseraDefId ts_registry_add_entity(TsRegistry* r, const TesseraEntityDef* def,
                 d->as.entity.mesh = res.mesh;
                 d->as.entity.has_mesh = res.has_mesh;
                 d->as.entity.skinned = res.skinned;
+                d->as.entity.skin_data = res.skin;   /* arena-owned TsSkinData */
                 d->as.entity.clip_count = res.clip_count;
                 if (res.clip_count > 0) {
                     d->as.entity.clips = TS_ARENA_ARR(r->arena, TsAnimClip, res.clip_count);

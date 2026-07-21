@@ -6,24 +6,55 @@ struct FrameUniform {
     float4   light_dir;    // xyz direction the light travels
     float4   ambient;      // rgb ambient
     float4   light_color;  // rgb color, a = intensity
+    float4   camera_pos;   // xyz eye position, w unused
 };
 struct VSOut {
     float4 position [[position]];
+    float3 world_pos;
     float3 normal;
     float2 uv;
     float4 tint;
 };
+
+// Approximate sRGB <-> linear so authored colours and textures light correctly
+// and the board reads consistently across Metal / Vulkan.
+static inline float3 srgb_to_linear(float3 c) { return pow(max(c, 0.0), 2.2); }
+static inline float3 linear_to_srgb(float3 c) { return pow(max(c, 0.0), 1.0 / 2.2); }
+
+// Cel ramp: quantise diffuse into a few soft bands for a stylised board-game
+// look. Soft edges keep it from aliasing badly on curved meshes.
+static inline float cel_ramp(float ndl) {
+    const float bands = 3.0;
+    float scaled = ndl * bands;
+    float lower  = floor(scaled);
+    float frac   = scaled - lower;
+    // narrow smooth transition between adjacent bands
+    float soft   = smoothstep(0.35, 0.65, frac);
+    return (lower + soft) / bands;
+}
 
 fragment float4 fs_main(VSOut in [[stage_in]],
                         constant FrameUniform& frame [[buffer(0)]],
                         texture2d<float> tex [[texture(0)]],
                         sampler samp [[sampler(0)]])
 {
-    float3 n   = normalize(in.normal);
-    float3 L   = normalize(-frame.light_dir.xyz);
-    float  ndl = max(dot(n, L), 0.0);
-    float4 base = tex.sample(samp, in.uv) * in.tint;
-    float3 lit  = base.rgb * (frame.ambient.rgb +
-                              frame.light_color.rgb * frame.light_color.a * ndl);
-    return float4(lit, base.a);
+    float3 n = normalize(in.normal);
+    float3 L = normalize(-frame.light_dir.xyz);
+    float3 V = normalize(frame.camera_pos.xyz - in.world_pos);
+
+    float4 texel = tex.sample(samp, in.uv) * in.tint;
+    float3 albedo = srgb_to_linear(texel.rgb);
+
+    float ndl   = max(dot(n, L), 0.0);
+    float ramp  = cel_ramp(ndl);
+
+    float3 ambient = srgb_to_linear(frame.ambient.rgb);
+    float3 direct  = frame.light_color.rgb * frame.light_color.a * ramp;
+    float3 lit     = albedo * (ambient + direct);
+
+    // Subtle Fresnel rim to lift silhouettes off the background.
+    float rim = pow(1.0 - max(dot(n, V), 0.0), 4.0);
+    lit += rim * 0.12 * frame.light_color.rgb;
+
+    return float4(linear_to_srgb(lit), texel.a);
 }

@@ -158,5 +158,99 @@ bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz) {
         snprintf(err, err_sz, "sampler create failed: %s", SDL_GetError());
         return false;
     }
+
+    if (!ts_gpu_create_blob_pipeline(g, err, err_sz)) return false;
+    if (!ts_gpu_create_particle_pipelines(g, err, err_sz)) return false;
+    if (!ts_gpu_create_skinned_pipeline(g, err, err_sz)) return false;
+    return true;
+}
+
+/* Release every pipeline/sampler owned by the GPU wrapper (called at shutdown
+ * and after a device-lost recreate). Safe on NULLs. */
+void ts_gpu_release_pipelines(TsGpu* g) {
+    if (g->mesh_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->mesh_pipeline);
+    if (g->skinned_pipeline)  SDL_ReleaseGPUGraphicsPipeline(g->device, g->skinned_pipeline);
+    if (g->blob_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->blob_pipeline);
+    if (g->particle_add)      SDL_ReleaseGPUGraphicsPipeline(g->device, g->particle_add);
+    if (g->particle_alpha)    SDL_ReleaseGPUGraphicsPipeline(g->device, g->particle_alpha);
+    if (g->linear_sampler)    SDL_ReleaseGPUSampler(g->device, g->linear_sampler);
+    g->mesh_pipeline = g->skinned_pipeline = g->blob_pipeline = NULL;
+    g->particle_add = g->particle_alpha = NULL;
+    g->linear_sampler = NULL;
+}
+
+/* Shared standard interleaved-vertex input description (pos/normal/uv). */
+static void fill_vertex_input(SDL_GPUVertexBufferDescription* vb,
+                              SDL_GPUVertexAttribute* attrs) {
+    vb->slot = 0;
+    vb->pitch = sizeof(TesseraVertex);
+    vb->input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+    vb->instance_step_rate = 0;
+    attrs[0] = (SDL_GPUVertexAttribute){ .location = 0, .buffer_slot = 0,
+        .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(TesseraVertex, pos) };
+    attrs[1] = (SDL_GPUVertexAttribute){ .location = 1, .buffer_slot = 0,
+        .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(TesseraVertex, normal) };
+    attrs[2] = (SDL_GPUVertexAttribute){ .location = 2, .buffer_slot = 0,
+        .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = offsetof(TesseraVertex, uv) };
+}
+
+/* Blob-shadow pipeline: a dark radial decal, alpha-blended onto the ground.
+ * Depth-tested (so geometry occludes it) but no depth write. */
+bool ts_gpu_create_blob_pipeline(TsGpu* g, char* err, size_t err_sz) {
+    SDL_GPUShader* vs = ts_gpu_load_shader(g, "blob", SDL_GPU_SHADERSTAGE_VERTEX, 0, 2);
+    SDL_GPUShader* fs = ts_gpu_load_shader(g, "blob", SDL_GPU_SHADERSTAGE_FRAGMENT, 0, 0);
+    if (!vs || !fs) {
+        snprintf(err, err_sz, "failed to load blob shaders");
+        if (vs) SDL_ReleaseGPUShader(g->device, vs);
+        if (fs) SDL_ReleaseGPUShader(g->device, fs);
+        return false;
+    }
+    SDL_GPUVertexBufferDescription vbdesc;
+    SDL_GPUVertexAttribute attrs[3];
+    fill_vertex_input(&vbdesc, attrs);
+
+    SDL_GPUColorTargetDescription color = {
+        .format = g->swapchain_format,
+        .blend_state = {
+            .enable_blend          = true,
+            .src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA,
+            .dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+            .color_blend_op        = SDL_GPU_BLENDOP_ADD,
+            .src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+            .dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE,
+            .alpha_blend_op        = SDL_GPU_BLENDOP_ADD,
+        },
+    };
+    SDL_GPUGraphicsPipelineCreateInfo pci = {
+        .vertex_shader = vs,
+        .fragment_shader = fs,
+        .vertex_input_state = {
+            .vertex_buffer_descriptions = &vbdesc, .num_vertex_buffers = 1,
+            .vertex_attributes = attrs, .num_vertex_attributes = 3,
+        },
+        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+        .rasterizer_state = {
+            .fill_mode = SDL_GPU_FILLMODE_FILL,
+            .cull_mode = SDL_GPU_CULLMODE_NONE,
+            .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
+        },
+        .depth_stencil_state = {
+            .compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL,
+            .enable_depth_test = true,
+            .enable_depth_write = false,
+        },
+        .target_info = {
+            .color_target_descriptions = &color, .num_color_targets = 1,
+            .depth_stencil_format = g->depth_format,
+            .has_depth_stencil_target = true,
+        },
+    };
+    g->blob_pipeline = SDL_CreateGPUGraphicsPipeline(g->device, &pci);
+    SDL_ReleaseGPUShader(g->device, vs);
+    SDL_ReleaseGPUShader(g->device, fs);
+    if (!g->blob_pipeline) {
+        snprintf(err, err_sz, "blob pipeline create failed: %s", SDL_GetError());
+        return false;
+    }
     return true;
 }

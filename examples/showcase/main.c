@@ -1,34 +1,37 @@
-/* examples/showcase — a bigger board with predefined states you loop through.
+/* examples/showcase — a guided tour of every Tessera feature.
  *
  *   SPACE : advance to the next predefined state (transitions animate live)
  *   C     : glide the camera to focus the next entity (loops around)
  *   R     : reset the camera to the state's overview pose
+ *   S     : cycle shadow quality (blob -> none -> blob)   [M7]
  *   arrows: orbit the camera manually
  *   ESC   : quit
  *
- * The states show off every transition: tiles rising/sinking as the board grows
- * and shrinks, entities hopping between tiles, stacking (layout solver) and
- * reflowing, and entities spawning / despawning.
+ * What it exercises:
+ *   M3/M4  tiles rising/sinking, entities hopping, stacking + reflow, spawn/despawn
+ *   M5     skinned, animated "bar" units (idle bend clip; bends harder while moving)
+ *   M6     particle effects — a burst when effects appear, an aura riding a unit
+ *   M7     cel/flat lighting, blob shadows, animated camera focus/zoom transitions
  */
 #include "tessera.h"
+#include "../common/glb_gen.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------------ board */
 #define MAX_TILES 512
 #define MAX_ENTS  32
+#define MAX_FX     8
 
 static TesseraTilePlacement   g_tiles[MAX_TILES];
 static TesseraEntityPlacement g_ents[MAX_ENTS];
-static size_t g_tcount, g_ecount;
+static TesseraEffectPlacement g_fx[MAX_FX];
+static size_t g_tcount, g_ecount, g_fcount;
 static TesseraCamera g_cam;
 
-static TesseraDefId d_grass, d_stone, d_water, d_unit;
+static TesseraDefId d_grass, d_stone, d_water, d_cube, d_bar, d_burst, d_aura;
 
-/* Fill a rectangular board [x0,x1] x [z0,z1] with a checker of grass/stone,
- * one water row, and an optional square hole. */
 static size_t board_rect(int x0, int x1, int z0, int z1, int water_row,
                          int hole_x, int hole_z) {
     size_t n = 0;
@@ -42,42 +45,48 @@ static size_t board_rect(int x0, int x1, int z0, int z1, int water_row,
     return n;
 }
 
+/* Alternate unit def so half the units are skinned bars, half static cubes. */
 static void put_ent(size_t i, TesseraEntityId id, int x, int z) {
-    g_ents[i] = (TesseraEntityPlacement){ .id = id, .def = d_unit, .coord = {x, z} };
+    TesseraDefId def = (id & 1) ? d_bar : d_cube;
+    g_ents[i] = (TesseraEntityPlacement){ .id = id, .def = def, .coord = {x, z}, .anim = 0 };
 }
 
-/* Build predefined state `idx` into the globals. Entities keep stable ids so
- * the diff animates them (move/reflow) instead of remove+add. */
 #define NUM_STATES 4
 static void build_state(int idx) {
     g_cam = (TesseraCamera){ .focus = {0, 0}, .distance = 16.0f,
                              .yaw = 0.7f, .pitch = 0.62f, .fov = 0.85f };
+    g_fcount = 0;
     switch (idx) {
-    case 0: /* full 9x9 board, six units spread to the corners/edges */
+    case 0: /* full 9x9 board; six units spread out; a spark burst at the centre */
         g_tcount = board_rect(-4, 4, -4, 4, -4, 99, 99);
         put_ent(0, 1, -4, -3); put_ent(1, 2, 4, -3);
         put_ent(2, 3, -4,  3); put_ent(3, 4, 4,  3);
         put_ent(4, 5, -2,  0); put_ent(5, 6, 2,  0);
         g_ecount = 6;
+        g_fx[g_fcount++] = (TesseraEffectPlacement){ .id = 100, .def = d_burst, .coord = {0, 0} };
         break;
-    case 1: /* everyone converges onto the centre (stacking + reflow), water strip */
+    case 1: /* everyone converges onto the centre (stacking + reflow); aura on unit 1 */
         g_tcount = board_rect(-4, 4, -4, 4, 0, 99, 99);
         put_ent(0, 1, 0, 0); put_ent(1, 2, 0, 0); put_ent(2, 3, 0, 0);
         put_ent(3, 4, 0, 0); put_ent(4, 5, 0, 0); put_ent(5, 6, 0, 0);
         g_ecount = 6;
+        g_fx[g_fcount++] = (TesseraEffectPlacement){ .id = 101, .def = d_aura,
+                                                     .coord = {0, 0}, .attach_entity_id = 1 };
         break;
-    case 2: /* board shrinks to 5x5 with a hole; two units despawn */
+    case 2: /* board shrinks to 5x5 with a hole; two units despawn (poof) */
         g_tcount = board_rect(-2, 2, -2, 2, -2, 2, 2);
         put_ent(0, 1, -2, -1); put_ent(1, 2, 2, -1);
         put_ent(2, 3, -1,  1); put_ent(3, 4, 1,  1);
-        g_ecount = 4;                       /* ids 5 and 6 removed -> despawn */
+        g_ecount = 4;                       /* ids 5,6 removed -> despawn */
         break;
-    case 3: /* board grows to a wide 11x7; units respawn and fan out */
+    case 3: /* board grows to 11x7; units respawn and fan out; two bursts */
         g_tcount = board_rect(-5, 5, -3, 3, 3, 99, 99);
         put_ent(0, 1, -5, -3); put_ent(1, 2, 5, -3);
         put_ent(2, 3, -5,  3); put_ent(3, 4, 5,  3);
         put_ent(4, 5,  0, -3); put_ent(5, 6, 0,  3);   /* ids 5,6 spawn back */
         g_ecount = 6;
+        g_fx[g_fcount++] = (TesseraEffectPlacement){ .id = 102, .def = d_burst, .coord = {0, -3} };
+        g_fx[g_fcount++] = (TesseraEffectPlacement){ .id = 103, .def = d_burst, .coord = {0,  3} };
         break;
     }
 }
@@ -86,6 +95,7 @@ static void push_current(TesseraEngine* e) {
     TesseraState s = {
         .tiles = g_tiles, .tile_count = g_tcount,
         .entities = g_ents, .entity_count = g_ecount,
+        .effects = g_fx, .effect_count = g_fcount,
         .camera = g_cam, .epoch = (uint64_t)SDL_GetTicks(),
     };
     tessera_set_state(e, &s);
@@ -94,33 +104,73 @@ static void push_current(TesseraEngine* e) {
 static void logfn(void* ud, int level, const char* msg) {
     (void)ud; (void)level; fprintf(stderr, "  %s\n", msg);
 }
-
 static void settle(TesseraEngine* e, double secs) {
     const double step = 1.0 / 120.0;
     for (double t = 0; t < secs; t += step) tessera_tick(e, step);
 }
 
-/* Headless verification: drive the same code paths as the key handlers and
- * write PNGs, so the example is checkable without a display. */
+/* Register every def used by the tour. */
+static void register_defs(TesseraEngine* e) {
+    d_grass = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.25f, .tint = {0.45f, 0.72f, 0.40f, 1} });
+    d_stone = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.25f, .tint = {0.62f, 0.62f, 0.66f, 1} });
+    d_water = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.16f, .tint = {0.30f, 0.55f, 0.85f, 1} });
+    d_cube  = tessera_register_entity_def(e, &(TesseraEntityDef){ .scale = 1.0f });
+
+    /* skinned, animated bar (clip 0 = "bend"; reused as the move clip) */
+    size_t glb_size = 0;
+    uint8_t* glb = ts_example_build_bar_glb(&glb_size);
+    d_bar = tessera_register_entity_def(e, &(TesseraEntityDef){
+        .gltf = { .data = glb, .size = glb_size, .debug_name = "bar" },
+        .scale = 0.9f, .move_anim = 0 });
+    free(glb);
+
+    /* additive spark burst (on_add) + soft smoke (on_remove) */
+    TesseraParticleSpec spark = {
+        .mode = TESSERA_EMIT_BURST, .count = 90, .lifetime_s = 0.8f, .lifetime_var = 0.25f,
+        .speed = 3.2f, .speed_var = 1.0f, .spread_deg = 55.0f, .gravity = -3.5f,
+        .size_start = 0.22f, .size_end = 0.02f,
+        .color_start = {1.0f, 0.85f, 0.35f, 1.0f}, .color_end = {1.0f, 0.25f, 0.05f, 0.0f},
+        .blend = TESSERA_BLEND_ADD };
+    TesseraParticleSpec smoke = {
+        .mode = TESSERA_EMIT_BURST, .count = 40, .lifetime_s = 1.0f, .lifetime_var = 0.3f,
+        .speed = 1.4f, .speed_var = 0.5f, .spread_deg = 40.0f, .gravity = 0.6f,
+        .size_start = 0.15f, .size_end = 0.55f,
+        .color_start = {0.85f, 0.85f, 0.9f, 0.7f}, .color_end = {0.5f, 0.5f, 0.55f, 0.0f},
+        .blend = TESSERA_BLEND_ALPHA };
+    d_burst = tessera_register_effect_def(e, &(TesseraEffectDef){ .on_add = spark, .on_remove = smoke });
+
+    TesseraParticleSpec aura = {
+        .mode = TESSERA_EMIT_CONTINUOUS, .count = 45, .lifetime_s = 1.0f, .lifetime_var = 0.2f,
+        .speed = 0.8f, .speed_var = 0.3f, .spread_deg = 25.0f, .gravity = 1.4f,
+        .size_start = 0.10f, .size_end = 0.01f,
+        .color_start = {0.4f, 0.9f, 1.0f, 1.0f}, .color_end = {0.2f, 0.5f, 1.0f, 0.0f},
+        .blend = TESSERA_BLEND_ADD, .duration_s = 8.0f };
+    d_aura = tessera_register_effect_def(e, &(TesseraEffectDef){ .on_add = aura, .on_remove = smoke });
+}
+
+/* Headless verification: drive the states + features and write PNGs. */
 static int run_demo(TesseraEngine* e, const char* dir) {
     char p[512];
-    build_state(0); push_current(e); settle(e, 1.6);
+    build_state(0); push_current(e); settle(e, 0.18);      /* catch the spark burst */
+    snprintf(p, sizeof p, "%s/showcase_0_burst.png", dir);
+    tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
+    settle(e, 1.6);
     snprintf(p, sizeof p, "%s/showcase_0_spread.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
 
-    build_state(1); push_current(e); settle(e, 0.22);   /* mid converge */
-    snprintf(p, sizeof p, "%s/showcase_1_converging.png", dir);
+    build_state(1); push_current(e); settle(e, 0.9);        /* converge + aura + skinning */
+    snprintf(p, sizeof p, "%s/showcase_1_aura.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
-    settle(e, 1.6);
+    settle(e, 1.2);
     snprintf(p, sizeof p, "%s/showcase_1_stacked.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
 
-    build_state(2); push_current(e); settle(e, 1.6);    /* shrink + despawn */
+    build_state(2); push_current(e); settle(e, 1.6);        /* shrink + despawn poof */
     snprintf(p, sizeof p, "%s/showcase_2_shrunk.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s\n", p);
 
-    /* camera focus on the first entity, then glide to another */
-    g_cam.focus = g_ents[0].coord; g_cam.distance = 8.0f; push_current(e);
+    /* camera focus glide onto the first unit */
+    g_cam.focus = g_ents[0].coord; g_cam.distance = 7.0f; push_current(e);
     settle(e, 0.35);
     snprintf(p, sizeof p, "%s/showcase_3_cam_gliding.png", dir);
     tessera_capture_png(e, 1280, 720, p); printf("wrote %s (idle=%d)\n", p, tessera_is_idle(e));
@@ -143,16 +193,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    /* a snappier feel + a slightly longer camera glide */
+    TesseraLight light = { .dir = {-0.5f, -1.0f, -0.35f}, .color = {1.0f, 0.96f, 0.88f},
+                           .intensity = 1.1f, .ambient = {0.26f, 0.30f, 0.40f} };
+    tessera_set_light(e, &light);
+
     TesseraTiming t = { .move_s = 0.45f, .add_s = 0.4f, .remove_s = 0.35f,
                         .tile_s = 0.4f, .reflow_s = 0.4f, .camera_s = 0.8f,
                         .speed_multiplier = 1.0f };
     tessera_set_timing(e, &t);
 
-    d_grass = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.25f, .tint = {0.45f, 0.72f, 0.40f, 1} });
-    d_stone = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.25f, .tint = {0.62f, 0.62f, 0.66f, 1} });
-    d_water = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.16f, .tint = {0.30f, 0.55f, 0.85f, 1} });
-    d_unit  = tessera_register_entity_def(e, &(TesseraEntityDef){ .scale = 1.0f });
+    register_defs(e);
 
     if (demo_dir) {
         int rc = run_demo(e, demo_dir);
@@ -160,12 +210,11 @@ int main(int argc, char** argv) {
         return rc;
     }
 
-    int state_idx = 0;
-    int cam_ent = -1;     /* -1 = overview */
+    int state_idx = 0, cam_ent = -1, shadow_mode = TESSERA_SHADOW_BLOB;
     build_state(state_idx);
     push_current(e);
 
-    printf("SPACE = next state   C = focus next entity   R = overview   ESC = quit\n");
+    printf("SPACE=next state  C=focus entity  R=overview  S=toggle shadows  ESC=quit\n");
 
     Uint64 prev = SDL_GetPerformanceCounter();
     double freq = (double)SDL_GetPerformanceFrequency();
@@ -184,18 +233,15 @@ int main(int argc, char** argv) {
                     cam_ent = -1;
                     build_state(state_idx);
                     push_current(e);
-                    printf("state %d  (%zu tiles, %zu entities)\n",
-                           state_idx, g_tcount, g_ecount);
+                    printf("state %d  (%zu tiles, %zu entities, %zu effects)\n",
+                           state_idx, g_tcount, g_ecount, g_fcount);
                     break;
                 case SDLK_C:
                     if (g_ecount > 0) {
                         cam_ent = (cam_ent + 1) % (int)g_ecount;
-                        TesseraCoord c = g_ents[cam_ent].coord;
-                        g_cam.focus = c;
-                        g_cam.distance = 8.0f;   /* zoom in on the unit */
-                        push_current(e);         /* board unchanged -> camera glides */
-                        printf("focus entity %llu at (%d,%d)\n",
-                               (unsigned long long)g_ents[cam_ent].id, c.x, c.y);
+                        g_cam.focus = g_ents[cam_ent].coord;
+                        g_cam.distance = 8.0f;
+                        push_current(e);
                     }
                     break;
                 case SDLK_R:
@@ -204,6 +250,15 @@ int main(int argc, char** argv) {
                     g_cam.distance = 16.0f;
                     push_current(e);
                     break;
+                case SDLK_S: {
+                    shadow_mode = (shadow_mode == TESSERA_SHADOW_BLOB)
+                                  ? TESSERA_SHADOW_NONE : TESSERA_SHADOW_BLOB;
+                    TesseraQuality q = { .shadows = (TesseraShadowMode)shadow_mode,
+                                         .msaa = 1, .render_scale = 1.0f };
+                    tessera_set_quality(e, &q);
+                    printf("shadows: %s\n", shadow_mode == TESSERA_SHADOW_BLOB ? "blob" : "off");
+                    break;
+                }
                 case SDLK_LEFT:  tessera__debug_orbit(e, -0.12f, 0, 0); break;
                 case SDLK_RIGHT: tessera__debug_orbit(e,  0.12f, 0, 0); break;
                 case SDLK_UP:    tessera__debug_orbit(e, 0, -0.08f, 0); break;

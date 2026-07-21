@@ -1,0 +1,33 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;
+    float4   ambient;
+    float4   light_color;
+    float4   camera_pos;
+};
+
+struct VSIn {
+    float3 pos   [[attribute(0)]];
+    float2 uv    [[attribute(1)]];
+    float4 color [[attribute(2)]];
+};
+struct VSOut {
+    float4 position [[position]];
+    float2 uv;
+    float4 color;
+};
+
+// Particles arrive as camera-facing quads already expanded in world space on
+// the CPU, so the vertex stage just projects them.
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant FrameUniform& frame [[buffer(0)]])
+{
+    VSOut out;
+    out.position = frame.view_proj * float4(in.pos, 1.0);
+    out.uv       = in.uv;
+    out.color    = in.color;
+    return out;
+}

@@ -34,6 +34,7 @@ void ts_camera_update(TsCamera* c, float aspect) {
     if (aspect <= 0.0f) aspect = 16.0f / 9.0f;
     vec3 eye;
     ts_orbit_eye(c->focus, c->distance, c->yaw, c->pitch, eye);
+    glm_vec3_copy(eye, c->eye);
     ts_look_at(eye, c->focus, (vec3){0.0f, 1.0f, 0.0f}, c->view);
     ts_perspective(c->fov, aspect, c->znear, c->zfar, c->proj);
     glm_mat4_mul(c->proj, c->view, c->view_proj);

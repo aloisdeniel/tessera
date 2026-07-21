@@ -1,0 +1,63 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;
+    float4   ambient;
+    float4   light_color;
+    float4   camera_pos;
+};
+struct ObjectUniform {
+    float4x4 model;
+    float4   tint;
+    float4   uv_rect;
+};
+// Joint palette (skinning matrices = world_joint * inverse_bind), capped.
+struct JointUniform {
+    float4x4 joints[64];
+};
+
+struct VSIn {
+    float3 pos     [[attribute(0)]];
+    float3 normal  [[attribute(1)]];
+    float2 uv      [[attribute(2)]];
+    uint4  joints  [[attribute(3)]];
+    float4 weights [[attribute(4)]];
+};
+struct VSOut {
+    float4 position [[position]];
+    float3 world_pos;
+    float3 normal;
+    float2 uv;
+    float4 tint;
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant FrameUniform&  frame [[buffer(0)]],
+                     constant ObjectUniform& obj   [[buffer(1)]],
+                     constant JointUniform&  sk    [[buffer(2)]])
+{
+    float wsum = in.weights.x + in.weights.y + in.weights.z + in.weights.w;
+    float4x4 skin;
+    if (wsum < 1e-4) {
+        skin = float4x4(1.0);   // unrigged vertex: identity
+    } else {
+        skin = sk.joints[in.joints.x] * in.weights.x
+             + sk.joints[in.joints.y] * in.weights.y
+             + sk.joints[in.joints.z] * in.weights.z
+             + sk.joints[in.joints.w] * in.weights.w;
+    }
+
+    float4 spos  = skin * float4(in.pos, 1.0);
+    float3 snorm = (skin * float4(in.normal, 0.0)).xyz;
+    float4 world = obj.model * spos;
+
+    VSOut out;
+    out.position  = frame.view_proj * world;
+    out.world_pos = world.xyz;
+    out.normal    = normalize((obj.model * float4(snorm, 0.0)).xyz);
+    out.uv        = obj.uv_rect.xy + in.uv * (obj.uv_rect.zw - obj.uv_rect.xy);
+    out.tint      = obj.tint;
+    return out;
+}

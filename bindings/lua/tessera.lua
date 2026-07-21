@@ -6,7 +6,10 @@
 --   ... register defs, push states ...
 --
 -- Requires LuaJIT (uses the FFI library). The struct layout below MUST match
--- include/tessera.h exactly; a self-test in bindings/lua/test.lua asserts sizes.
+-- include/tessera.h exactly. The canonical layout reference (sizeof of every
+-- struct + offsetof of every field, for the target ABI) is the C self-test
+-- tests/test_ffi_layout.c; run it and cross-check if anything drifts. The ABI
+-- in include/tessera.h is FROZEN and evolves append-only.
 
 local ffi = require("ffi")
 
@@ -14,6 +17,8 @@ ffi.cdef[[
 typedef struct TesseraEngine TesseraEngine;
 typedef uint32_t TesseraDefId;
 typedef uint64_t TesseraEntityId;
+typedef enum { TESSERA_LOG_TRACE=0, TESSERA_LOG_DEBUG=1, TESSERA_LOG_INFO=2,
+               TESSERA_LOG_WARN=3, TESSERA_LOG_ERROR=4 } TesseraLogLevel;
 typedef void (*TesseraLogFn)(void* userdata, int level, const char* msg);
 
 typedef struct {
@@ -100,6 +105,9 @@ void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
 bool tessera_is_idle(TesseraEngine*);
 void tessera_set_quality(TesseraEngine*, const TesseraQuality*);
 void tessera_set_light(TesseraEngine*, const TesseraLight*);
+
+void tessera__debug_orbit(TesseraEngine*, float dyaw, float dpitch, float dzoom);
+bool tessera_capture_png(TesseraEngine*, int w, int h, const char* png_path);
 ]]
 
 local lib = ffi.load("tessera")

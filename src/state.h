@@ -11,7 +11,7 @@
 #include "core/core.h"
 #include "tessera.h"
 
-typedef struct {
+typedef struct TsSnapshot {
     TesseraTilePlacement*   tiles;    size_t tile_count;
     TesseraEntityPlacement* entities; size_t entity_count;
     TesseraEffectPlacement* effects;  size_t effect_count;

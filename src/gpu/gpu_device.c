@@ -107,8 +107,7 @@ void ts_gpu_resize(TsGpu* g, int w, int h, float density) {
 
 void ts_gpu_shutdown(TsGpu* g) {
     if (!g->device) return;
-    if (g->mesh_pipeline) SDL_ReleaseGPUGraphicsPipeline(g->device, g->mesh_pipeline);
-    if (g->linear_sampler) SDL_ReleaseGPUSampler(g->device, g->linear_sampler);
+    ts_gpu_release_pipelines(g);
     if (g->depth_texture) SDL_ReleaseGPUTexture(g->device, g->depth_texture);
     if (g->window) {
         SDL_ReleaseWindowFromGPUDevice(g->device, g->window);

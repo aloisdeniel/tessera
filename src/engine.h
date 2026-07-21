@@ -65,6 +65,11 @@ typedef struct TsDrawItem {
     mat4            model;
     vec4            tint;
     vec4            uv_rect;   /* atlas remap: u0,v0,u1,v1 */
+    /* skinning (M5): when skinned, `joints` points at a joint_count-long
+     * palette of skinning matrices in the frame arena. */
+    bool            skinned;
+    const mat4*     joints;
+    uint32_t        joint_count;
 } TsDrawItem;
 
 /* Build the frame's draw list into `arena` and return count; *out points at
