@@ -38,6 +38,7 @@ typedef struct {
 typedef struct {
     TesseraEntityDef spec;      /* value copy (gltf bytes NOT retained) */
     TsMesh           mesh;      /* uploaded geometry */
+    float            base_color[4]; /* material base color (glTF); 1,1,1,1 default */
     bool             has_mesh;
     TsAnimClip*      clips;
     uint32_t         clip_count;

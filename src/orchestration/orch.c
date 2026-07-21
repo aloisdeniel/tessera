@@ -605,8 +605,9 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         ts_trs(inst->pos, inst->rot, svec, m);
         glm_mat4_copy(m, it->model);
 
-        it->tint[0] = 1.0f; it->tint[1] = 1.0f; it->tint[2] = 1.0f;
-        it->tint[3] = inst->alpha;
+        const float* bc = d->as.entity.base_color;
+        it->tint[0] = bc[0]; it->tint[1] = bc[1]; it->tint[2] = bc[2];
+        it->tint[3] = inst->alpha * bc[3];
         it->uv_rect[0] = 0.0f; it->uv_rect[1] = 0.0f;
         it->uv_rect[2] = 1.0f; it->uv_rect[3] = 1.0f;
         ++w;

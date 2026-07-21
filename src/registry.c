@@ -177,6 +177,8 @@ TesseraDefId ts_registry_add_entity(TsRegistry* r, const TesseraEntityDef* def,
     d->kind = TS_DEF_ENTITY;
     d->as.entity.spec = *def;
     d->as.entity.mesh = r->cube_mesh;
+    d->as.entity.base_color[0] = d->as.entity.base_color[1] =
+        d->as.entity.base_color[2] = d->as.entity.base_color[3] = 1.0f;
     d->as.entity.has_mesh = false;   /* shared mesh, not owned by this def */
     d->as.entity.skinned = false;
     d->as.entity.clips = NULL;
@@ -198,6 +200,7 @@ TesseraDefId ts_registry_add_entity(TsRegistry* r, const TesseraEntityDef* def,
                 TS_LOGW(r->log, "register_entity: gltf import failed (%s); using cube fallback", gerr);
             } else {
                 d->as.entity.mesh = res.mesh;
+                memcpy(d->as.entity.base_color, res.base_color, sizeof res.base_color);
                 d->as.entity.has_mesh = res.has_mesh;
                 d->as.entity.skinned = res.skinned;
                 d->as.entity.skin_data = res.skin;   /* arena-owned TsSkinData */
