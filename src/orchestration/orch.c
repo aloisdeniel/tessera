@@ -18,6 +18,11 @@
 
 #define TS_HOP_HEIGHT 0.6f
 #define TS_TILE_RISE  0.4f   /* tiles rise from below / sink to below by this */
+/* Tile tops sit at y=0 and entities stand on y=0, so a mesh's bottom face is
+ * coplanar with the tile face and z-fights. Lift the *rendered* model a hair
+ * (the logical pos stays put, so shadows/picking are unaffected). Kept clear of
+ * the blob-shadow plane (y=0.02) so the base doesn't z-fight the shadow either. */
+#define TS_ENTITY_LIFT 0.035f
 
 /* ------------------------------------------------------------ lifecycle */
 struct TsOrch* ts_orch_create(void) {
@@ -601,8 +606,11 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         float ds = spec->scale > 0.0f ? spec->scale : 1.0f;
         float s = inst->scale * ds;
         vec3 svec = { s, s, s };
+        vec3 draw_pos;
+        glm_vec3_copy(inst->pos, draw_pos);
+        draw_pos[1] += TS_ENTITY_LIFT;   /* clear the tile top so the base doesn't z-fight */
         mat4 m;
-        ts_trs(inst->pos, inst->rot, svec, m);
+        ts_trs(draw_pos, inst->rot, svec, m);
         glm_mat4_copy(m, it->model);
 
         const float* bc = d->as.entity.base_color;
