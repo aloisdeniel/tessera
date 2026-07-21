@@ -17,6 +17,7 @@ ffi.cdef[[
 typedef struct TesseraEngine TesseraEngine;
 typedef uint32_t TesseraDefId;
 typedef uint64_t TesseraEntityId;
+typedef uint64_t TesseraTileId;
 typedef enum { TESSERA_LOG_TRACE=0, TESSERA_LOG_DEBUG=1, TESSERA_LOG_INFO=2,
                TESSERA_LOG_WARN=3, TESSERA_LOG_ERROR=4 } TesseraLogLevel;
 typedef void (*TesseraLogFn)(void* userdata, int level, const char* msg);
@@ -67,7 +68,7 @@ typedef struct { TesseraParticleSpec on_add, on_remove; } TesseraEffectDef;
 
 typedef struct { int32_t x, y; } TesseraCoord;
 typedef struct { float x, y; } TesseraCoordF;
-typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; } TesseraTilePlacement;
+typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; TesseraTileId id; } TesseraTilePlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; uint16_t facing; uint32_t anim; } TesseraEntityPlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; TesseraEntityId attach_entity_id; } TesseraEffectPlacement;
 typedef struct { TesseraCoordF focus; float distance, yaw, pitch, fov; } TesseraCamera;
@@ -85,6 +86,10 @@ typedef struct {
     bool            hit_entity;  TesseraEntityId entity; float entity_distance;
     float           ray_origin[3]; float ray_dir[3]; float point[3];
 } TesseraPick;
+
+typedef struct {
+    bool  onscreen; float x, y; float depth; float world[3];
+} TesseraScreenPos;
 
 typedef struct { float move_s, add_s, remove_s, tile_s, reflow_s, camera_s, speed_multiplier; } TesseraTiming;
 typedef enum { TESSERA_SHADOW_NONE=0, TESSERA_SHADOW_BLOB=1, TESSERA_SHADOW_MAP=2 } TesseraShadowMode;
@@ -111,6 +116,9 @@ const char*  tessera_entity_def_anim_name(TesseraEngine*, TesseraDefId, uint32_t
 
 void tessera_set_state(TesseraEngine*, const TesseraState*);
 bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* out);
+bool tessera_world_to_screen(TesseraEngine*, const float world[3], TesseraScreenPos* out);
+bool tessera_entity_screen_position(TesseraEngine*, TesseraEntityId id, TesseraScreenPos* out);
+bool tessera_tile_screen_position(TesseraEngine*, TesseraTileId id, TesseraScreenPos* out);
 void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
 bool tessera_is_idle(TesseraEngine*);
 void tessera_set_quality(TesseraEngine*, const TesseraQuality*);

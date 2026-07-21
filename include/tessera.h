@@ -56,6 +56,7 @@ extern "C" {
 typedef struct TesseraEngine TesseraEngine;
 typedef uint32_t TesseraDefId;    /* 0 = invalid / none */
 typedef uint64_t TesseraEntityId; /* stable across states; key for diffing */
+typedef uint64_t TesseraTileId;   /* optional per-tile instance id (0 = none) */
 
 typedef enum {
     TESSERA_LOG_TRACE = 0,
@@ -177,9 +178,11 @@ typedef struct { int32_t x, y; } TesseraCoord;
 typedef struct { float x, y; } TesseraCoordF;
 
 typedef struct {
-    TesseraCoord coord;
-    TesseraDefId tile_def;   /* 0 = no tile (hole)                */
-    uint32_t     variant;    /* per-instance variant / seed       */
+    TesseraCoord  coord;
+    TesseraDefId  tile_def;  /* 0 = no tile (hole)                */
+    uint32_t      variant;   /* per-instance variant / seed       */
+    TesseraTileId id;        /* optional; identifies this tile instance for
+                              * tessera_tile_screen_position (0 = unqueryable) */
 } TesseraTilePlacement;
 
 typedef struct {
@@ -248,6 +251,45 @@ typedef struct {
  * miss) for custom tests. Uses the current camera pose; call after ticking so
  * the pose matches what is on screen. Not thread-safe with the tick. */
 TESSERA_API bool tessera_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick* out);
+
+/* =======================================================================
+ *  Projection to screen (inverse of picking: scene -> screen)
+ * ===================================================================== */
+
+/* Where a world/scene point lands on screen. `x`,`y` are logical window
+ * coordinates (top-left origin) — the same space tessera_pick consumes, so the
+ * projection round-trips with a pick. `onscreen` is true only when the point is
+ * in front of the camera AND inside the viewport; when false (off-screen or
+ * behind the camera) `x`,`y` are still filled for edge/off-screen indicators
+ * unless the point is behind the near plane, in which case they are 0. `depth`
+ * is normalized device depth in 0..1 (0 = near plane), handy for ordering
+ * on-screen overlays. `world` echoes the point that was projected. */
+typedef struct {
+    bool  onscreen;
+    float x, y;        /* logical window coords (top-left origin) */
+    float depth;       /* NDC depth 0..1 (0 = near plane)         */
+    float world[3];    /* world-space point that was projected     */
+} TesseraScreenPos;
+
+/* Project an arbitrary world-space point to screen. Returns false only on a
+ * null/invalid engine or a zero-sized viewport; otherwise fills *out (check
+ * out->onscreen for visibility). Uses the current camera pose — call after
+ * ticking so it matches what is on screen. Not thread-safe with the tick. */
+TESSERA_API bool tessera_world_to_screen(TesseraEngine* e, const float world[3],
+                                         TesseraScreenPos* out);
+
+/* Screen position of a live entity (its ground anchor / placement position),
+ * looked up by the stable id it was given in TesseraEntityPlacement. Tracks the
+ * current animating position, so it stays glued through moves/hops. Returns
+ * false if no live entity has that id (fully despawned, or never placed). */
+TESSERA_API bool tessera_entity_screen_position(TesseraEngine* e, TesseraEntityId id,
+                                                TesseraScreenPos* out);
+
+/* Screen position of a live tile's top-surface centre, looked up by the id set
+ * on its TesseraTilePlacement. Requires the tile to carry a non-zero id.
+ * Returns false for id 0 or when no live tile has that id. */
+TESSERA_API bool tessera_tile_screen_position(TesseraEngine* e, TesseraTileId id,
+                                              TesseraScreenPos* out);
 
 /* =======================================================================
  *  Transitions & timing

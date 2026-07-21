@@ -100,6 +100,12 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
  * true if a tile or entity was hit. */
 bool ts_engine_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick* out);
 
+/* Inverse of picking (scene/pick.c): project scene points back to the screen
+ * using the current camera pose. */
+bool ts_engine_world_to_screen(TesseraEngine* e, const vec3 world, TesseraScreenPos* out);
+bool ts_engine_entity_screen_position(TesseraEngine* e, TesseraEntityId id, TesseraScreenPos* out);
+bool ts_engine_tile_screen_position(TesseraEngine* e, TesseraTileId id, TesseraScreenPos* out);
+
 /* Depth-of-field helpers shared by the render + capture paths. */
 bool ts_engine_dof_active(const TesseraEngine* e);
 void ts_engine_resolve_dof(const TesseraEngine* e, TsDofParams* p);

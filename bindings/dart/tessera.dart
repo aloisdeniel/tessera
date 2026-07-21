@@ -149,6 +149,7 @@ final class TesseraTilePlacement extends Struct {
   external TesseraCoord coord;
   @Uint32() external int tileDef; // 0 = no tile (hole)
   @Uint32() external int variant;
+  @Uint64() external int id; // optional per-tile instance id (0 = none)
 }
 
 final class TesseraEntityPlacement extends Struct {
@@ -198,6 +199,15 @@ final class TesseraPick extends Struct {
   @Array(3) external Array<Float> rayOrigin;
   @Array(3) external Array<Float> rayDir;
   @Array(3) external Array<Float> point;
+}
+
+// Inverse of picking: where a scene point lands on screen.
+final class TesseraScreenPos extends Struct {
+  @Bool() external bool onscreen;
+  @Float() external double x; // logical window coords (top-left origin)
+  @Float() external double y;
+  @Float() external double depth; // NDC depth 0..1 (0 = near plane)
+  @Array(3) external Array<Float> world; // world point that was projected
 }
 
 // ======================================================================
@@ -274,6 +284,18 @@ typedef _SetStateC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraState>
 typedef _SetStateD = void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
 typedef _PickC = Bool Function(Pointer<TesseraEngine>, Float, Float, Pointer<TesseraPick>);
 typedef _PickD = bool Function(Pointer<TesseraEngine>, double, double, Pointer<TesseraPick>);
+typedef _WorldToScreenC =
+    Bool Function(Pointer<TesseraEngine>, Pointer<Float>, Pointer<TesseraScreenPos>);
+typedef _WorldToScreenD =
+    bool Function(Pointer<TesseraEngine>, Pointer<Float>, Pointer<TesseraScreenPos>);
+typedef _EntityScreenC =
+    Bool Function(Pointer<TesseraEngine>, Uint64, Pointer<TesseraScreenPos>);
+typedef _EntityScreenD =
+    bool Function(Pointer<TesseraEngine>, int, Pointer<TesseraScreenPos>);
+typedef _TileScreenC =
+    Bool Function(Pointer<TesseraEngine>, Uint64, Pointer<TesseraScreenPos>);
+typedef _TileScreenD =
+    bool Function(Pointer<TesseraEngine>, int, Pointer<TesseraScreenPos>);
 typedef _SetTimingC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _SetTimingD = void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _IsIdleC = Bool Function(Pointer<TesseraEngine>);
@@ -329,6 +351,12 @@ class Tessera {
       _lib.lookupFunction<_SetStateC, _SetStateD>('tessera_set_state');
   late final _PickD _pick =
       _lib.lookupFunction<_PickC, _PickD>('tessera_pick');
+  late final _WorldToScreenD _worldToScreen =
+      _lib.lookupFunction<_WorldToScreenC, _WorldToScreenD>('tessera_world_to_screen');
+  late final _EntityScreenD _entityScreenPosition = _lib
+      .lookupFunction<_EntityScreenC, _EntityScreenD>('tessera_entity_screen_position');
+  late final _TileScreenD _tileScreenPosition =
+      _lib.lookupFunction<_TileScreenC, _TileScreenD>('tessera_tile_screen_position');
   late final _SetTimingD _setTiming =
       _lib.lookupFunction<_SetTimingC, _SetTimingD>('tessera_set_timing');
   late final _IsIdleD _isIdle = _lib.lookupFunction<_IsIdleC, _IsIdleD>('tessera_is_idle');
@@ -391,6 +419,19 @@ class Tessera {
   /// Ray-pick the tile/entity under a logical window pixel (SDL input space).
   bool pick(double screenX, double screenY, Pointer<TesseraPick> out) =>
       _pick(_engine, screenX, screenY, out);
+
+  /// Inverse of [pick]: project a world point (float[3]) to a logical window
+  /// pixel. Returns false only on an invalid engine/viewport.
+  bool worldToScreen(Pointer<Float> world, Pointer<TesseraScreenPos> out) =>
+      _worldToScreen(_engine, world, out);
+
+  /// Screen position of a live entity by its stable id. False if not present.
+  bool entityScreenPosition(int id, Pointer<TesseraScreenPos> out) =>
+      _entityScreenPosition(_engine, id, out);
+
+  /// Screen position of a live tile by its instance id (0 = unqueryable).
+  bool tileScreenPosition(int id, Pointer<TesseraScreenPos> out) =>
+      _tileScreenPosition(_engine, id, out);
   void setTiming(Pointer<TesseraTiming> t) => _setTiming(_engine, t);
   bool get isIdle => _isIdle(_engine);
   void setQuality(Pointer<TesseraQuality> q) => _setQuality(_engine, q);

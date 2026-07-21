@@ -316,6 +316,7 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
             if (tp->tile_def == 0) continue;
             TsTileInst* t = orch_add_tile(o);
             t->coord = tp->coord;
+            t->id = tp->id;
             t->def = tp->tile_def;
             t->variant = tp->variant;
             t->from_y = t->to_y = 0.0f;
@@ -370,6 +371,7 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
         if (!t) {
             t = orch_add_tile(o);
             t->coord = tp->coord;
+            t->id = tp->id;
             t->def = tp->tile_def;
             t->variant = tp->variant;
             t->from_y = -TS_TILE_RISE;
@@ -383,6 +385,7 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
             /* changed def/variant, or resurrecting a sinking tile: small pop */
             t->from_y = tile_cur_y(t);
             t->from_alpha = tile_cur_alpha(t);
+            t->id = tp->id;
             t->def = tp->tile_def;
             t->variant = tp->variant;
             t->to_y = 0.0f;
@@ -498,6 +501,20 @@ bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out) {
             glm_vec3_copy((float*)o->entities[i].pos, out);
             return true;
         }
+    }
+    return false;
+}
+
+bool ts_orch_tile_pos(const struct TsOrch* o, TesseraTileId id, vec3 out) {
+    if (id == 0) return false;
+    for (size_t i = 0; i < o->tile_count; ++i) {
+        const TsTileInst* t = &o->tiles[i];
+        if (t->id != id) continue;
+        vec3 w;
+        ts_grid_to_world(t->coord.x, t->coord.y, w);
+        w[1] += tile_cur_y(t);   /* follow the current rise/sink */
+        glm_vec3_copy(w, out);
+        return true;
     }
     return false;
 }

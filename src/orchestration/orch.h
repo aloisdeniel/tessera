@@ -52,9 +52,10 @@ typedef struct {
 
 /* Live per-tile instance (keyed by coord). */
 typedef struct {
-    TesseraCoord coord;
-    TesseraDefId def;
-    uint32_t     variant;
+    TesseraCoord  coord;
+    TesseraTileId id;           /* host-supplied instance id (0 = none) */
+    TesseraDefId  def;
+    uint32_t      variant;
     float   from_y, to_y;       /* rise/sink offset */
     float   from_alpha, to_alpha;
     TsTween tween;
@@ -90,6 +91,11 @@ bool ts_orch_has_content(const struct TsOrch* o);
 /* Current interpolated world position of a live entity by id. Returns false if
  * the id is not present. Used by the fx system to follow attached emitters. */
 bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out);
+
+/* World position of a live tile's top-surface centre (includes the current
+ * rise/sink offset), looked up by its instance id. Returns false for id 0 or an
+ * unknown id. Used to project a tile back to screen (inverse of picking). */
+bool ts_orch_tile_pos(const struct TsOrch* o, TesseraTileId id, vec3 out);
 
 /* Build the frame draw list from live instances into `arena`. Returns count. */
 size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,

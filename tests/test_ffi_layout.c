@@ -97,10 +97,11 @@ SIZE_IS(TesseraCoord, 8);
 OFF_IS(TesseraCoord, x, 0);
 OFF_IS(TesseraCoord, y, 4);
 
-SIZE_IS(TesseraTilePlacement, 16);
+SIZE_IS(TesseraTilePlacement, 24);
 OFF_IS(TesseraTilePlacement, coord, 0);
 OFF_IS(TesseraTilePlacement, tile_def, 8);
 OFF_IS(TesseraTilePlacement, variant, 12);
+OFF_IS(TesseraTilePlacement, id, 16);
 
 SIZE_IS(TesseraEntityPlacement, 32);
 OFF_IS(TesseraEntityPlacement, id, 0);
@@ -146,6 +147,13 @@ OFF_IS(TesseraPick, ray_origin, 36);
 OFF_IS(TesseraPick, ray_dir, 48);
 OFF_IS(TesseraPick, point, 60);
 
+SIZE_IS(TesseraScreenPos, 28);
+OFF_IS(TesseraScreenPos, onscreen, 0);
+OFF_IS(TesseraScreenPos, x, 4);
+OFF_IS(TesseraScreenPos, y, 8);
+OFF_IS(TesseraScreenPos, depth, 12);
+OFF_IS(TesseraScreenPos, world, 16);
+
 /* ======================================================================= *
  *  Timing / quality / lighting
  * ======================================================================= */
@@ -185,6 +193,7 @@ SIZE_IS(TesseraLogLevel, 4);
 /* Scalar handle types the bindings depend on. */
 SIZE_IS(TesseraDefId, 4);
 SIZE_IS(TesseraEntityId, 8);
+SIZE_IS(TesseraTileId, 8);
 
 /* ======================================================================= *
  *  Runtime dump — the canonical reference table for binding authors.
@@ -267,6 +276,7 @@ int main(void) {
     P_OFF(TesseraTilePlacement, coord);
     P_OFF(TesseraTilePlacement, tile_def);
     P_OFF(TesseraTilePlacement, variant);
+    P_OFF(TesseraTilePlacement, id);
 
     P_SIZE(TesseraEntityPlacement);
     P_OFF(TesseraEntityPlacement, id);

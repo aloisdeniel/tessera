@@ -47,22 +47,27 @@ static bool ray_sphere(const vec3 o, const vec3 d, const vec3 c, float r, float*
     return true;
 }
 
+/* Logical window size (the space SDL mouse/touch events use — not the pixel
+ * drawable, so hosts can feed input straight through on hi-DPI displays; aspect
+ * is identical either way) and a camera refresh so the mapping matches the pose
+ * currently on screen. Returns false on a zero-sized viewport. */
+static bool pick_viewport(TesseraEngine* e, float* W, float* H) {
+    int lw = 0, lh = 0;
+    if (e->gpu.window) SDL_GetWindowSize(e->gpu.window, &lw, &lh);
+    *W = lw > 0 ? (float)lw : (float)e->gpu.width;
+    *H = lh > 0 ? (float)lh : (float)e->gpu.height;
+    if (*W <= 0.0f || *H <= 0.0f) return false;
+    e->camera.dirty = true;
+    ts_camera_update(&e->camera, *W / *H);
+    return true;
+}
+
 bool ts_engine_pick(TesseraEngine* e, float sx, float sy, TesseraPick* out) {
     memset(out, 0, sizeof *out);
     if (!e) return false;
 
-    /* Normalize against the LOGICAL window size (what SDL mouse/touch events use)
-     * rather than the pixel drawable, so a host can feed input coordinates
-     * straight through on hi-DPI displays. Aspect is identical either way. */
-    int lw = 0, lh = 0;
-    if (e->gpu.window) SDL_GetWindowSize(e->gpu.window, &lw, &lh);
-    float W = lw > 0 ? (float)lw : (float)e->gpu.width;
-    float H = lh > 0 ? (float)lh : (float)e->gpu.height;
-    if (W <= 0.0f || H <= 0.0f) return false;
-
-    /* Refresh the camera so the ray matches the pose currently on screen. */
-    e->camera.dirty = true;
-    ts_camera_update(&e->camera, W / H);
+    float W, H;
+    if (!pick_viewport(e, &W, &H)) return false;
 
     /* Unproject the near/far points of the pixel through inverse(view_proj).
      * Pixel origin is top-left; NDC y points up, depth range is 0..1 (SDL_GPU). */
@@ -133,4 +138,55 @@ bool ts_engine_pick(TesseraEngine* e, float sx, float sy, TesseraPick* out) {
         return true;
     }
     return false;
+}
+
+/* ------------------------------------------------------- inverse (scene->screen) */
+/* Project a world point through the current view_proj into logical window
+ * coordinates. Exact inverse of the unprojection in ts_engine_pick, so a pick
+ * and this projection round-trip. */
+bool ts_engine_world_to_screen(TesseraEngine* e, const vec3 world, TesseraScreenPos* out) {
+    memset(out, 0, sizeof *out);
+    if (!e) return false;
+
+    float W, H;
+    if (!pick_viewport(e, &W, &H)) return false;
+
+    glm_vec3_copy((float*)world, out->world);
+
+    vec4 clip;
+    glm_mat4_mulv(e->camera.view_proj, (vec4){ world[0], world[1], world[2], 1.0f }, clip);
+
+    /* w<=0 => on or behind the near plane: no meaningful pixel. Reported (found)
+     * but not onscreen, with x/y left at 0. */
+    if (clip[3] <= 1e-6f) return true;
+
+    float ndc_x = clip[0] / clip[3];
+    float ndc_y = clip[1] / clip[3];
+    float ndc_z = clip[2] / clip[3];
+
+    out->x = (ndc_x + 1.0f) * 0.5f * W;   /* inverse of ndc_x = 2*sx/W - 1 */
+    out->y = (1.0f - ndc_y) * 0.5f * H;   /* inverse of ndc_y = 1 - 2*sy/H */
+    out->depth = ndc_z;
+    out->onscreen = ndc_x >= -1.0f && ndc_x <= 1.0f &&
+                    ndc_y >= -1.0f && ndc_y <= 1.0f &&
+                    ndc_z >=  0.0f && ndc_z <= 1.0f;
+    return true;
+}
+
+bool ts_engine_entity_screen_position(TesseraEngine* e, TesseraEntityId id,
+                                      TesseraScreenPos* out) {
+    memset(out, 0, sizeof *out);
+    if (!e || !e->orch) return false;
+    vec3 p;
+    if (!ts_orch_entity_pos(e->orch, id, p)) return false;
+    return ts_engine_world_to_screen(e, p, out);
+}
+
+bool ts_engine_tile_screen_position(TesseraEngine* e, TesseraTileId id,
+                                    TesseraScreenPos* out) {
+    memset(out, 0, sizeof *out);
+    if (!e || !e->orch) return false;
+    vec3 p;
+    if (!ts_orch_tile_pos(e->orch, id, p)) return false;
+    return ts_engine_world_to_screen(e, p, out);
 }

@@ -191,6 +191,21 @@ bool tessera_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPick*
     return ts_engine_pick(e, screen_x, screen_y, out);
 }
 
+bool tessera_world_to_screen(TesseraEngine* e, const float world[3], TesseraScreenPos* out) {
+    if (!e || !world || !out) return false;
+    return ts_engine_world_to_screen(e, (const float*)world, out);
+}
+
+bool tessera_entity_screen_position(TesseraEngine* e, TesseraEntityId id, TesseraScreenPos* out) {
+    if (!e || !out) return false;
+    return ts_engine_entity_screen_position(e, id, out);
+}
+
+bool tessera_tile_screen_position(TesseraEngine* e, TesseraTileId id, TesseraScreenPos* out) {
+    if (!e || !out) return false;
+    return ts_engine_tile_screen_position(e, id, out);
+}
+
 bool tessera_capture_png(TesseraEngine* e, int w, int h, const char* png_path) {
     if (!e || !e->gpu.device || w <= 0 || h <= 0 || !png_path) return false;
     return ts_engine_capture_png(e, (uint32_t)w, (uint32_t)h, png_path);

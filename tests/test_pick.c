@@ -26,10 +26,15 @@ int main(void) {
     TesseraDefId tile = tessera_register_tile_def(e, &(TesseraTileDef){ .thickness = 0.25f, .tint = {0.5f,0.6f,0.4f,1} });
     TesseraDefId unit = tessera_register_entity_def(e, &(TesseraEntityDef){ .scale = 1.0f });
 
-    /* 5x5 board centred on origin; one entity standing on (0,0). */
+    /* 5x5 board centred on origin; one entity standing on (0,0). Each tile gets
+     * a unique instance id so it can be projected back to screen. */
     TesseraTilePlacement tiles[25]; size_t nt = 0;
-    for (int z = -2; z <= 2; ++z) for (int x = -2; x <= 2; ++x)
-        tiles[nt++] = (TesseraTilePlacement){ .coord = {x, z}, .tile_def = tile };
+    TesseraTileId tile00_id = 0;
+    for (int z = -2; z <= 2; ++z) for (int x = -2; x <= 2; ++x) {
+        TesseraTileId tid = (TesseraTileId)(nt + 1);   /* nonzero */
+        if (x == 0 && z == 0) tile00_id = tid;
+        tiles[nt++] = (TesseraTilePlacement){ .coord = {x, z}, .tile_def = tile, .id = tid };
+    }
     TesseraEntityPlacement ents[1] = { { .id = 42, .def = unit, .coord = {0, 0} } };
     /* look straight-ish down at the origin so the centre pixel passes through (0,0) */
     TesseraCamera cam = { .focus = {0, 0}, .distance = 10.0f, .yaw = 0.0f, .pitch = 1.2f, .fov = 0.9f };
@@ -68,6 +73,41 @@ int main(void) {
     TesseraPick side;
     if (tessera_pick(e, W * 0.72f, H / 2.0f, &side) && side.hit_tile)
         CHECK(side.tile.x >= 0);
+
+    /* ---- inverse of picking: entity/tile -> screen ---- */
+    /* Entity 42 and tile (0,0) both sit on the camera focus (world origin), so
+     * they must project back onto the centre pixel that picked them. */
+    TesseraScreenPos esp;
+    CHECK(tessera_entity_screen_position(e, 42, &esp));
+    CHECK(esp.onscreen);
+    CHECK(fabsf(esp.x - W / 2.0f) < 2.0f);
+    CHECK(fabsf(esp.y - H / 2.0f) < 2.0f);
+    CHECK(esp.depth >= 0.0f && esp.depth <= 1.0f);
+
+    TesseraScreenPos tsp;
+    CHECK(tessera_tile_screen_position(e, tile00_id, &tsp));
+    CHECK(tsp.onscreen);
+    CHECK(fabsf(tsp.x - W / 2.0f) < 2.0f);
+    CHECK(fabsf(tsp.y - H / 2.0f) < 2.0f);
+
+    /* an off-centre tile projects off-centre, and a pick at that pixel returns
+     * to the same tile (full round-trip through both directions) */
+    TesseraScreenPos sidep;
+    TesseraTileId side_id = tiles[nt - 1].id;   /* tile (2,2) */
+    CHECK(tessera_tile_screen_position(e, side_id, &sidep));
+    if (sidep.onscreen) {
+        TesseraPick rp;
+        if (tessera_pick(e, sidep.x, sidep.y, &rp) && rp.hit_tile)
+            CHECK(rp.tile.x == 2 && rp.tile.y == 2);
+    }
+
+    /* unknown / zero ids report not-found; ray/projection helpers are null-safe */
+    TesseraScreenPos nf;
+    CHECK(tessera_entity_screen_position(e, 9999, &nf) == false);
+    CHECK(tessera_tile_screen_position(e, 0, &nf) == false);
+    CHECK(tessera_world_to_screen(e, (float[3]){0, 0, 0}, &nf) == true && nf.onscreen);
+    CHECK(tessera_entity_screen_position(NULL, 42, &nf) == false);
+    CHECK(tessera_world_to_screen(e, NULL, &nf) == false);
 
     /* null-arg safety */
     CHECK(tessera_pick(NULL, 0, 0, &p) == false);
