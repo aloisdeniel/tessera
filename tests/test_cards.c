@@ -179,6 +179,35 @@ int main(void) {
     CHECK(dpile && dpile->count == 30);
     CHECK(dpile && dpile->thick > thick5 + 0.001f);
 
+    /* ---- deal a NEW card from the pile: it spawns on the pile, not nowhere ---- */
+    TesseraCardPlacement dealt[4];
+    memcpy(dealt, cards, sizeof cards);          /* keep the existing 3 */
+    memset(&dealt[3], 0, sizeof dealt[3]);
+    dealt[3].id = 42; dealt[3].def = cdef;
+    dealt[3].position[0] = -6.0f;                /* target far from the pile (x=3) */
+    dealt[3].hidden = false;                     /* reveal: pile top is hidden     */
+    dealt[3].source_draw = 200;
+    st.cards = dealt; st.card_count = 4;
+    st.epoch++;
+    tessera_set_state(e, &st);
+    advance(e, buf, 1);                          /* promote: card appears on pile */
+    TsCardInst* dealt_inst = find_inst(e, 42, false);
+    CHECK(dealt_inst != NULL);
+    if (dealt_inst) {
+        /* starts at full size/opacity (lifted off the deck, not popped in) */
+        CHECK(dealt_inst->scale > 0.9f && dealt_inst->alpha > 0.9f);
+        /* and near the pile (x~3), NOT yet at its target (x=-6) */
+        CHECK(dealt_inst->pos[0] > 1.0f);
+        /* revealing from a hidden pile top: still mostly concealed early on */
+        CHECK(dealt_inst->mix > 0.5f);
+    }
+    settle(e, buf);
+    dealt_inst = find_inst(e, 42, false);
+    CHECK(dealt_inst && dealt_inst->pos[0] < -5.0f);   /* arrived at its target */
+    CHECK(dealt_inst && dealt_inst->mix < 0.01f);      /* fully revealed        */
+
+    st.cards = cards; st.card_count = 3;         /* restore for teardown */
+
     /* ---- remove everything: all card instances cull ---- */
     st.cards = NULL; st.card_count = 0;
     st.card_draws = NULL; st.card_draw_count = 0;

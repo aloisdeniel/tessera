@@ -431,6 +431,56 @@ static void card_spawn(TsCardInst* c, uint64_t id, TesseraDefId def, bool is_dra
     ts_tween_start(&c->tween, add_s, 0.0f, TS_EASE_OUT_BACK);
 }
 
+/* Resolve the current top-surface pose of a live draw pile (for deal-from-pile
+ * spawns). Prefers the live instance (may be mid-animation); falls back to the
+ * new snapshot's placement. Returns false when the pile isn't present. */
+static bool draw_top_pose(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next,
+                          TesseraCardDrawId draw_id, vec3 out_pos, versor out_rot,
+                          bool* out_hidden) {
+    vec3   pos; versor rot; float thick; bool hidden;
+    TsCardInst* d = orch_find_card(o, draw_id, true);
+    if (d && d->alive && !d->removing) {
+        glm_vec3_copy(d->pos, pos); glm_quat_copy(d->rot, rot);
+        thick = d->thick; hidden = d->hidden;
+    } else {
+        const TesseraCardDrawPlacement* dp = NULL;
+        for (size_t i = 0; next && i < next->card_draw_count; ++i)
+            if (next->card_draws[i].id == draw_id) { dp = &next->card_draws[i]; break; }
+        if (!dp) return false;
+        pos[0] = dp->position[0]; pos[1] = dp->position[1]; pos[2] = dp->position[2];
+        placement_quat(dp->orientation, rot);
+        thick = draw_thickness(e, dp->def, dp->count);
+        hidden = dp->top_hidden;
+    }
+    /* lift to the top face along the pile's local up axis */
+    vec3 up = { 0.0f, thick, 0.0f };
+    glm_quat_rotatev(rot, up, up);
+    glm_vec3_add(pos, up, out_pos);
+    glm_quat_copy(rot, out_rot);
+    if (out_hidden) *out_hidden = hidden;
+    return true;
+}
+
+/* Spawn a card resting on a source pile and slide/flip it to its target. Full
+ * size + opacity throughout (it's lifted off the deck, not popped from nowhere).
+ * Crossfades the front if the pile top and the target differ (a draw reveal). */
+static void card_spawn_from(TsCardInst* c, uint64_t id, TesseraDefId def,
+                            const vec3 pos, const versor rot, bool hidden,
+                            float thick, const vec3 src_pos, const versor src_rot,
+                            bool src_hidden, float move_s) {
+    card_snap(c, id, def, false, pos, rot, hidden, thick, 1);
+    glm_vec3_copy((float*)src_pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
+    glm_quat_copy((float*)src_rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
+    glm_vec3_copy((float*)src_pos, c->pos); glm_quat_copy((float*)src_rot, c->rot);
+    ts_tween_start(&c->tween, move_s, 0.0f, TS_EASE_OUT_CUBIC);
+    if (src_hidden != hidden) {                 /* reveal: crossfade during flight */
+        c->from_mix = src_hidden ? 1.0f : 0.0f;
+        c->to_mix   = hidden ? 1.0f : 0.0f;
+        c->mix      = c->from_mix;
+        ts_tween_start(&c->mix_tween, move_s, 0.0f, TS_EASE_IN_OUT_CUBIC);
+    }
+}
+
 /* Retarget a live card toward a new target, tweening from the current pose. */
 static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
                           const versor rot, bool hidden, float thick, uint32_t count,
@@ -493,9 +543,16 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
             continue;
         }
         TsCardInst* c = orch_find_card(o, cp->id, false);
-        if (c) card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, timing);
-        else   card_spawn(orch_add_card(o), cp->id, cp->def, false, pos, rot,
-                          cp->hidden, thick, 1, timing->add_s);
+        if (c) { card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, timing); continue; }
+        /* New card: deal it from its source pile if that pile is present. */
+        vec3 src_pos; versor src_rot; bool src_hidden;
+        if (cp->source_draw != 0 &&
+            draw_top_pose(o, e, next, cp->source_draw, src_pos, src_rot, &src_hidden))
+            card_spawn_from(orch_add_card(o), cp->id, cp->def, pos, rot, cp->hidden,
+                            thick, src_pos, src_rot, src_hidden, timing->move_s);
+        else
+            card_spawn(orch_add_card(o), cp->id, cp->def, false, pos, rot,
+                       cp->hidden, thick, 1, timing->add_s);
     }
 
     /* card piles (draws) */

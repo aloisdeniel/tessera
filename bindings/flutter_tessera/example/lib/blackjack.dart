@@ -342,6 +342,7 @@ class BlackjackController extends GameController<BjState, BjAction> {
         hidden: false,
         hand: _playerHand,
         handSlot: i,
+        sourceDraw: _deckId, // dealt off the deck: fly in from the pile
       ));
     }
     for (var i = 0; i < dealer.length; i++) {
@@ -351,6 +352,7 @@ class BlackjackController extends GameController<BjState, BjAction> {
         hidden: i == 0 && hideHole, // the hole card
         hand: _dealerHand,
         handSlot: i,
+        sourceDraw: _deckId, // dealt off the deck: fly in from the pile
       ));
     }
 

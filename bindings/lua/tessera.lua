@@ -97,6 +97,7 @@ typedef struct {
     TesseraCardId id; TesseraDefId def;
     float position[3]; float orientation[4];
     bool hidden; TesseraHandId hand; uint32_t hand_slot;
+    TesseraCardDrawId source_draw;
 } TesseraCardPlacement;
 typedef struct {
     TesseraCardDrawId id; TesseraDefId def;

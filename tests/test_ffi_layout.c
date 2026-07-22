@@ -148,7 +148,7 @@ OFF_IS(TesseraDicePlacement, position, 16);
 OFF_IS(TesseraDicePlacement, seed, 28);
 OFF_IS(TesseraDicePlacement, throw_s, 32);
 
-SIZE_IS(TesseraCardPlacement, 64);
+SIZE_IS(TesseraCardPlacement, 72);
 OFF_IS(TesseraCardPlacement, id, 0);
 OFF_IS(TesseraCardPlacement, def, 8);
 OFF_IS(TesseraCardPlacement, position, 12);
@@ -156,6 +156,7 @@ OFF_IS(TesseraCardPlacement, orientation, 24);
 OFF_IS(TesseraCardPlacement, hidden, 40);
 OFF_IS(TesseraCardPlacement, hand, 48);
 OFF_IS(TesseraCardPlacement, hand_slot, 56);
+OFF_IS(TesseraCardPlacement, source_draw, 64);
 
 SIZE_IS(TesseraCardDrawPlacement, 48);
 OFF_IS(TesseraCardDrawPlacement, id, 0);

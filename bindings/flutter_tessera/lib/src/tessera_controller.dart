@@ -327,7 +327,8 @@ class TesseraController {
         ..def = s.def
         ..hidden = s.hidden
         ..hand = s.hand
-        ..handSlot = s.handSlot;
+        ..handSlot = s.handSlot
+        ..sourceDraw = s.sourceDraw;
       for (var k = 0; k < 3; ++k) {
         p.position[k] = s.position[k];
       }

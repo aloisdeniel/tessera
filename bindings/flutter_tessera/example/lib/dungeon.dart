@@ -555,6 +555,7 @@ class DungeonController extends GameController<DgState, DgAction> {
           hidden: false,
           hand: _hand,
           handSlot: i,
+          sourceDraw: _deckId, // drawn off the deck: fly in + flip face-up
         ),
     ];
     final hands = <TesseraHand>[

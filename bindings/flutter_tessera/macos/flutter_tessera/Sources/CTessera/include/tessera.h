@@ -222,7 +222,12 @@ typedef struct {
  * card flat with its front (+Y) facing up. `hidden` shows the concealing front
  * texture (crossfades when toggled). If `hand` is non-zero the card is arranged
  * by that hand's fan and `position`/`orientation` are ignored; `hand_slot`
- * orders it in the fan (lower = one end). Position/orientation changes tween. */
+ * orders it in the fan (lower = one end). Position/orientation changes tween.
+ *
+ * `source_draw` names a card-pile (`TesseraCardDrawPlacement.id`) this card is
+ * dealt from: when the card first appears, if that pile is present it spawns
+ * resting on top of the pile and slides/flips to its target instead of fading
+ * in from nowhere. Ignored after the first frame and when the pile is absent. */
 typedef struct {
     TesseraCardId id;
     TesseraDefId  def;
@@ -231,6 +236,7 @@ typedef struct {
     bool          hidden;
     TesseraHandId hand;           /* 0 => free placement                    */
     uint32_t      hand_slot;
+    TesseraCardDrawId source_draw;/* 0 => none; deal-from-pile spawn source */
 } TesseraCardPlacement;
 
 /* A pile of cards drawn as one slab, always resting face-up on the ground.

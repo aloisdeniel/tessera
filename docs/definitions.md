@@ -239,6 +239,7 @@ typedef struct {
     bool  hidden;                            /* crossfades when toggled     */
     TesseraHandId hand;                      /* 0 => free; else fanned      */
     uint32_t hand_slot;                      /* order within the hand fan   */
+    TesseraCardDrawId source_draw;           /* 0 => none; deal-from-pile   */
 } TesseraCardPlacement;
 
 typedef struct {
@@ -270,6 +271,11 @@ Behaviour, all driven by the state diff:
   positions** of the cards whose `hand` equals its id, fanning them in an arc
   that follows the hand's transform (cards tween into their fan slots; `hand_slot`
   orders them). A card with `hand == 0` keeps its own placement.
+- **Deal from a pile (`source_draw`)** — when a card **first appears** and its
+  `source_draw` names a pile present in the same state, it spawns resting on top
+  of that pile and slides (and flips, if the pile top and the card differ) to its
+  target instead of fading in from nowhere. Ignored on later frames and when the
+  named pile is absent.
 
 `tessera_is_idle` returns `false` while any card is moving, flipping or a pile is
 resizing. See `examples/cards` for a full showcase (flat cards, a flip, a moving

@@ -171,6 +171,11 @@ class TesseraEntity {
 /// identity, which lays the card flat, front up). [hidden] shows the concealing
 /// front (crossfades when toggled). If [hand] is non-zero the card is arranged
 /// by that hand's fan ([position]/[orientation] ignored); [handSlot] orders it.
+///
+/// [sourceDraw] names a [TesseraCardDraw.id] this card is dealt from: when the
+/// card first appears, if that pile is present it spawns resting on top of the
+/// pile and slides/flips to its target instead of fading in from nowhere.
+/// Ignored after the first frame and when the pile is absent.
 class TesseraCard {
   const TesseraCard({
     required this.id,
@@ -180,6 +185,7 @@ class TesseraCard {
     this.hidden = false,
     this.hand = 0,
     this.handSlot = 0,
+    this.sourceDraw = 0,
   });
 
   final int id;
@@ -189,6 +195,7 @@ class TesseraCard {
   final bool hidden;
   final int hand;
   final int handSlot;
+  final int sourceDraw;
 }
 
 /// A pile of cards drawn as one slab (thickness tracks [count]). The top face

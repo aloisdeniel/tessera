@@ -299,6 +299,8 @@ final class TesseraCardPlacement extends Struct {
   external int hand; // 0 => free placement
   @Uint32()
   external int handSlot;
+  @Uint64()
+  external int sourceDraw; // 0 => none; deal-from-pile spawn source
 }
 
 /// A pile of cards drawn as one slab (thickness tracks [count], tweens on
