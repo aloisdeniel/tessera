@@ -384,6 +384,77 @@ typedef struct {
 TESSERA_API void tessera_set_focus(TesseraEngine* e, const TesseraFocus* focus);
 
 /* =======================================================================
+ *  Dice (procedural polyhedral dice with per-face sprites)
+ *
+ *  Register a dice *definition* from a set of face sprites; the engine builds a
+ *  matching convex model (a cube for 6 faces, a two-sided token for 2, an
+ *  N-gonal barrel otherwise) and packs the sprites into one atlas, UV-mapped so
+ *  each sprite is centred on and fills its face. Dice are then thrown into the
+ *  scene by id: each spawns airborne and tumbles along a precomputed trajectory,
+ *  settling with the requested face pointing up at a floating position. Removing
+ *  a die fades it out.
+ *
+ *  Dice live OUTSIDE the immutable state snapshot — they are added and removed
+ *  imperatively, not via tessera_set_state. Like set_timing / set_light, drive
+ *  them from the render / tick thread (the thread that calls tessera_tick /
+ *  tessera_render_rgba), not concurrently with the tick.
+ * ===================================================================== */
+
+typedef uint64_t TesseraDiceId;   /* host-chosen id for a live die (0 = invalid) */
+
+/* One face of a die: an encoded sprite image (PNG/JPG bytes or a filesystem
+ * path), decoded like an atlas image. Shown centred on and filling the face. */
+typedef struct { TesseraBytes sprite; } TesseraDiceFace;
+
+/* A die type. `faces` lists `face_count` sprites (face index 0..count-1);
+ * `face_count` must be >= 2. `size` is the model's approximate diameter in world
+ * units (<= 0 => 1.0). `tint` multiplies the sprites (all-zero => white). */
+typedef struct {
+    const TesseraDiceFace* faces;
+    size_t                 face_count;
+    float                  size;
+    float                  tint[4];
+} TesseraDiceDef;
+
+TESSERA_API TesseraDefId tessera_register_dice_def(TesseraEngine* e, const TesseraDiceDef* def);
+
+/* Number of faces of a registered dice def (0 if `def` is not a dice def). */
+TESSERA_API uint32_t tessera_dice_def_face_count(TesseraEngine* e, TesseraDefId def);
+
+/* Throw a die into the scene (or re-throw an existing one carrying the same id).
+ * The die spawns airborne and tumbles to rest with `face` pointing up, centred
+ * at `position` (world space — a floating point; nothing constrains it to a
+ * tile). `seed` varies the tumble (selects among precomputed trajectories).
+ * `throw_s` is the tumble duration in seconds (<= 0 => a sensible default). */
+typedef struct {
+    TesseraDiceId id;
+    TesseraDefId  def;
+    uint32_t      face;
+    float         position[3];
+    uint32_t      seed;
+    float         throw_s;
+} TesseraDiceThrow;
+
+TESSERA_API void tessera_add_dice(TesseraEngine* e, const TesseraDiceThrow* spec);
+
+/* Begin removing a die: it fades and shrinks out, then is culled. Unknown id =>
+ * no-op. */
+TESSERA_API void tessera_remove_dice(TesseraEngine* e, TesseraDiceId id);
+
+/* Begin removing every live die (each fades out). */
+TESSERA_API void tessera_clear_dice(TesseraEngine* e);
+
+/* Number of live dice, including those still fading in or out. */
+TESSERA_API uint32_t tessera_dice_count(TesseraEngine* e);
+
+/* The face targeted (settling or settled) by a live die. Returns false for an
+ * unknown id; on success writes the face index to *out_face. */
+TESSERA_API bool tessera_dice_face(TesseraEngine* e, TesseraDiceId id, uint32_t* out_face);
+
+/* True when every live die has settled (no tumble or fade in progress). */
+TESSERA_API bool tessera_dice_all_idle(TesseraEngine* e);
+
+/* =======================================================================
  *  Debug / dev hooks
  * ===================================================================== */
 

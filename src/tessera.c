@@ -3,6 +3,7 @@
 #include "state.h"
 #include "orchestration/orch.h"
 #include "fx/fx.h"
+#include "dice/dice.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -58,6 +59,7 @@ TesseraEngine* tessera_create(const TesseraConfig* cfg) {
 void tessera_destroy(TesseraEngine* e) {
     if (!e) return;
     if (e->gpu.device) SDL_WaitForGPUIdle(e->gpu.device);
+    if (e->dice) ts_dice_destroy(e->dice);
     if (e->fx) ts_fx_destroy(e->fx, &e->gpu);
     if (e->orch) ts_orch_destroy(e->orch);
     if (e->state) ts_state_destroy(e->state);
@@ -124,6 +126,42 @@ TesseraDefId tessera_register_effect_def(TesseraEngine* e, const TesseraEffectDe
     return id;
 }
 
+/* ---- dice ---- */
+TesseraDefId tessera_register_dice_def(TesseraEngine* e, const TesseraDiceDef* def) {
+    if (!e) return 0;
+    char err[TS_ERR_CAP]; err[0] = 0;
+    TesseraDefId id = ts_registry_add_dice(&e->registry, def, err, sizeof err);
+    if (!id) ts_engine_set_error(e, "%s", err);
+    return id;
+}
+uint32_t tessera_dice_def_face_count(TesseraEngine* e, TesseraDefId def) {
+    if (!e) return 0;
+    TsDef* d = ts_registry_get(&e->registry, def, TS_DEF_DICE);
+    return d ? d->as.dice.face_count : 0;
+}
+void tessera_add_dice(TesseraEngine* e, const TesseraDiceThrow* spec) {
+    if (!e || !spec) return;
+    if (!e->dice) e->dice = ts_dice_create();
+    if (e->dice) ts_dice_add(e->dice, e, spec);
+}
+void tessera_remove_dice(TesseraEngine* e, TesseraDiceId id) {
+    if (e && e->dice) ts_dice_remove(e->dice, id, e->timing.remove_s);
+}
+void tessera_clear_dice(TesseraEngine* e) {
+    if (e && e->dice) ts_dice_clear(e->dice, e->timing.remove_s);
+}
+uint32_t tessera_dice_count(TesseraEngine* e) {
+    return (e && e->dice) ? ts_dice_count(e->dice) : 0;
+}
+bool tessera_dice_face(TesseraEngine* e, TesseraDiceId id, uint32_t* out_face) {
+    if (!e || !e->dice) return false;
+    return ts_dice_face(e->dice, id, out_face);
+}
+bool tessera_dice_all_idle(TesseraEngine* e) {
+    if (!e || !e->dice) return true;
+    return ts_dice_all_idle(e->dice);
+}
+
 uint32_t tessera_entity_def_anim_count(TesseraEngine* e, TesseraDefId def) {
     if (!e) return 0;
     TsDef* d = ts_registry_get(&e->registry, def, TS_DEF_ENTITY);
@@ -164,6 +202,7 @@ bool tessera_is_idle(TesseraEngine* e) {
     SDL_UnlockMutex(e->state_mutex);
     if (pending) return false;
     if (e->fx && !ts_fx_is_idle(e->fx)) return false;
+    if (e->dice && !ts_dice_all_idle(e->dice)) return false;
     return !e->orch || ts_orch_is_idle(e->orch);
 }
 void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q) {

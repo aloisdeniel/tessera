@@ -20,6 +20,7 @@
 typedef struct TsStateStore TsStateStore;   /* state.h  — M3 */
 typedef struct TsOrch       TsOrch;         /* orchestration/orch.h — M4 */
 typedef struct TsFx         TsFx;           /* fx/fx.h  — M6 */
+typedef struct TsDice       TsDice;         /* dice/dice.h — thrown dice */
 
 #define TS_ERR_CAP 512
 
@@ -51,6 +52,7 @@ struct TesseraEngine {
     TsStateStore* state;    /* current / target / pending snapshots (M3) */
     TsOrch*       orch;     /* diff + tween instances (M4)               */
     TsFx*         fx;       /* particle systems (M6)                     */
+    TsDice*       dice;     /* imperatively-thrown dice (outside state)  */
 
     double        clock;          /* accumulated engine time (s) */
     bool          have_rendered;

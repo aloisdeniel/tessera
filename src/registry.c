@@ -90,6 +90,8 @@ void ts_registry_shutdown(TsRegistry* r) {
             ts_gpu_free_texture(r->gpu, &d->as.atlas.tex);
         if (d->kind == TS_DEF_ENTITY && d->as.entity.has_mesh)
             ts_gpu_free_mesh(r->gpu, &d->as.entity.mesh);
+        if (d->kind == TS_DEF_DICE)
+            ts_dice_free_model(r->gpu, &d->as.dice);
     }
     ts_gpu_free_texture(r->gpu, &r->white);
     ts_gpu_free_texture(r->gpu, &r->particle_dot);
@@ -219,6 +221,25 @@ TesseraDefId ts_registry_add_entity(TsRegistry* r, const TesseraEntityDef* def,
     }
 
     d->as.entity.valid = true;
+    return (TesseraDefId)h;
+}
+
+TesseraDefId ts_registry_add_dice(TsRegistry* r, const TesseraDiceDef* def,
+                                  char* err, size_t err_sz) {
+    if (!def) { snprintf(err, err_sz, "register_dice: null def"); return 0; }
+    TsDiceModel model;
+    if (!ts_dice_build_model(r->gpu, r->arena, r->log, def, &model, err, err_sz))
+        return 0;
+    void* slot;
+    TsHandle h = ts_slotmap_alloc(&r->defs, &slot);
+    if (!h) {
+        ts_dice_free_model(r->gpu, &model);
+        snprintf(err, err_sz, "register_dice: registry full");
+        return 0;
+    }
+    TsDef* d = (TsDef*)slot;
+    d->kind = TS_DEF_DICE;
+    d->as.dice = model;
     return (TesseraDefId)h;
 }
 

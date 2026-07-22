@@ -291,5 +291,6 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
     float mult = e->timing.speed_multiplier > 0.0f ? e->timing.speed_multiplier : 1.0f;
     if (e->orch) ts_orch_advance(e->orch, (float)dt * mult);
     if (e->fx) ts_fx_advance(e, (float)dt * mult);
+    if (e->dice) ts_dice_advance(e->dice, (float)dt * mult);
     advance_camera(e, (float)dt * mult);
 }

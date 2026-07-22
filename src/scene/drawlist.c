@@ -6,6 +6,7 @@
  * layout solver. The single symbol `ts_scene_build_drawlist` is the contract. */
 #include "engine.h"
 #include "orchestration/orch.h"
+#include "dice/dice.h"
 #include <string.h>
 
 static void push_tile(TsDrawItem* it, const TsMesh* mesh, SDL_GPUTexture* tex,
@@ -21,15 +22,17 @@ static void push_tile(TsDrawItem* it, const TsMesh* mesh, SDL_GPUTexture* tex,
     it->uv_rect[2] = 1.0f; it->uv_rect[3] = 1.0f;
 }
 
-size_t ts_scene_build_drawlist(TesseraEngine* e, TsArena* arena, TsDrawItem** out) {
+/* Build the base scene (live orchestrator, or the built-in demo board before any
+ * state is pushed) into `arena`; returns count with *base pointing at it. */
+static size_t build_base(TesseraEngine* e, TsArena* arena, TsDrawItem** base) {
     /* Once a state has been pushed, the orchestrator owns the scene. */
     if (e->orch && ts_orch_has_content(e->orch))
-        return ts_orch_build_drawlist(e->orch, e, arena, out);
+        return ts_orch_build_drawlist(e->orch, e, arena, base);
 
     const int N = 6;
     size_t max_items = (size_t)(N * N) + 3;
     TsDrawItem* items = TS_ARENA_ARR(arena, TsDrawItem, max_items);
-    if (!items) { *out = NULL; return 0; }
+    if (!items) { *base = NULL; return 0; }
 
     SDL_GPUTexture* white = e->registry.white.texture;
     size_t k = 0;
@@ -51,6 +54,23 @@ size_t ts_scene_build_drawlist(TesseraEngine* e, TsArena* arena, TsDrawItem** ou
                   spots[i][0], spots[i][1], cols[i][0], cols[i][1], cols[i][2]);
         k++;
     }
-    *out = items;
+    *base = items;
     return k;
+}
+
+size_t ts_scene_build_drawlist(TesseraEngine* e, TsArena* arena, TsDrawItem** out) {
+    TsDrawItem* base = NULL;
+    size_t base_count = build_base(e, arena, &base);
+
+    /* Thrown dice live outside the state snapshot; append them to whatever the
+     * base scene produced so they draw over the board with the same pipeline. */
+    size_t dice_count = e->dice ? ts_dice_drawitem_count(e->dice) : 0;
+    if (dice_count == 0) { *out = base; return base_count; }
+
+    TsDrawItem* all = TS_ARENA_ARR(arena, TsDrawItem, base_count + dice_count);
+    if (!all) { *out = base; return base_count; }
+    if (base_count) memcpy(all, base, base_count * sizeof(TsDrawItem));
+    size_t nd = ts_dice_build_drawlist(e->dice, e, all + base_count);
+    *out = all;
+    return base_count + nd;
 }

@@ -68,7 +68,8 @@ if(TESSERA_BUILD_EXAMPLES)
                 add_executable(example_${name} ${EX_SRC})
                 target_link_libraries(example_${name} PRIVATE tessera SDL3::SDL3)
                 target_include_directories(example_${name} PRIVATE
-                    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+                    ${CMAKE_CURRENT_SOURCE_DIR}/include
+                    ${TP})
             endif()
         endif()
     endforeach()

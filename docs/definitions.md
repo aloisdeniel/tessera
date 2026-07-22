@@ -11,7 +11,11 @@ TesseraDefId tessera_register_atlas     (TesseraEngine*, const TesseraBytes*  im
 TesseraDefId tessera_register_tile_def  (TesseraEngine*, const TesseraTileDef* def);
 TesseraDefId tessera_register_entity_def(TesseraEngine*, const TesseraEntityDef* def);
 TesseraDefId tessera_register_effect_def(TesseraEngine*, const TesseraEffectDef* def);
+TesseraDefId tessera_register_dice_def  (TesseraEngine*, const TesseraDiceDef*   def);
 ```
+
+(Dice are registered like other defs but thrown imperatively rather than placed
+in a `TesseraState` — see [Dice](#dice--procedural-polyhedral-dice-with-per-face-sprites).)
 
 ## `TesseraBytes` — a borrowed byte span
 
@@ -111,3 +115,85 @@ Effects appear in a state through `TesseraEffectPlacement`, anchored to a tile
 `coord` or attached to an entity via `attach_entity_id` (`0` = tile-anchored).
 An entity def's `on_spawn_effect` / `on_despawn_effect` fire the linked effect
 automatically when that entity is added or removed.
+
+## Dice — procedural polyhedral dice with per-face sprites
+
+Dice are a self-contained subsystem: register a **dice def** from a set of face
+sprites, then throw dice into the scene imperatively (they live *outside* the
+`TesseraState` snapshot).
+
+```c
+typedef struct { TesseraBytes sprite; } TesseraDiceFace;
+typedef struct {
+    const TesseraDiceFace* faces;      /* face_count sprites (index 0..N-1) */
+    size_t                 face_count; /* >= 2                              */
+    float                  size;       /* model diameter, world units (<=0 => 1) */
+    float                  tint[4];    /* sprite multiply (all-zero => white)    */
+} TesseraDiceDef;
+
+TesseraDefId tessera_register_dice_def   (TesseraEngine*, const TesseraDiceDef*);
+uint32_t     tessera_dice_def_face_count (TesseraEngine*, TesseraDefId);
+```
+
+From the face count the engine generates a matching convex model and packs the
+sprites into one atlas, UV-mapped so each sprite is **centred on and fills its
+face**:
+
+| Faces | Model |
+|---|---|
+| `2` | a two-sided token / coin (the two discs are the faces) |
+| `4` | a **tetrahedron** (d4) |
+| `6` | a **cube** (d6) |
+| `8` | an **octahedron** (d8) |
+| `12` | a **dodecahedron** (d12) — pentagonal faces |
+| `20` | an **icosahedron** (d20) |
+| `N` (any other) | an N-gonal **barrel** — N rectangular side faces, plain end caps |
+
+The face counts `4/6/8/12/20` produce true **Platonic solids** (each generated
+from its exact vertex/face table); the cube fills each square face edge-to-edge,
+the other regular solids centre the sprite on the face's circumscribed circle.
+Every face's sprite tangent frame is chosen orientation-preserving (`u × v =
+-n`), so numerals read upright and un-mirrored on all faces. Each face also gets
+a *rest orientation* (the rotation that turns that face to point `+Y`), so any
+face can be made to land face-up. Sprites are encoded images (PNG/JPG/TGA/… —
+anything `stb_image` decodes), passed as `TesseraBytes`; a face whose sprite
+fails to decode renders as a blank plate.
+
+### Throwing dice
+
+```c
+typedef struct {
+    TesseraDiceId id;          /* host-chosen stable handle (re-throws reuse it) */
+    TesseraDefId  def;
+    uint32_t      face;        /* face to land up (clamped to N)                 */
+    float         position[3]; /* rest position of the die centre (world space)  */
+    uint32_t      seed;        /* varies the tumble (picks a precomputed path)    */
+    float         throw_s;     /* tumble duration (<=0 => default)               */
+} TesseraDiceThrow;
+
+void     tessera_add_dice    (TesseraEngine*, const TesseraDiceThrow*);
+void     tessera_remove_dice (TesseraEngine*, TesseraDiceId);  /* fade + shrink out */
+void     tessera_clear_dice  (TesseraEngine*);
+uint32_t tessera_dice_count  (TesseraEngine*);
+bool     tessera_dice_face   (TesseraEngine*, TesseraDiceId, uint32_t* out_face);
+bool     tessera_dice_all_idle(TesseraEngine*);
+```
+
+A thrown die spawns airborne and tumbles along a precomputed trajectory whose
+spin winds down to *exactly* the target face's rest orientation, so it always
+settles on the requested face — at the given floating `position` (nothing
+constrains it to a tile). `position` is a true world point, so dice can hover
+above the board. The vertical axis is integrated as real physics — gravity pulls
+the die down and its velocity reverses (losing energy to restitution) each time
+it hits the rest height, so it bounces lower and quicker until it settles — while
+the horizontal slide and the tumble carry their launch momentum *through* the
+bounces and bleed off under friction, the spin easing to a stop (exactly on the
+target face) only at the very end. The **d4** is oriented the way a real
+tetrahedral die is read — it rests on a face with the chosen face's value shown
+upright at the top apex — rather than lying flat-face-up. Removing a die fades
+and shrinks it out, then culls it.
+
+Because dice are imperative (not part of `tessera_set_state`), drive them from
+the render / tick thread — the same thread as `tessera_tick` / `set_timing` —
+not concurrently with the tick. `tessera_is_idle` also returns `false` while any
+die is still tumbling or fading. See `examples/dice` for a full showcase.

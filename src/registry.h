@@ -7,6 +7,7 @@
 
 #include "core/core.h"
 #include "gpu/gpu.h"
+#include "dice/dice.h"
 #include "tessera.h"
 
 typedef enum {
@@ -14,7 +15,8 @@ typedef enum {
     TS_DEF_ATLAS,
     TS_DEF_TILE,
     TS_DEF_ENTITY,
-    TS_DEF_EFFECT
+    TS_DEF_EFFECT,
+    TS_DEF_DICE
 } TsDefKind;
 
 typedef struct {
@@ -60,6 +62,7 @@ typedef struct {
         TsTileDef   tile;
         TsEntityDef entity;
         TsEffectDef effect;
+        TsDiceModel dice;   /* generated dice geometry + packed atlas */
     } as;
 } TsDef;
 
@@ -91,5 +94,6 @@ TesseraDefId ts_registry_add_atlas(TsRegistry* r, const TesseraBytes* image, cha
 TesseraDefId ts_registry_add_tile(TsRegistry* r, const TesseraTileDef* def, char* err, size_t err_sz);
 TesseraDefId ts_registry_add_entity(TsRegistry* r, const TesseraEntityDef* def, char* err, size_t err_sz);
 TesseraDefId ts_registry_add_effect(TsRegistry* r, const TesseraEffectDef* def, char* err, size_t err_sz);
+TesseraDefId ts_registry_add_dice(TsRegistry* r, const TesseraDiceDef* def, char* err, size_t err_sz);
 
 #endif /* TESSERA_REGISTRY_H */
