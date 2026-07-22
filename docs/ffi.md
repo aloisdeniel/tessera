@@ -41,7 +41,7 @@ The reference layout it produces (target LP64 ABI: pointer/`size_t` = 8, enum =
 | `TesseraCoord` | 8 / 4 | `TesseraTilePlacement` | 16 / 4 |
 
 Both bindings mirror this layout field-for-field:
-`bindings/dart/tessera.dart` (`dart:ffi`) and `bindings/lua/tessera.lua`
+`bindings/dart/lib/src/ffi.dart` (`dart:ffi`) and `bindings/lua/tessera.lua`
 (LuaJIT FFI). Both carry a header comment pointing back at this self-test.
 
 ## Threading contract
@@ -53,10 +53,40 @@ the render (main) thread; `tessera_set_state`, `set_timing`, `set_light`,
 
 ## Dart (`dart:ffi`)
 
-`bindings/dart/tessera.dart` is a hand-written binding covering the **full**
-public surface — every struct/enum and every function — plus a `Tessera`
-wrapper class. For an always-in-sync binding you can instead run
-[`ffigen`](https://pub.dev/packages/ffigen) against `include/tessera.h`.
+`bindings/dart/` is a real pub package (`name: tessera`) — add it to a Dart
+project with a `path`/`git` dependency and `import 'package:tessera/tessera.dart'`.
+It is a hand-written binding covering the **full** public surface — every
+struct/enum and every function — plus a `Tessera` wrapper class and automatic
+native-library discovery (`openTesseraLibrary`). For an always-in-sync binding
+you can instead run [`ffigen`](https://pub.dev/packages/ffigen) against
+`include/tessera.h`.
+
+The package ships a complete example under `bindings/dart/example/`: a game of
+chess ported from `examples/chess` — pure rules engine, runtime GLB piece
+models, a heuristic AI, and the visual projection onto `TesseraState`. Its logic
+is verified against the C reference game with `dart test`. See the package
+`README.md` for build/run instructions (and the note on driving the Cocoa/Metal
+renderer, which requires the platform main thread).
+
+## Flutter (`bindings/flutter_tessera/`)
+
+`flutter_tessera` embeds Tessera in a Flutter app as a native **platform view**
+(macOS/Metal reference impl). Because Tessera's GPU calls are render-main-thread
+and Flutter's Dart runs on the UI thread, the native platform view owns the
+engine and render loop; Dart drives it via a per-view method channel plus FFI
+(the `tessera` package's `Tessera.fromHandle`) for the any-thread `set_state`.
+The engine renders offscreen through `tessera_render_rgba` (below) and the
+plugin blits the pixels into the view's `CAMetalLayer`. Its `example/` is the
+chess game as a live, interactive Flutter widget.
+
+## Embedding API — `tessera_render_rgba`
+
+For hosts that present frames themselves (a platform view / texture compositor)
+rather than to the engine's own window: `tessera_render_rgba(e, dt, w, h, out,
+out_size)` advances animation by `dt` and renders one frame offscreen into an
+RGBA8 buffer — `tessera_tick` for embedders. Create the engine with a hidden
+host window as `native_window` so it never shows its own window. Render/main
+thread.
 
 A small scenario — register defs, push a one-tile board with a unit, tick, and
 capture a PNG:
@@ -64,7 +94,7 @@ capture a PNG:
 ```dart
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
-import 'tessera.dart';
+import 'package:tessera/tessera.dart';
 
 void main() {
   final t = Tessera(width: 640, height: 480);

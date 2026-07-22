@@ -1,0 +1,6 @@
+module CTessera {
+    // Only the self-contained bridge API is exposed to Swift. tessera.h and the
+    // SDL headers stay internal to tessera_bridge.c.
+    header "tessera_bridge.h"
+    export *
+}

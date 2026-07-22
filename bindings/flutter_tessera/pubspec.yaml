@@ -1,0 +1,28 @@
+name: flutter_tessera
+description: "Flutter platform-view embedding of the Tessera 3D board-game renderer."
+version: 0.1.0
+homepage: https://github.com/aloisdeniel/tessera
+
+environment:
+  sdk: ^3.12.0
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # The pure-Dart FFI binding. flutter_tessera drives the native-owned engine
+  # through this package (Tessera.fromHandle) for the any-thread state calls.
+  tessera:
+    path: ../dart
+  ffi: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      macos:
+        pluginClass: FlutterTesseraPlugin

@@ -1,0 +1,14 @@
+# Dart / pub
+.dart_tool/
+.packages
+pubspec.lock
+build/
+doc/api/
+
+# Native library dropped in for local runs
+*.dylib
+*.so
+*.dll
+
+# Example output
+example/out/

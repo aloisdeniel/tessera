@@ -1,0 +1,23 @@
+name: tessera
+description: >-
+  Dart FFI bindings for the Tessera table-top 3D renderer — a small, embeddable
+  C + SDL3 engine for turn-based, grid-based games (chess, tactics, board games).
+version: 0.2.0
+repository: https://github.com/aloisdeniel/tessera
+issue_tracker: https://github.com/aloisdeniel/tessera/issues
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  ffi: ^2.1.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0
+
+topics:
+  - ffi
+  - graphics
+  - rendering
+  - game

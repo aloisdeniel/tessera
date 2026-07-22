@@ -219,3 +219,11 @@ bool tessera_capture_png(TesseraEngine* e, int w, int h, const char* png_path) {
     if (!e || !e->gpu.device || w <= 0 || h <= 0 || !png_path) return false;
     return ts_engine_capture_png(e, (uint32_t)w, (uint32_t)h, png_path);
 }
+
+bool tessera_render_rgba(TesseraEngine* e, double dt_seconds, int w, int h,
+                         void* out_rgba, size_t out_size) {
+    if (!e || !e->gpu.device || w <= 0 || h <= 0 || !out_rgba) return false;
+    ts_engine_advance(e, dt_seconds);
+    return ts_engine_render_rgba(e, (uint32_t)w, (uint32_t)h,
+                                 (uint8_t*)out_rgba, out_size);
+}

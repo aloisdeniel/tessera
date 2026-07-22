@@ -262,6 +262,11 @@ static void advance_camera(TesseraEngine* e, float dt) {
 }
 
 void ts_engine_tick(TesseraEngine* e, double dt) {
+    ts_engine_advance(e, dt);
+    ts_engine_render(e);
+}
+
+void ts_engine_advance(TesseraEngine* e, double dt) {
     if (dt < 0) dt = 0;
     e->clock += dt;
     ts_arena_reset(&e->frame_arena);
@@ -287,6 +292,4 @@ void ts_engine_tick(TesseraEngine* e, double dt) {
     if (e->orch) ts_orch_advance(e->orch, (float)dt * mult);
     if (e->fx) ts_fx_advance(e, (float)dt * mult);
     advance_camera(e, (float)dt * mult);
-
-    ts_engine_render(e);
 }

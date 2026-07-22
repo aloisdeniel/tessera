@@ -84,8 +84,20 @@ void ts_engine_set_error(TesseraEngine* e, const char* fmt, ...);
 /* Advance animation clocks + render exactly one frame. */
 void ts_engine_tick(TesseraEngine* e, double dt);
 
+/* Advance animation clocks by dt WITHOUT rendering (promote pending state, diff,
+ * advance orchestrator/fx/camera). ts_engine_tick == advance + render. Split out
+ * so embedders can render offscreen instead of to the window swapchain. */
+void ts_engine_advance(TesseraEngine* e, double dt);
+
 /* Render the current scene (called inside tick). Split out for testability. */
 void ts_engine_render(TesseraEngine* e);
+
+/* Render one frame offscreen at (w,h) into `out_rgba` (RGBA8, top-left origin,
+ * w*h*4 bytes; out_size must be >= that). Same offscreen path as capture_png but
+ * no file I/O — for host compositors that display the frame themselves (e.g. a
+ * Flutter platform view uploading to a Metal texture). Returns false on failure. */
+bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
+                           uint8_t* out_rgba, size_t out_size);
 
 /* Record the frame's draw calls into an already-begun render pass. Shared by
  * the on-screen renderer and the offscreen capture path. */

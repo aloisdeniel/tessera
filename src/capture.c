@@ -1,21 +1,29 @@
-/* capture.c — offscreen render to an RGBA texture, download, write PNG.
- * Headless-friendly; the basis for golden-image tests (M9). */
+/* capture.c — offscreen render to an RGBA texture, download to a caller buffer,
+ * optionally write PNG. Headless-friendly; the basis for golden-image tests (M9)
+ * and for host compositors that display frames themselves (render_rgba). */
 #include "engine.h"
 #include "fx/fx.h"
 #include "stb_image_write.h"
 #include <stdlib.h>
 #include <string.h>
 
-bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char* png_path) {
+/* Render the current scene offscreen at (w,h) and download RGBA8 into out_rgba
+ * (top-left origin). Shared by ts_engine_render_rgba (public) and capture_png. */
+bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
+                           uint8_t* out_rgba, size_t out_size) {
+    if (!e) return false;
     TsGpu* g = &e->gpu;
-    if (!g->device) { ts_engine_set_error(e, "capture: no GPU device"); return false; }
-    if (w == 0 || h == 0) { ts_engine_set_error(e, "capture: bad size"); return false; }
+    if (!g->device) { ts_engine_set_error(e, "render_rgba: no GPU device"); return false; }
+    if (w == 0 || h == 0) { ts_engine_set_error(e, "render_rgba: bad size"); return false; }
+    if (!out_rgba || out_size < (size_t)w * h * 4) {
+        ts_engine_set_error(e, "render_rgba: buffer too small");
+        return false;
+    }
 
     bool ok = false;
     SDL_GPUTexture* color = NULL;
     SDL_GPUTexture* depth = NULL;
     SDL_GPUTransferBuffer* dl = NULL;
-    uint8_t* pixels = NULL;
 
     /* Match the mesh pipeline's color target format (the swapchain format). */
     SDL_GPUTextureCreateInfo cci = {
@@ -34,12 +42,12 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
         .width = w, .height = h, .layer_count_or_depth = 1,
         .num_levels = 1, .sample_count = SDL_GPU_SAMPLECOUNT_1 };
     depth = SDL_CreateGPUTexture(g->device, &dci);
-    if (!color || !depth) { ts_engine_set_error(e, "capture: texture create failed"); goto done; }
+    if (!color || !depth) { ts_engine_set_error(e, "render_rgba: texture create failed"); goto done; }
 
     SDL_GPUTransferBufferCreateInfo tci = {
         .usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = w * h * 4 };
     dl = SDL_CreateGPUTransferBuffer(g->device, &tci);
-    if (!dl) { ts_engine_set_error(e, "capture: transfer buffer failed"); goto done; }
+    if (!dl) { ts_engine_set_error(e, "render_rgba: transfer buffer failed"); goto done; }
 
     ts_arena_reset(&e->frame_arena);
     /* Refresh the camera (and its cached eye) so particle billboards face it. */
@@ -87,23 +95,33 @@ bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char*
     }
 
     void* mapped = SDL_MapGPUTransferBuffer(g->device, dl, false);
-    if (!mapped) { ts_engine_set_error(e, "capture: map failed"); goto done; }
-    pixels = (uint8_t*)malloc(w * h * 4);
-    memcpy(pixels, mapped, w * h * 4);
+    if (!mapped) { ts_engine_set_error(e, "render_rgba: map failed"); goto done; }
+    memcpy(out_rgba, mapped, (size_t)w * h * 4);
     SDL_UnmapGPUTransferBuffer(g->device, dl);
     if (bgra) {
         for (uint32_t i = 0; i < w * h * 4; i += 4) {
-            uint8_t t = pixels[i]; pixels[i] = pixels[i + 2]; pixels[i + 2] = t;
+            uint8_t t = out_rgba[i]; out_rgba[i] = out_rgba[i + 2]; out_rgba[i + 2] = t;
         }
     }
-
-    ok = stbi_write_png(png_path, (int)w, (int)h, 4, pixels, (int)(w * 4)) != 0;
-    if (!ok) ts_engine_set_error(e, "capture: png write failed for %s", png_path);
+    ok = true;
 
 done:
-    free(pixels);
     if (dl) SDL_ReleaseGPUTransferBuffer(g->device, dl);
     if (color) SDL_ReleaseGPUTexture(g->device, color);
     if (depth) SDL_ReleaseGPUTexture(g->device, depth);
+    return ok;
+}
+
+bool ts_engine_capture_png(TesseraEngine* e, uint32_t w, uint32_t h, const char* png_path) {
+    if (!e || w == 0 || h == 0) return false;
+    uint8_t* pixels = (uint8_t*)malloc((size_t)w * h * 4);
+    if (!pixels) { ts_engine_set_error(e, "capture: out of memory"); return false; }
+
+    bool ok = ts_engine_render_rgba(e, w, h, pixels, (size_t)w * h * 4);
+    if (ok) {
+        ok = stbi_write_png(png_path, (int)w, (int)h, 4, pixels, (int)(w * 4)) != 0;
+        if (!ok) ts_engine_set_error(e, "capture: png write failed for %s", png_path);
+    }
+    free(pixels);
     return ok;
 }

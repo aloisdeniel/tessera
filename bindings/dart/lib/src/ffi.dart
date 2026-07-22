@@ -1,4 +1,4 @@
-// tessera.dart — dart:ffi binding for the Tessera renderer.
+// ffi.dart — dart:ffi binding for the Tessera renderer.
 //
 // Struct layouts mirror include/tessera.h EXACTLY. The canonical layout
 // reference (sizeof of every struct + offsetof of every field) is the C
@@ -11,14 +11,12 @@
 // pointers/IntPtr/Size = 8 bytes, enums = Int32, bool = 1 byte, float = 4),
 // so declaring the fields in header order reproduces the C layout without
 // manual padding.
-//
-// Load the shared library with DynamicLibrary.open('libtessera.dylib' on
-// macOS / 'libtessera.so' on Linux+Android). For a full always-in-sync
-// binding in production, generate with `ffigen` from include/tessera.h.
 
 import 'dart:ffi';
-import 'dart:io' show Platform;
+
 import 'package:ffi/ffi.dart';
+
+import 'library.dart';
 
 // ======================================================================
 //  Handles & enums
@@ -28,22 +26,22 @@ final class TesseraEngine extends Opaque {}
 // TesseraDefId is uint32 (0 = invalid/none); TesseraEntityId is uint64.
 // Represented as plain Dart ints at the call sites.
 
-// enum TesseraLogLevel { TRACE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4 }
+/// enum TesseraLogLevel { TRACE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4 }
 abstract final class TesseraLogLevel {
   static const int trace = 0, debug = 1, info = 2, warn = 3, error = 4;
 }
 
-// enum TesseraEmitMode { BURST=0, CONTINUOUS=1 }
+/// enum TesseraEmitMode { BURST=0, CONTINUOUS=1 }
 abstract final class TesseraEmitMode {
   static const int burst = 0, continuous = 1;
 }
 
-// enum TesseraBlendMode { ALPHA=0, ADD=1 }
+/// enum TesseraBlendMode { ALPHA=0, ADD=1 }
 abstract final class TesseraBlendMode {
   static const int alpha = 0, add = 1;
 }
 
-// enum TesseraShadowMode { NONE=0, BLOB=1, MAP=2 }
+/// enum TesseraShadowMode { NONE=0, BLOB=1, MAP=2 }
 abstract final class TesseraShadowMode {
   static const int none = 0, blob = 1, map = 2;
 }
@@ -56,11 +54,16 @@ typedef TesseraLogFnC = Void Function(Pointer<Void>, Int32, Pointer<Utf8>);
 // ======================================================================
 final class TesseraConfig extends Struct {
   external Pointer<Void> nativeWindow; // NULL => engine creates its own window
-  @Int32() external int width;
-  @Int32() external int height;
-  @Float() external double pixelDensity;
-  @Bool() external bool engineDrivenLoop;
-  @Bool() external bool debug;
+  @Int32()
+  external int width;
+  @Int32()
+  external int height;
+  @Float()
+  external double pixelDensity;
+  @Bool()
+  external bool engineDrivenLoop;
+  @Bool()
+  external bool debug;
   external Pointer<NativeFunction<TesseraLogFnC>> log; // optional; NULL => stderr
   external Pointer<Void> logUserdata;
 }
@@ -70,59 +73,91 @@ final class TesseraConfig extends Struct {
 // ======================================================================
 final class TesseraBytes extends Struct {
   external Pointer<Void> data; // NULL => load from `path`
-  @Size() external int size;
+  @Size()
+  external int size;
   external Pointer<Utf8> path;
   external Pointer<Utf8> debugName;
 }
 
 final class TesseraRect extends Struct {
-  @Float() external double u0;
-  @Float() external double v0;
-  @Float() external double u1;
-  @Float() external double v1;
+  @Float()
+  external double u0;
+  @Float()
+  external double v0;
+  @Float()
+  external double u1;
+  @Float()
+  external double v1;
 }
 
 final class TesseraTileDef extends Struct {
-  @Uint32() external int atlas; // 0 = untextured / white
+  @Uint32()
+  external int atlas; // 0 = untextured / white
   external TesseraRect top;
   external TesseraRect side;
   external TesseraRect bottom;
-  @Array(4) external Array<Float> tint; // RGBA multiply
-  @Float() external double thickness; // relative tile height (default 0.25)
+  @Array(4)
+  external Array<Float> tint; // RGBA multiply
+  @Float()
+  external double thickness; // relative tile height (default 0.25)
 }
 
 final class TesseraEntityDef extends Struct {
   external TesseraBytes gltf;
-  @Uint32() external int atlas; // 0 = texture from gltf
-  @Float() external double scale;
-  @Array(3) external Array<Float> pivot; // feet anchor (model space)
+  @Uint32()
+  external int atlas; // 0 = texture from gltf
+  @Float()
+  external double scale;
+  @Array(3)
+  external Array<Float> pivot; // feet anchor (model space)
   // Named clip roles resolved against clips in the gltf; -1 = unset.
-  @Int32() external int defaultAnim;
-  @Int32() external int moveAnim;
-  @Int32() external int spawnAnim;
-  @Int32() external int despawnAnim;
+  @Int32()
+  external int defaultAnim;
+  @Int32()
+  external int moveAnim;
+  @Int32()
+  external int spawnAnim;
+  @Int32()
+  external int despawnAnim;
   // Linked effects played on spawn / despawn; 0 = none.
-  @Uint32() external int onSpawnEffect;
-  @Uint32() external int onDespawnEffect;
+  @Uint32()
+  external int onSpawnEffect;
+  @Uint32()
+  external int onDespawnEffect;
 }
 
 final class TesseraParticleSpec extends Struct {
-  @Uint32() external int atlas; // 0 = white quad
+  @Uint32()
+  external int atlas; // 0 = white quad
   external TesseraRect sprite;
-  @Int32() external int mode; // TesseraEmitMode
-  @Uint32() external int count; // burst count, or rate/sec if continuous
-  @Float() external double lifetimeS;
-  @Float() external double lifetimeVar;
-  @Float() external double speed;
-  @Float() external double speedVar;
-  @Float() external double spreadDeg;
-  @Float() external double gravity;
-  @Float() external double sizeStart;
-  @Float() external double sizeEnd;
-  @Array(4) external Array<Float> colorStart;
-  @Array(4) external Array<Float> colorEnd;
-  @Int32() external int blend; // TesseraBlendMode
-  @Float() external double durationS; // 0 => one-shot burst
+  @Int32()
+  external int mode; // TesseraEmitMode
+  @Uint32()
+  external int count; // burst count, or rate/sec if continuous
+  @Float()
+  external double lifetimeS;
+  @Float()
+  external double lifetimeVar;
+  @Float()
+  external double speed;
+  @Float()
+  external double speedVar;
+  @Float()
+  external double spreadDeg;
+  @Float()
+  external double gravity;
+  @Float()
+  external double sizeStart;
+  @Float()
+  external double sizeEnd;
+  @Array(4)
+  external Array<Float> colorStart;
+  @Array(4)
+  external Array<Float> colorEnd;
+  @Int32()
+  external int blend; // TesseraBlendMode
+  @Float()
+  external double durationS; // 0 => one-shot burst
 }
 
 final class TesseraEffectDef extends Struct {
@@ -134,119 +169,172 @@ final class TesseraEffectDef extends Struct {
 //  Immutable state
 // ======================================================================
 final class TesseraCoord extends Struct {
-  @Int32() external int x;
-  @Int32() external int y;
+  @Int32()
+  external int x;
+  @Int32()
+  external int y;
 }
 
 /// Continuous board position: whole numbers land on tile centres, fractions
 /// interpolate — (0.5, 0.5) is the corner shared by tiles (0,0) and (1,1).
 final class TesseraCoordF extends Struct {
-  @Float() external double x;
-  @Float() external double y;
+  @Float()
+  external double x;
+  @Float()
+  external double y;
 }
 
 final class TesseraTilePlacement extends Struct {
   external TesseraCoord coord;
-  @Uint32() external int tileDef; // 0 = no tile (hole)
-  @Uint32() external int variant;
-  @Uint64() external int id; // optional per-tile instance id (0 = none)
+  @Uint32()
+  external int tileDef; // 0 = no tile (hole)
+  @Uint32()
+  external int variant;
+  @Uint64()
+  external int id; // optional per-tile instance id (0 = none)
 }
 
 final class TesseraEntityPlacement extends Struct {
-  @Uint64() external int id; // stable across states; diff key
-  @Uint32() external int def;
+  @Uint64()
+  external int id; // stable across states; diff key
+  @Uint32()
+  external int def;
   external TesseraCoord coord;
-  @Uint16() external int facing; // 0..3 quadrant
-  @Uint32() external int anim; // active clip index
+  @Uint16()
+  external int facing; // 0..3 quadrant
+  @Uint32()
+  external int anim; // active clip index
 }
 
 final class TesseraEffectPlacement extends Struct {
-  @Uint64() external int id;
-  @Uint32() external int def;
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int def;
   external TesseraCoord coord;
-  @Uint64() external int attachEntityId; // 0 = anchored to tile coord
+  @Uint64()
+  external int attachEntityId; // 0 = anchored to tile coord
 }
 
 final class TesseraCamera extends Struct {
   external TesseraCoordF focus;
-  @Float() external double distance;
-  @Float() external double yaw; // radians
-  @Float() external double pitch; // radians
-  @Float() external double fov; // vertical fov, radians
+  @Float()
+  external double distance;
+  @Float()
+  external double yaw; // radians
+  @Float()
+  external double pitch; // radians
+  @Float()
+  external double fov; // vertical fov, radians
 }
 
 final class TesseraState extends Struct {
   external Pointer<TesseraTilePlacement> tiles;
-  @Size() external int tileCount;
+  @Size()
+  external int tileCount;
   external Pointer<TesseraEntityPlacement> entities;
-  @Size() external int entityCount;
+  @Size()
+  external int entityCount;
   external Pointer<TesseraEffectPlacement> effects;
-  @Size() external int effectCount;
+  @Size()
+  external int effectCount;
   external TesseraCamera camera;
-  @Uint64() external int epoch; // optional caller sequence number
+  @Uint64()
+  external int epoch; // optional caller sequence number
 }
 
 // ======================================================================
 //  Picking (screen ray -> scene)
 // ======================================================================
 final class TesseraPick extends Struct {
-  @Bool() external bool hitTile;
+  @Bool()
+  external bool hitTile;
   external TesseraCoord tile;
-  @Float() external double tileDistance;
-  @Bool() external bool hitEntity;
-  @Uint64() external int entity;
-  @Float() external double entityDistance;
-  @Array(3) external Array<Float> rayOrigin;
-  @Array(3) external Array<Float> rayDir;
-  @Array(3) external Array<Float> point;
+  @Float()
+  external double tileDistance;
+  @Bool()
+  external bool hitEntity;
+  @Uint64()
+  external int entity;
+  @Float()
+  external double entityDistance;
+  @Array(3)
+  external Array<Float> rayOrigin;
+  @Array(3)
+  external Array<Float> rayDir;
+  @Array(3)
+  external Array<Float> point;
 }
 
-// Inverse of picking: where a scene point lands on screen.
+/// Inverse of picking: where a scene point lands on screen.
 final class TesseraScreenPos extends Struct {
-  @Bool() external bool onscreen;
-  @Float() external double x; // logical window coords (top-left origin)
-  @Float() external double y;
-  @Float() external double depth; // NDC depth 0..1 (0 = near plane)
-  @Array(3) external Array<Float> world; // world point that was projected
+  @Bool()
+  external bool onscreen;
+  @Float()
+  external double x; // logical window coords (top-left origin)
+  @Float()
+  external double y;
+  @Float()
+  external double depth; // NDC depth 0..1 (0 = near plane)
+  @Array(3)
+  external Array<Float> world; // world point that was projected
 }
 
 // ======================================================================
 //  Timing / quality / lighting
 // ======================================================================
 final class TesseraTiming extends Struct {
-  @Float() external double moveS;
-  @Float() external double addS;
-  @Float() external double removeS;
-  @Float() external double tileS;
-  @Float() external double reflowS;
-  @Float() external double cameraS;
-  @Float() external double speedMultiplier; // global; default 1.0
+  @Float()
+  external double moveS;
+  @Float()
+  external double addS;
+  @Float()
+  external double removeS;
+  @Float()
+  external double tileS;
+  @Float()
+  external double reflowS;
+  @Float()
+  external double cameraS;
+  @Float()
+  external double speedMultiplier; // global; default 1.0
 }
 
 final class TesseraQuality extends Struct {
-  @Int32() external int shadows; // TesseraShadowMode
-  @Int32() external int msaa; // 1, 2, 4
-  @Float() external double renderScale; // 1.0 = native
+  @Int32()
+  external int shadows; // TesseraShadowMode
+  @Int32()
+  external int msaa; // 1, 2, 4
+  @Float()
+  external double renderScale; // 1.0 = native
 }
 
 final class TesseraLight extends Struct {
-  @Array(3) external Array<Float> dir; // points from light
-  @Array(3) external Array<Float> color;
-  @Float() external double intensity;
-  @Array(3) external Array<Float> ambient;
+  @Array(3)
+  external Array<Float> dir; // points from light
+  @Array(3)
+  external Array<Float> color;
+  @Float()
+  external double intensity;
+  @Array(3)
+  external Array<Float> ambient;
 }
 
-// enum TesseraProjection { PERSPECTIVE=0, ISOMETRIC=1 }
+/// enum TesseraProjection { PERSPECTIVE=0, ISOMETRIC=1 }
 abstract final class TesseraProjection {
   static const int perspective = 0;
   static const int isometric = 1;
 }
 
 final class TesseraFocus extends Struct {
-  @Bool() external bool enabled;
-  @Float() external double focusDistance; // <=0 = auto (orbit focus)
-  @Float() external double focusRange;
-  @Float() external double blurStrength;
+  @Bool()
+  external bool enabled;
+  @Float()
+  external double focusDistance; // <=0 = auto (orbit focus)
+  @Float()
+  external double focusRange;
+  @Float()
+  external double blurStrength;
 }
 
 // ======================================================================
@@ -317,15 +405,29 @@ typedef _OrbitC = Void Function(Pointer<TesseraEngine>, Float, Float, Float);
 typedef _OrbitD = void Function(Pointer<TesseraEngine>, double, double, double);
 typedef _CaptureC = Bool Function(Pointer<TesseraEngine>, Int32, Int32, Pointer<Utf8>);
 typedef _CaptureD = bool Function(Pointer<TesseraEngine>, int, int, Pointer<Utf8>);
+typedef _RenderRgbaC =
+    Bool Function(Pointer<TesseraEngine>, Double, Int32, Int32, Pointer<Void>, Size);
+typedef _RenderRgbaD =
+    bool Function(Pointer<TesseraEngine>, double, int, int, Pointer<Void>, int);
 
-/// High-level Dart wrapper around the C engine. Exposes the FULL public API.
+/// High-level Dart wrapper around the C engine. Exposes the FULL public API of
+/// `include/tessera.h`.
 ///
 /// Threading (see docs/platforms.md): GPU calls — create/destroy/tick/resize/
 /// register*/capturePng — must run on the render (main) thread. setState,
 /// setTiming, setLight, setQuality, isIdle and lastError are any-thread.
+///
+/// Construct once, drive frames with [tick], and always [dispose] when done.
+/// The native library is located automatically (see [openTesseraLibrary]); pass
+/// [libraryPath] or a pre-opened [library] to override discovery.
 class Tessera {
   final DynamicLibrary _lib;
   late final Pointer<TesseraEngine> _engine;
+
+  /// Whether this wrapper owns the engine (created it) and must destroy it on
+  /// [dispose]. False for [Tessera.fromHandle], where a host (e.g. a native
+  /// platform-view plugin) owns the engine lifecycle.
+  final bool _ownsEngine;
 
   late final _CreateD _create = _lib.lookupFunction<_CreateC, _CreateD>('tessera_create');
   late final _DestroyD _destroy = _lib.lookupFunction<_DestroyC, _DestroyD>('tessera_destroy');
@@ -353,8 +455,7 @@ class Tessera {
 
   late final _SetStateD _setState =
       _lib.lookupFunction<_SetStateC, _SetStateD>('tessera_set_state');
-  late final _PickD _pick =
-      _lib.lookupFunction<_PickC, _PickD>('tessera_pick');
+  late final _PickD _pick = _lib.lookupFunction<_PickC, _PickD>('tessera_pick');
   late final _WorldToScreenD _worldToScreen =
       _lib.lookupFunction<_WorldToScreenC, _WorldToScreenD>('tessera_world_to_screen');
   late final _EntityScreenD _entityScreenPosition = _lib
@@ -379,31 +480,68 @@ class Tessera {
       _lib.lookupFunction<_OrbitC, _OrbitD>('tessera__debug_orbit');
   late final _CaptureD _capturePng =
       _lib.lookupFunction<_CaptureC, _CaptureD>('tessera_capture_png');
+  late final _RenderRgbaD _renderRgba =
+      _lib.lookupFunction<_RenderRgbaC, _RenderRgbaD>('tessera_render_rgba');
 
-  Tessera({int width = 1280, int height = 720, bool debug = false, double pixelDensity = 1.0})
-      : _lib = _open() {
+  /// Create an engine and (when [nativeWindow] is null) its own window.
+  ///
+  /// [library] / [libraryPath] override native-library discovery. Throws
+  /// [StateError] if `tessera_create` returns null.
+  Tessera({
+    int width = 1280,
+    int height = 720,
+    bool debug = false,
+    double pixelDensity = 1.0,
+    bool engineDrivenLoop = false,
+    Pointer<Void>? nativeWindow,
+    DynamicLibrary? library,
+    String? libraryPath,
+  })  : _lib = library ?? openTesseraLibrary(path: libraryPath),
+        _ownsEngine = true {
     final cfg = calloc<TesseraConfig>();
-    cfg.ref.width = width;
-    cfg.ref.height = height;
-    cfg.ref.pixelDensity = pixelDensity;
-    cfg.ref.debug = debug;
+    cfg.ref
+      ..nativeWindow = nativeWindow ?? nullptr
+      ..width = width
+      ..height = height
+      ..pixelDensity = pixelDensity
+      ..engineDrivenLoop = engineDrivenLoop
+      ..debug = debug;
     _engine = _create(cfg);
     calloc.free(cfg);
     if (_engine == nullptr) throw StateError('tessera_create failed');
   }
 
-  static DynamicLibrary _open() {
-    if (Platform.isMacOS) return DynamicLibrary.open('libtessera.dylib');
-    if (Platform.isAndroid || Platform.isLinux) {
-      return DynamicLibrary.open('libtessera.so');
-    }
-    throw UnsupportedError('platform not supported');
+  /// Attach to an engine created and owned elsewhere in the same process — e.g.
+  /// a native platform-view plugin that owns the GPU/render thread and hands the
+  /// handle to Dart. This wrapper will NOT destroy the engine on [dispose].
+  ///
+  /// Only the any-thread calls (`setState`, `isIdle`, `lastError`) are safe to
+  /// use from Dart's UI isolate while the host ticks; GPU/render-thread calls
+  /// (tick, resize, register*, pick, set light/quality/timing, capture, render)
+  /// must be routed to the host's render thread — see docs/platforms.md.
+  ///
+  /// [handle] is the engine pointer as an integer address (as passed over a
+  /// method channel from native, e.g. `reinterpret_cast<intptr_t>`).
+  Tessera.fromHandle(
+    int handle, {
+    DynamicLibrary? library,
+    String? libraryPath,
+  })  : _lib = library ?? openTesseraLibrary(path: libraryPath),
+        _ownsEngine = false {
+    _engine = Pointer<TesseraEngine>.fromAddress(handle);
+    if (_engine == nullptr) throw ArgumentError('null engine handle');
   }
 
+  /// The raw engine handle, for calling any C entry point not wrapped here.
   Pointer<TesseraEngine> get handle => _engine;
+
+  /// The underlying loaded native library.
+  DynamicLibrary get library => _lib;
 
   // ---- lifecycle ----
   void resize(int w, int h, double density) => _resize(_engine, w, h, density);
+
+  /// Advance animation + render one frame (host-driven mode). [dt] is seconds.
   void tick(double dt) => _tick(_engine, dt);
   String get lastError => _lastError(_engine).toDartString();
   String get backendName => _backendName(_engine).toDartString();
@@ -466,5 +604,16 @@ class Tessera {
     return ok;
   }
 
-  void dispose() => _destroy(_engine);
+  /// Advance animation by [dt] seconds and render one frame offscreen into
+  /// [outRgba] (RGBA8, top-left origin, `w*h*4` bytes; [outSize] must be at
+  /// least that). For embedders that present the frame themselves. Render-thread
+  /// only. Returns false on failure.
+  bool renderRgba(double dt, int w, int h, Pointer<Void> outRgba, int outSize) =>
+      _renderRgba(_engine, dt, w, h, outRgba, outSize);
+
+  /// Destroy the engine and release its window/GPU resources (owning wrappers
+  /// only). A no-op for [Tessera.fromHandle], whose host owns the lifecycle.
+  void dispose() {
+    if (_ownsEngine) _destroy(_engine);
+  }
 }

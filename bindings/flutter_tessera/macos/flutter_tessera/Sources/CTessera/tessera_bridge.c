@@ -1,0 +1,97 @@
+/*
+ * tessera_bridge.c — implementation of the Swift<->Tessera bridge.
+ *
+ * Owns SDL and a hidden window so the engine renders offscreen (via
+ * tessera_render_rgba) and the plugin presents the pixels into the platform
+ * view's CAMetalLayer itself. See tessera_bridge.h.
+ */
+#include "tessera_bridge.h"
+
+#include "tessera.h"
+#include <SDL3/SDL.h>
+#include <stdlib.h>
+
+struct FTessera {
+    SDL_Window*    window;   /* hidden; the engine's swapchain target */
+    TesseraEngine* engine;
+};
+
+FTessera* ftessera_create(int32_t w, int32_t h, float density) {
+    if (w <= 0) w = 1;
+    if (h <= 0) h = 1;
+    if (density <= 0.0f) density = 1.0f;
+
+    if (!SDL_WasInit(SDL_INIT_VIDEO)) {
+        if (!SDL_Init(SDL_INIT_VIDEO)) return NULL;
+    }
+
+    /* A hidden Metal window: the engine claims it for its GPU device/swapchain
+     * but we never present to it — frames come out via tessera_render_rgba and
+     * the plugin blits them into the platform view's own layer. */
+    SDL_Window* win = SDL_CreateWindow(
+        "tessera-embedded", w, h,
+        SDL_WINDOW_HIDDEN | SDL_WINDOW_METAL | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!win) return NULL;
+
+    TesseraConfig cfg = {0};
+    cfg.native_window = win;
+    cfg.width = w;
+    cfg.height = h;
+    cfg.pixel_density = density;
+    cfg.engine_driven_loop = false;
+    cfg.debug = false;
+
+    TesseraEngine* e = tessera_create(&cfg);
+    if (!e) { SDL_DestroyWindow(win); return NULL; }
+    if (tessera_last_error(e)[0] != '\0') {
+        tessera_destroy(e);
+        SDL_DestroyWindow(win);
+        return NULL;
+    }
+
+    FTessera* f = (FTessera*)calloc(1, sizeof *f);
+    if (!f) { tessera_destroy(e); SDL_DestroyWindow(win); return NULL; }
+    f->window = win;
+    f->engine = e;
+    return f;
+}
+
+uintptr_t ftessera_engine_handle(FTessera* f) {
+    return f ? (uintptr_t)f->engine : 0;
+}
+
+bool ftessera_render_rgba(FTessera* f, double dt, int32_t w, int32_t h,
+                          void* out_rgba, size_t out_size) {
+    if (!f) return false;
+    return tessera_render_rgba(f->engine, dt, w, h, out_rgba, out_size);
+}
+
+void ftessera_resize(FTessera* f, int32_t w, int32_t h, float density) {
+    if (!f) return;
+    tessera_resize(f->engine, w, h, density);
+}
+
+bool ftessera_pick(FTessera* f, float x, float y, FTesseraPick* out) {
+    if (!f || !out) return false;
+    TesseraPick pk = {0};
+    bool hit = tessera_pick(f->engine, x, y, &pk);
+    out->hit_tile = pk.hit_tile ? 1 : 0;
+    out->tile_x = pk.tile.x;
+    out->tile_y = pk.tile.y;
+    out->tile_distance = pk.tile_distance;
+    out->hit_entity = pk.hit_entity ? 1 : 0;
+    out->entity = pk.entity;
+    out->entity_distance = pk.entity_distance;
+    return hit;
+}
+
+const char* ftessera_last_error(FTessera* f) {
+    return f ? tessera_last_error(f->engine) : "null bridge";
+}
+
+void ftessera_destroy(FTessera* f) {
+    if (!f) return;
+    if (f->engine) tessera_destroy(f->engine);
+    if (f->window) SDL_DestroyWindow(f->window);
+    free(f);
+}
