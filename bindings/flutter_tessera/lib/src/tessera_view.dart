@@ -57,16 +57,36 @@ class TesseraView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (defaultTargetPlatform == TargetPlatform.macOS) {
-      return AppKitView(
-        viewType: kTesseraViewType,
-        onPlatformViewCreated: _onPlatformViewCreated,
-        gestureRecognizers: gestureRecognizers,
-        creationParams: const <String, Object?>{},
-        creationParamsCodec: const StandardMessageCodec(),
-      );
+    const params = <String, Object?>{};
+    const codec = StandardMessageCodec();
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.macOS:
+        return AppKitView(
+          viewType: kTesseraViewType,
+          onPlatformViewCreated: _onPlatformViewCreated,
+          gestureRecognizers: gestureRecognizers,
+          creationParams: params,
+          creationParamsCodec: codec,
+        );
+      case TargetPlatform.iOS:
+        return UiKitView(
+          viewType: kTesseraViewType,
+          onPlatformViewCreated: _onPlatformViewCreated,
+          gestureRecognizers: gestureRecognizers,
+          creationParams: params,
+          creationParamsCodec: codec,
+        );
+      case TargetPlatform.android:
+        return AndroidView(
+          viewType: kTesseraViewType,
+          onPlatformViewCreated: _onPlatformViewCreated,
+          gestureRecognizers: gestureRecognizers,
+          creationParams: params,
+          creationParamsCodec: codec,
+        );
+      default:
+        return const _Unsupported();
     }
-    return const _Unsupported();
   }
 }
 

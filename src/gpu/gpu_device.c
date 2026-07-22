@@ -110,6 +110,10 @@ void ts_gpu_shutdown(TsGpu* g) {
     if (!g->device) return;
     ts_gpu_release_pipelines(g);
     if (g->depth_texture) SDL_ReleaseGPUTexture(g->device, g->depth_texture);
+    if (g->scene_color)   SDL_ReleaseGPUTexture(g->device, g->scene_color);
+    if (g->rgba_color)    SDL_ReleaseGPUTexture(g->device, g->rgba_color);
+    if (g->rgba_depth)    SDL_ReleaseGPUTexture(g->device, g->rgba_depth);
+    if (g->rgba_transfer) SDL_ReleaseGPUTransferBuffer(g->device, g->rgba_transfer);
     if (g->window) {
         SDL_ReleaseWindowFromGPUDevice(g->device, g->window);
         if (g->owns_window) SDL_DestroyWindow(g->window);

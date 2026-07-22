@@ -410,6 +410,20 @@ typedef _RenderRgbaC =
 typedef _RenderRgbaD =
     bool Function(Pointer<TesseraEngine>, double, int, int, Pointer<Void>, int);
 
+/// Override the directory that holds the engine's `shaders/` folder, read when
+/// pipelines are built. Process-global — call BEFORE constructing a [Tessera]
+/// (the engine loads shaders in its constructor). Pass "" to restore the
+/// compile-time default. Needed on iOS/Android where assets are bundled rather
+/// than at the build-time path; a no-op-friendly convenience on desktop.
+void tesseraSetAssetDir(String dir, {DynamicLibrary? library, String? libraryPath}) {
+  final lib = library ?? openTesseraLibrary(path: libraryPath);
+  final fn = lib.lookupFunction<Void Function(Pointer<Utf8>),
+      void Function(Pointer<Utf8>)>('tessera_set_asset_dir');
+  final p = dir.toNativeUtf8();
+  fn(p);
+  calloc.free(p);
+}
+
 /// High-level Dart wrapper around the C engine. Exposes the FULL public API of
 /// `include/tessera.h`.
 ///

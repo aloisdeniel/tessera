@@ -21,33 +21,18 @@ bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
     }
 
     bool ok = false;
-    SDL_GPUTexture* color = NULL;
-    SDL_GPUTexture* depth = NULL;
-    SDL_GPUTransferBuffer* dl = NULL;
-
-    /* Match the mesh pipeline's color target format (the swapchain format). */
-    SDL_GPUTextureCreateInfo cci = {
-        .type = SDL_GPU_TEXTURETYPE_2D,
-        .format = g->swapchain_format,
-        .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-        .width = w, .height = h, .layer_count_or_depth = 1,
-        .num_levels = 1, .sample_count = SDL_GPU_SAMPLECOUNT_1 };
-    color = SDL_CreateGPUTexture(g->device, &cci);
+    /* Reuse cached per-frame targets (color + depth + download buffer) so the
+     * embedding render loop does not allocate/free ~30MB of GPU memory every
+     * frame. Recreated only on size change. */
+    if (!ts_gpu_ensure_rgba_targets(g, w, h)) {
+        ts_engine_set_error(e, "render_rgba: target create failed");
+        return false;
+    }
+    SDL_GPUTexture* color = g->rgba_color;
+    SDL_GPUTexture* depth = g->rgba_depth;
+    SDL_GPUTransferBuffer* dl = g->rgba_transfer;
     bool bgra = (g->swapchain_format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM ||
                  g->swapchain_format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB);
-
-    SDL_GPUTextureCreateInfo dci = {
-        .type = SDL_GPU_TEXTURETYPE_2D, .format = g->depth_format,
-        .usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-        .width = w, .height = h, .layer_count_or_depth = 1,
-        .num_levels = 1, .sample_count = SDL_GPU_SAMPLECOUNT_1 };
-    depth = SDL_CreateGPUTexture(g->device, &dci);
-    if (!color || !depth) { ts_engine_set_error(e, "render_rgba: texture create failed"); goto done; }
-
-    SDL_GPUTransferBufferCreateInfo tci = {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = w * h * 4 };
-    dl = SDL_CreateGPUTransferBuffer(g->device, &tci);
-    if (!dl) { ts_engine_set_error(e, "render_rgba: transfer buffer failed"); goto done; }
 
     ts_arena_reset(&e->frame_arena);
     /* Refresh the camera (and its cached eye) so particle billboards face it. */
@@ -88,14 +73,18 @@ bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
     SDL_DownloadFromGPUTexture(cp, &region, &tinfo);
     SDL_EndGPUCopyPass(cp);
 
-    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-    if (fence) {
-        SDL_WaitForGPUFences(g->device, true, &fence, 1);
-        SDL_ReleaseGPUFence(g->device, fence);
-    }
+    /* Submit with an auto-released fence and block on GPU idle. Do NOT use
+     * SubmitAndAcquireFence + ReleaseGPUFence here: releasing the fence returns
+     * it to SDL's pool, the next frame re-acquires and resets it, and the just-
+     * submitted command buffer (which aliases that fence pointer) then never
+     * passes the completion check — so it is never cleaned and leaks its
+     * command buffer + used-resource arrays every frame. WaitForGPUIdle cleans
+     * command buffers with their fences still auto-owned, so nothing leaks. */
+    SDL_SubmitGPUCommandBuffer(cmd);
+    SDL_WaitForGPUIdle(g->device);
 
     void* mapped = SDL_MapGPUTransferBuffer(g->device, dl, false);
-    if (!mapped) { ts_engine_set_error(e, "render_rgba: map failed"); goto done; }
+    if (!mapped) { ts_engine_set_error(e, "render_rgba: map failed"); return false; }
     memcpy(out_rgba, mapped, (size_t)w * h * 4);
     SDL_UnmapGPUTransferBuffer(g->device, dl);
     if (bgra) {
@@ -104,11 +93,7 @@ bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
         }
     }
     ok = true;
-
-done:
-    if (dl) SDL_ReleaseGPUTransferBuffer(g->device, dl);
-    if (color) SDL_ReleaseGPUTexture(g->device, color);
-    if (depth) SDL_ReleaseGPUTexture(g->device, depth);
+    /* Cached targets (color/depth/dl) are engine-owned; freed in ts_gpu_shutdown. */
     return ok;
 }
 

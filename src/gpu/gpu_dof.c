@@ -59,6 +59,41 @@ bool ts_gpu_create_dof_pipeline(TsGpu* g, char* err, size_t err_sz) {
     return true;
 }
 
+bool ts_gpu_ensure_rgba_targets(TsGpu* g, uint32_t w, uint32_t h) {
+    if (w == 0 || h == 0) return false;
+    if (g->rgba_color && g->rgba_w == w && g->rgba_h == h) return true;
+
+    if (g->rgba_color)    { SDL_ReleaseGPUTexture(g->device, g->rgba_color); g->rgba_color = NULL; }
+    if (g->rgba_depth)    { SDL_ReleaseGPUTexture(g->device, g->rgba_depth); g->rgba_depth = NULL; }
+    if (g->rgba_transfer) { SDL_ReleaseGPUTransferBuffer(g->device, g->rgba_transfer); g->rgba_transfer = NULL; }
+    g->rgba_w = g->rgba_h = 0;
+
+    SDL_GPUTextureCreateInfo cci = {
+        .type = SDL_GPU_TEXTURETYPE_2D, .format = g->swapchain_format,
+        .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        .width = w, .height = h, .layer_count_or_depth = 1,
+        .num_levels = 1, .sample_count = SDL_GPU_SAMPLECOUNT_1 };
+    g->rgba_color = SDL_CreateGPUTexture(g->device, &cci);
+
+    SDL_GPUTextureCreateInfo dci = {
+        .type = SDL_GPU_TEXTURETYPE_2D, .format = g->depth_format,
+        .usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        .width = w, .height = h, .layer_count_or_depth = 1,
+        .num_levels = 1, .sample_count = SDL_GPU_SAMPLECOUNT_1 };
+    g->rgba_depth = SDL_CreateGPUTexture(g->device, &dci);
+
+    SDL_GPUTransferBufferCreateInfo tci = {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = w * h * 4 };
+    g->rgba_transfer = SDL_CreateGPUTransferBuffer(g->device, &tci);
+
+    if (!g->rgba_color || !g->rgba_depth || !g->rgba_transfer) {
+        TS_LOGE(g->log, "render_rgba target create failed: %s", SDL_GetError());
+        return false;
+    }
+    g->rgba_w = w; g->rgba_h = h;
+    return true;
+}
+
 bool ts_gpu_ensure_scene_target(TsGpu* g, uint32_t w, uint32_t h) {
     if (w == 0 || h == 0) return false;
     if (g->scene_color && g->scene_w == w && g->scene_h == h) return true;

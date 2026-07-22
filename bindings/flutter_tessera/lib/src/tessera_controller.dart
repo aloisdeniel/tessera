@@ -15,12 +15,21 @@
 // via channel) → dispose.
 
 import 'dart:ffi';
+import 'dart:io' show Platform;
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 import 'package:tessera/tessera.dart' as t;
 
 import 'types.dart';
+
+/// Resolve the native library holding the tessera_* symbols for FFI. On Apple
+/// platforms the plugin has already loaded them into the process image; on
+/// Android the engine ships as `libtessera.so` alongside the plugin.
+DynamicLibrary _defaultLibrary() {
+  if (Platform.isAndroid) return DynamicLibrary.open('libtessera.so');
+  return DynamicLibrary.process();
+}
 
 /// Controls a single [TesseraView]. Obtain one from `TesseraView`'s
 /// `onCreated` callback; do the def/light/quality/timing setup, push an initial
@@ -55,7 +64,7 @@ class TesseraController {
     }
     final engine = t.Tessera.fromHandle(
       handle,
-      library: library ?? DynamicLibrary.process(),
+      library: library ?? _defaultLibrary(),
     );
     return TesseraController._(channel, engine);
   }

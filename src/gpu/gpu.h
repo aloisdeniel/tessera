@@ -79,6 +79,14 @@ typedef struct {
     SDL_GPUTexture*      scene_color;
     uint32_t             scene_w, scene_h;
 
+    /* Cached offscreen targets for tessera_render_rgba (per-frame embedding).
+     * Reused across frames; recreated only on size change so the render loop
+     * does not churn ~30MB of GPU memory every frame. */
+    SDL_GPUTexture*        rgba_color;
+    SDL_GPUTexture*        rgba_depth;
+    SDL_GPUTransferBuffer* rgba_transfer;
+    uint32_t               rgba_w, rgba_h;
+
     /* Pipelines (created in pipeline.c). */
     SDL_GPUGraphicsPipeline* mesh_pipeline;   /* static lit mesh (cel/flat) */
     SDL_GPUGraphicsPipeline* skinned_pipeline;/* GPU-skinned mesh (M5)       */
@@ -150,5 +158,17 @@ void ts_gpu_dof_post(TsGpu* g, SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src_co
 SDL_GPUShader* ts_gpu_load_shader(TsGpu* g, const char* name,
                                   SDL_GPUShaderStage stage,
                                   uint32_t num_samplers, uint32_t num_uniform_buffers);
+
+/* Override the asset base dir (where shaders/ lives) at runtime. Empty/NULL
+ * restores the compile-time TESSERA_ASSET_DIR. Process-global; set before
+ * tessera_create so pipeline creation picks it up. Used for bundled assets on
+ * iOS/Android where the compiled path does not exist. */
+void ts_gpu_set_asset_dir(const char* dir);
+
+/* Ensure the cached tessera_render_rgba targets (color + depth + download
+ * transfer buffer) exist at (w,h), recreating on size change. Returns false on
+ * failure. Reused across frames so the embedding render loop is allocation-free
+ * in steady state. */
+bool ts_gpu_ensure_rgba_targets(TsGpu* g, uint32_t w, uint32_t h);
 
 #endif /* TESSERA_GPU_H */

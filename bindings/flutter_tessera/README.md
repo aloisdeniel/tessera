@@ -42,10 +42,24 @@ inside the Flutter widget tree.
 
 ## Platform support
 
-| Platform | Status |
-|---|---|
-| **macOS** (Metal) | Reference implementation (Swift + C bridge) |
-| iOS / Android | Not yet implemented — the Dart API + native contract are documented; a `UIView` / `SurfaceView` platform view would follow the same shape |
+| Platform | Backend | Status |
+|---|---|---|
+| **macOS** | Metal (MSL) | Built + run **verified** (Swift/AppKit + C bridge) |
+| **iOS** | Metal (MSL) | Reference impl (Swift/UIKit + shared C bridge); needs an iOS build of libtessera + SDL3 |
+| **Android** | Vulkan (SPIR-V) | Reference impl (Kotlin/JNI + NDK); renders with the ported SPIR-V shaders (verified on Vulkan) |
+
+All three share the same C bridge (hidden SDL window → `tessera_render_rgba` →
+blit into the platform view's surface) and the same Dart `TesseraView` /
+`TesseraController`. macOS/iOS use a `CAMetalLayer` + Metal presenter; Android
+blits into the `Surface` via `ANativeWindow`.
+
+### Shaders (Metal vs Vulkan)
+
+The engine ships shaders in two formats under `assets/shaders/`: hand-authored
+**MSL** (Metal — macOS/iOS) and **SPIR-V** compiled from the Vulkan GLSL sources
+in `shaders/*.vert|frag` (Android/Linux). The SPIR-V port was validated by
+rendering the board through SDL_GPU's Vulkan backend (via MoltenVK) and matching
+the Metal output. Regenerate with `./shaders/compile.sh` (needs `glslang`).
 
 ## Building the native library
 
@@ -67,20 +81,53 @@ podspec mirrors this for non-SPM projects. For a release app you must bundle
 rpath accordingly (and disable App Sandbox during development, since SDL opens a
 GPU device / window).
 
+## Building the native library for iOS / Android
+
+- **iOS**: cross-compile `libtessera` for iOS (device + simulator) and provide
+  SDL3 for iOS. Build the engine static lib with `TESSERA_BUILD_SHARED` defined
+  (so the public `tessera_*` symbols keep default visibility for Dart's FFI
+  `dlsym`), and as a **universal arm64 + x86_64** slice for the Simulator. The
+  `ios/flutter_tessera.podspec` links `libtessera.a`, `libtessera_thirdparty.a`
+  and `libSDL3.a` via `-force_load` plus SDL's iOS system frameworks (override
+  paths with `TESSERA_IOS_LIB_DIR` / `SDL3_IOS_LIB_DIR` / `SDL3_INCLUDE_DIR`),
+  and bundles the MSL shaders as `tessera_assets.bundle/shaders/`. Same Metal
+  path as macOS.
+
+  > **iOS Simulator caveat.** SDL_GPU's Metal backend requires
+  > `MTLGPUFamilyApple3`, which the iOS Simulator does not advertise even on
+  > Apple Silicon (see the family check in SDL's `SDL_gpu_metal.m`
+  > `METAL_CreateDevice`), so `SDL_CreateGPUDevice` fails there out of the box. A
+  > **physical device** passes the check unmodified. To run in the Simulator you
+  > must relax that check for `TARGET_OS_SIMULATOR` in your SDL build; author
+  > that change yourself — per SDL's contribution policy it must not be
+  > AI-generated. The plugin itself already calls `SDL_SetMainReady()` before
+  > `SDL_Init` (required when embedding SDL, since Flutter owns `main`).
+- **Android**: the NDK CMake (`android/src/main/cpp/CMakeLists.txt`) builds the
+  engine + C bridge + JNI into one `libtessera.so`. It needs SDL3 source for
+  Android — set `SDL3_SOURCE_DIR` (default `third_party/SDL`). The SPIR-V
+  shaders are bundled in `android/src/main/assets/shaders/` and extracted to
+  files storage at runtime. The main integration risk is bringing up SDL_GPU
+  headlessly inside a Flutter `Activity` (SDL on Android is usually the activity
+  owner); the render loop blits offscreen frames into the view's `Surface`.
+
 ## Status & what is verified
 
-The **Dart layer and the C bridge are verified**:
+**Verified:**
 
-- `flutter analyze` is clean for the plugin and the example.
-- The C bridge (`macos/.../CTessera/tessera_bridge.c`) **compiles and links**
-  against `libtessera` + SDL3, exercising the embedding API.
+- `flutter analyze` clean (plugin + example).
+- **macOS** builds and runs end-to-end (renders the chess board live).
+- The C bridge **compiles and links** against `libtessera` + SDL3.
+- The **SPIR-V shaders render correctly on Vulkan** (validated via MoltenVK,
+  matching the Metal output) — so the Android render path is proven at the
+  engine/shader level.
 - The chess rules/model logic is the same code unit-tested in the `tessera`
-  package (it reproduces the C reference game move-for-move).
+  package (reproduces the C reference game move-for-move).
 
-The **Swift/Metal glue and the Xcode/Flutter native build** could not be
-compiled or run in the authoring environment (no Flutter macOS toolchain there).
-It is written to the standard AppKit/Metal APIs as a reference implementation;
-expect to shake out minor issues on the first on-device build.
+**Not verified here** (no iOS/Android toolchain or device/emulator in the
+authoring environment): the iOS Swift/UIKit glue, the Android Kotlin/JNI/NDK
+build, and cross-compiling `libtessera` + SDL3 for those platforms. These are
+written to the standard platform APIs as reference implementations; expect to
+shake out issues on the first on-device build.
 
 ## Example
 

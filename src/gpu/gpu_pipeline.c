@@ -8,6 +8,22 @@
 #define TESSERA_ASSET_DIR "assets"
 #endif
 
+/* Runtime override for the asset base dir (see ts_gpu_set_asset_dir). Empty =>
+ * use the compile-time TESSERA_ASSET_DIR. */
+static char g_asset_dir[1024] = {0};
+
+void ts_gpu_set_asset_dir(const char* dir) {
+    if (dir && dir[0]) {
+        snprintf(g_asset_dir, sizeof g_asset_dir, "%s", dir);
+    } else {
+        g_asset_dir[0] = 0;
+    }
+}
+
+static const char* asset_dir(void) {
+    return g_asset_dir[0] ? g_asset_dir : TESSERA_ASSET_DIR;
+}
+
 static void* read_file(const char* path, size_t* out_size) {
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
@@ -46,7 +62,7 @@ SDL_GPUShader* ts_gpu_load_shader(TsGpu* g, const char* name,
 
     char path[1024];
     snprintf(path, sizeof path, "%s/shaders/%s.%s.%s",
-             TESSERA_ASSET_DIR, name, stage_str, ext);
+             asset_dir(), name, stage_str, ext);
     size_t size = 0;
     void* code = read_file(path, &size);
     if (!code) {

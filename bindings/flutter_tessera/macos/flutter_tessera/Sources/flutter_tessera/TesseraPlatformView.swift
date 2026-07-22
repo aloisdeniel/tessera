@@ -46,7 +46,8 @@ final class TesseraPlatformView: NSView {
         metalLayer.device = presenter?.device
 
         let (w, h) = drawablePixelSize()
-        bridge = ftessera_create(Int32(w), Int32(h), Float(scale()))
+        // asset_dir nil: macOS uses the engine's compile-time asset path (dev).
+        bridge = ftessera_create(Int32(w), Int32(h), Float(scale()), nil)
 
         channel.setMethodCallHandler { [weak self] call, result in
             self?.handle(call, result)

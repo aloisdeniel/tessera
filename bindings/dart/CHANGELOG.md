@@ -7,6 +7,8 @@
   themselves (e.g. a Flutter platform view). Mirrors the new C API.
 - Add `Tessera.fromHandle(int)` — attach to an engine created and owned by a host
   (a native plugin) without owning its lifecycle; `dispose()` becomes a no-op.
+- Add `tesseraSetAssetDir(dir)` binding for `tessera_set_asset_dir` — point the
+  engine at bundled assets (shaders) at runtime; needed on iOS/Android.
 
 ## 0.1.0
 

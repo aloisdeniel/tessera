@@ -1,0 +1,42 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;
+    float4   ambient;
+    float4   light_color;
+    float4   camera_pos;   // xyz eye position, w unused
+};
+struct ObjectUniform {
+    float4x4 model;
+    float4   tint;
+    float4   uv_rect;   // u0,v0,u1,v1
+};
+
+struct VSIn {
+    float3 pos    [[attribute(0)]];
+    float3 normal [[attribute(1)]];
+    float2 uv     [[attribute(2)]];
+};
+struct VSOut {
+    float4 position [[position]];
+    float3 world_pos;
+    float3 normal;
+    float2 uv;
+    float4 tint;
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant FrameUniform&  frame [[buffer(0)]],
+                     constant ObjectUniform& obj   [[buffer(1)]])
+{
+    VSOut out;
+    float4 world = obj.model * float4(in.pos, 1.0);
+    out.position  = frame.view_proj * world;
+    out.world_pos = world.xyz;
+    out.normal    = normalize((obj.model * float4(in.normal, 0.0)).xyz);
+    out.uv        = obj.uv_rect.xy + in.uv * (obj.uv_rect.zw - obj.uv_rect.xy);
+    out.tint      = obj.tint;
+    return out;
+}

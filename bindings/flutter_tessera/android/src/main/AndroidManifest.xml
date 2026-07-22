@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- namespace is set in build.gradle (AGP 8+); no package attr needed. -->
+</manifest>

@@ -1,0 +1,73 @@
+// Android build for the flutter_tessera plugin.
+//
+// Builds libtessera.so (engine + C bridge + JNI) via the NDK CMake in
+// src/main/cpp, and bundles the engine's SPIR-V shaders from src/main/assets.
+// Requires SDL3 source for Android — see src/main/cpp/CMakeLists.txt
+// (SDL3_SOURCE_DIR). NOTE: not built in the authoring environment.
+group 'com.tessera.flutter_tessera'
+version '0.1.0'
+
+buildscript {
+    ext.kotlin_version = '1.9.22'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.3.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace 'com.tessera.flutter_tessera'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 24
+        externalNativeBuild {
+            cmake {
+                // Shared STL so SDL3 + engine share one C++ runtime.
+                arguments '-DANDROID_STL=c++_shared'
+                // Pass the SDL3 source location if not under third_party/SDL:
+                //   arguments '-DSDL3_SOURCE_DIR=/abs/path/to/SDL'
+            }
+        }
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+}

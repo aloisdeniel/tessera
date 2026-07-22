@@ -410,6 +410,14 @@ TESSERA_API bool tessera_capture_png(TesseraEngine* e, int w, int h, const char*
 TESSERA_API bool tessera_render_rgba(TesseraEngine* e, double dt_seconds,
                                      int w, int h, void* out_rgba, size_t out_size);
 
+/* Override the directory that holds the `shaders/` folder (and other assets),
+ * used when the engine loads its pipeline shaders. Pass NULL/"" to restore the
+ * compile-time default. Process-global — call BEFORE tessera_create so pipeline
+ * creation reads from the right place. Needed on iOS/Android, where assets are
+ * bundled (app bundle / extracted from the APK) rather than at the build-time
+ * path. Harmless on desktop (the default already points at the build tree). */
+TESSERA_API void tessera_set_asset_dir(const char* dir);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

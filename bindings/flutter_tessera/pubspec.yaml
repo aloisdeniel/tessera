@@ -1,6 +1,6 @@
 name: flutter_tessera
 description: "Flutter platform-view embedding of the Tessera 3D board-game renderer."
-version: 0.1.0
+version: 0.2.0
 homepage: https://github.com/aloisdeniel/tessera
 
 environment:
@@ -25,4 +25,9 @@ flutter:
   plugin:
     platforms:
       macos:
+        pluginClass: FlutterTesseraPlugin
+      ios:
+        pluginClass: FlutterTesseraPlugin
+      android:
+        package: com.tessera.flutter_tessera
         pluginClass: FlutterTesseraPlugin

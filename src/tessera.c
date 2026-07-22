@@ -227,3 +227,7 @@ bool tessera_render_rgba(TesseraEngine* e, double dt_seconds, int w, int h,
     return ts_engine_render_rgba(e, (uint32_t)w, (uint32_t)h,
                                  (uint8_t*)out_rgba, out_size);
 }
+
+void tessera_set_asset_dir(const char* dir) {
+    ts_gpu_set_asset_dir(dir);
+}
