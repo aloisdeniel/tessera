@@ -12,10 +12,13 @@ TesseraDefId tessera_register_tile_def  (TesseraEngine*, const TesseraTileDef* d
 TesseraDefId tessera_register_entity_def(TesseraEngine*, const TesseraEntityDef* def);
 TesseraDefId tessera_register_effect_def(TesseraEngine*, const TesseraEffectDef* def);
 TesseraDefId tessera_register_dice_def  (TesseraEngine*, const TesseraDiceDef*   def);
+TesseraDefId tessera_register_card_def  (TesseraEngine*, const TesseraCardDef*   def);
 ```
 
-(Dice are registered like other defs but thrown imperatively rather than placed
-in a `TesseraState` — see [Dice](#dice--procedural-polyhedral-dice-with-per-face-sprites).)
+(Dice and cards are registered like other defs, then **placed through
+`tessera_set_state`** — see [Dice](#dice--procedural-polyhedral-dice-with-per-face-sprites)
+and [Cards](#cards--flat-textured-cards-piles--hands). Everything is
+state-driven; there is no imperative placement API.)
 
 ## `TesseraBytes` — a borrowed byte span
 
@@ -119,8 +122,8 @@ automatically when that entity is added or removed.
 ## Dice — procedural polyhedral dice with per-face sprites
 
 Dice are a self-contained subsystem: register a **dice def** from a set of face
-sprites, then throw dice into the scene imperatively (they live *outside* the
-`TesseraState` snapshot).
+sprites, then place dice through `tessera_set_state` (a `TesseraDicePlacement`
+array on the state). A die that appears is thrown; one that vanishes fades out.
 
 ```c
 typedef struct { TesseraBytes sprite; } TesseraDiceFace;
@@ -165,27 +168,30 @@ face can be made to land face-up. Sprites are encoded images (PNG/JPG/TGA/… �
 anything `stb_image` decodes), passed as `TesseraBytes`; a face whose sprite
 fails to decode renders as a blank plate.
 
-### Throwing dice
+### Placing dice
+
+Dice are placed through `tessera_set_state`, via a `TesseraDicePlacement` array
+on the state (alongside tiles/entities). A die that newly appears (by `id`) is
+thrown; one that vanishes from the next state fades out; changing
+`def`/`face`/`seed`/`position` re-throws it.
 
 ```c
 typedef struct {
-    TesseraDiceId id;          /* host-chosen stable handle (re-throws reuse it) */
+    TesseraDiceId id;          /* stable handle (diff key; changes re-throw)     */
     TesseraDefId  def;
     uint32_t      face;        /* face to land up (clamped to N)                 */
     float         position[3]; /* rest position of the die centre (world space)  */
     uint32_t      seed;        /* varies the tumble (picks a precomputed path)    */
     float         throw_s;     /* tumble duration (<=0 => default)               */
-} TesseraDiceThrow;
+} TesseraDicePlacement;
 
-void     tessera_add_dice    (TesseraEngine*, const TesseraDiceThrow*);
-void     tessera_remove_dice (TesseraEngine*, TesseraDiceId);  /* fade + shrink out */
-void     tessera_clear_dice  (TesseraEngine*);
+/* read-only queries */
 uint32_t tessera_dice_count  (TesseraEngine*);
 bool     tessera_dice_face   (TesseraEngine*, TesseraDiceId, uint32_t* out_face);
 bool     tessera_dice_all_idle(TesseraEngine*);
 ```
 
-A thrown die spawns airborne and tumbles along a precomputed trajectory whose
+A placed die spawns airborne and tumbles along a precomputed trajectory whose
 spin winds down to *exactly* the target face's rest orientation, so it always
 settles on the requested face — at the given floating `position` (nothing
 constrains it to a tile). `position` is a true world point, so dice can hover
@@ -199,7 +205,72 @@ tetrahedral die is read — it rests on a face with the chosen face's value show
 upright at the top apex — rather than lying flat-face-up. Removing a die fades
 and shrinks it out, then culls it.
 
-Because dice are imperative (not part of `tessera_set_state`), drive them from
-the render / tick thread — the same thread as `tessera_tick` / `set_timing` —
-not concurrently with the tick. `tessera_is_idle` also returns `false` while any
-die is still tumbling or fading. See `examples/dice` for a full showcase.
+`tessera_is_idle` returns `false` while any die is still tumbling or fading. See
+`examples/dice` for a full showcase.
+
+## Cards — flat textured cards, piles & hands
+
+A **card def** names three textures — the real front (`visible`), a concealing
+front (`hidden`, shown so onlookers can't deduce a card even while it's in view),
+and the `back` — each as a registered atlas id plus a sub-rect (so the shared
+hidden/back cost nothing to reuse). The engine builds a thin rounded slab a
+little smaller than 2×3 tiles.
+
+```c
+typedef struct {
+    TesseraDefId visible_atlas; TesseraRect visible_uv;  /* the real front face   */
+    TesseraDefId hidden_atlas;  TesseraRect hidden_uv;   /* concealing front face */
+    TesseraDefId back_atlas;    TesseraRect back_uv;      /* the reverse face      */
+    float width;         /* across the short edge (<=0 => ~1.84) */
+    float height;        /* along the long edge   (<=0 => ~2.76) */
+    float thickness;     /* single-card thickness (<=0 => 0.03)  */
+    float corner_radius; /* rounded corners       (<=0 => 0.12)  */
+    float tint[4];
+} TesseraCardDef;
+```
+
+Cards, piles and hands are all placed through `tessera_set_state` and animate on
+diff. All orientations are quaternions (`xyzw`; all-zero ⇒ identity).
+
+```c
+typedef struct {
+    TesseraCardId id; TesseraDefId def;
+    float position[3]; float orientation[4]; /* identity => flat, front up */
+    bool  hidden;                            /* crossfades when toggled     */
+    TesseraHandId hand;                      /* 0 => free; else fanned      */
+    uint32_t hand_slot;                      /* order within the hand fan   */
+} TesseraCardPlacement;
+
+typedef struct {
+    TesseraCardDrawId id; TesseraDefId def;
+    float position[3]; float orientation[4];
+    uint32_t count;      /* pile thickness (tweens on change)            */
+    bool top_hidden;     /* top face shows the hidden (vs visible) front */
+} TesseraCardDrawPlacement;
+
+typedef struct {
+    TesseraHandId id;
+    float position[3]; float orientation[4]; /* identity => fronts face +Z */
+    float spread_deg;   /* total fan angle   (<=0 => default) */
+    float radius;       /* fan arc radius    (<=0 => default) */
+    float card_spacing; /* lateral spacing   (<=0 => default) */
+} TesseraHandPlacement;
+```
+
+Behaviour, all driven by the state diff:
+
+- **Flip** — toggling `hidden` crossfades the front between the visible and
+  hidden textures. A card's `position`/`orientation` change **tweens** like an
+  entity.
+- **Pile (`TesseraCardDrawPlacement`)** — one slab whose **thickness tracks
+  `count`** (tweens when it changes), resting on the ground at `position`. The
+  top face shows the top card (visible, or the hidden front when `top_hidden`);
+  the bottom face always shows the def's **hidden** texture.
+- **Hand (`TesseraHandPlacement`)** — a world-space anchor that **overrides the
+  positions** of the cards whose `hand` equals its id, fanning them in an arc
+  that follows the hand's transform (cards tween into their fan slots; `hand_slot`
+  orders them). A card with `hand == 0` keeps its own placement.
+
+`tessera_is_idle` returns `false` while any card is moving, flipping or a pile is
+resizing. See `examples/cards` for a full showcase (flat cards, a flip, a moving
+card, a fanned hand and a growing pile).

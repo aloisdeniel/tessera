@@ -160,9 +160,16 @@ int main(void) {
     advance(e, buf, 8);                   /* let the (eased) crossfade get going */
     c1 = find_inst(e, 1, false);
     CHECK(c1 && c1->mix > 0.0f && c1->mix < 0.99f);   /* mid crossfade */
+
+    /* re-push an UNCHANGED state mid-flip: the crossfade must keep running, not
+     * freeze at its current blended value (regression for the interrupted-flip
+     * bug). Nudge an unrelated field so the promotion definitely happens. */
+    st.epoch++;
+    tessera_set_state(e, &st);
+    advance(e, buf, 1);
     settle(e, buf);
     c1 = find_inst(e, 1, false);
-    CHECK(c1 && c1->mix < 0.01f);         /* settled fully visible */
+    CHECK(c1 && c1->mix < 0.01f);         /* settled fully visible (did not freeze) */
 
     /* ---- grow the pile 5 -> 30: thickness must increase ---- */
     draw.count = 30;

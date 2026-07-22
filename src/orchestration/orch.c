@@ -375,7 +375,7 @@ static void card_target(const TsSnapshot* next, size_t i, vec3 out_pos, versor o
         uint32_t n = 0, r = 0;
         for (size_t j = 0; j < next->card_count; ++j) {
             const TesseraCardPlacement* o = &next->cards[j];
-            if (o->hand != cp->hand) continue;
+            if (o->id == 0 || o->hand != cp->hand) continue;  /* id==0 is skipped by card_diff */
             n++;
             if (j != i && card_before(o, cp)) r++;
         }
@@ -443,20 +443,19 @@ static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
     c->removing = false; c->alive = true;
     ts_tween_start(&c->tween, timing->move_s, 0.0f, TS_EASE_OUT_CUBIC);
 
+    /* Only (re)start the flip crossfade when the target state actually changed;
+     * otherwise leave any in-flight flip running so it completes (restarting a
+     * zero-duration tween here would freeze it at its current blended value). */
     if (hidden != c->hidden) {                     /* flip: crossfade the front */
         c->from_mix = c->mix; c->to_mix = hidden ? 1.0f : 0.0f;
         ts_tween_start(&c->mix_tween, TS_CARD_FLIP_S, 0.0f, TS_EASE_IN_OUT_CUBIC);
         c->hidden = hidden;
-    } else {
-        c->from_mix = c->to_mix = c->mix;
-        ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
     }
+    /* Likewise for pile thickness: only restart when the target count changed,
+     * so an in-progress grow/shrink is not cut short. */
     if (thick != c->to_thick) {                    /* count changed: grow/shrink */
         c->from_thick = c->thick; c->to_thick = thick;
         ts_tween_start(&c->thick_tween, TS_CARD_THICK_S, 0.0f, TS_EASE_OUT_CUBIC);
-    } else {
-        c->from_thick = c->to_thick = thick;
-        ts_tween_start(&c->thick_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
     }
     c->count = count;
 }
