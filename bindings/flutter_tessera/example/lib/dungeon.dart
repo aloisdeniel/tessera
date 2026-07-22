@@ -51,6 +51,11 @@ List<Cell> _buildPath() {
 final List<Cell> kPath = _buildPath();
 final int kGoal = kPath.length - 1; // 22
 
+// Track cells keyed by "x,z" so the floor can skip them (one tile per coord).
+final Map<String, int> kTrackAt = {
+  for (var i = 0; i < kPath.length; i++) '${kPath[i].x},${kPath[i].z}': i,
+};
+
 // Monsters block the path at these indices; loot tiles hand out a card.
 const Map<int, int> kMonsters = {8: 1, 16: 2}; // index -> power bonus
 const Set<int> kLoot = {3, 6, 11, 14, 19};
@@ -357,6 +362,18 @@ class DungeonController extends GameController<DgState, DgAction> {
   int _poof = 0;
   final List<int> _itemDef = List<int>.filled(itemKinds, 0);
   int _deckDef = 0;
+  double _camDistance = 17.5;
+
+  // Corner tiles hugging the track + hand + deck, for cameraFitDistance so the
+  // whole crawl stays framed in portrait as well as landscape.
+  static const List<int> _fitCorners = [9001, 9002, 9003, 9004];
+  int _cornerId(int x, int z) {
+    if (x == -5 && z == -4) return 9001;
+    if (x == 5 && z == -4) return 9002;
+    if (x == -5 && z == 4) return 9003;
+    if (x == 5 && z == 4) return 9004;
+    return 0;
+  }
 
   static const int _hand = 1;
   static const int _heroId = 1;
@@ -462,10 +479,13 @@ class DungeonController extends GameController<DgState, DgAction> {
   TesseraScene _scene(DgState s) {
     final c = s.c;
     final tiles = <TesseraTile>[];
-    // a dark stone floor under the whole play area for context
-    for (var z = -3; z <= 3; z++) {
-      for (var x = -4; x <= 4; x++) {
-        tiles.add(TesseraTile(x: x, y: z, def: _floor));
+    // a dark stone floor under the whole play area for context (wide enough to
+    // seat the hand + deck, and its corners double as camera-fit anchors);
+    // skip cells the track covers so there's exactly one tile per coord.
+    for (var z = -4; z <= 4; z++) {
+      for (var x = -5; x <= 5; x++) {
+        if (kTrackAt.containsKey('$x,$z')) continue;
+        tiles.add(TesseraTile(x: x, y: z, def: _floor, id: _cornerId(x, z)));
       }
     }
     // the track laid over the floor (same coords -> replaces the floor tile)
@@ -565,10 +585,10 @@ class DungeonController extends GameController<DgState, DgAction> {
       cards: cards,
       hands: hands,
       cardDraws: draws,
-      camera: const TesseraCameraPose(
+      camera: TesseraCameraPose(
         focusX: 0,
         focusY: 0.4,
-        distance: 17.5,
+        distance: _camDistance,
         yaw: 0,
         pitch: 0.92,
         fov: 0.72,
@@ -578,6 +598,19 @@ class DungeonController extends GameController<DgState, DgAction> {
 
   @override
   List<TesseraScene> render(DgState s) => [_scene(s)];
+
+  @override
+  List<TesseraScene>? onResize(TesseraController c, DgState state, double w, double h) {
+    final fit = c.cameraFitDistance(tileIds: _fitCorners, padding: 0.09);
+    if (fit == null) return null;
+    // Fit only ever pulls back from the tuned landscape distance (the ground-
+    // plane fit ignores the raised hand cards), so portrait stops cropping
+    // without landscape ever zooming in tighter than 17.5.
+    final dist = math.max(fit, 17.5);
+    if (dist == _camDistance) return null;
+    _camDistance = dist;
+    return [_scene(state)];
+  }
 
   /// Intrinsic animation: walk the hero tile-by-tile, and clear the "drawn"
   /// beat once the renderer has shown it.

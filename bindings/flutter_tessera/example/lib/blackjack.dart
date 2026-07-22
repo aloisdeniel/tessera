@@ -233,6 +233,18 @@ class BlackjackController extends GameController<BjState, BjAction> {
   final List<int> _cardDef = List<int>.filled(52, 0);
   int _felt = 0;
   int _deckDef = 0;
+  double _camDistance = 13.0;
+
+  // Corner tiles hugging the dealer/player/deck area, for cameraFitDistance so
+  // the cards stay in frame in portrait as well as landscape.
+  static const List<int> _fitCorners = [9001, 9002, 9003, 9004];
+  int _cornerId(int x, int z) {
+    if (x == -5 && z == -4) return 9001;
+    if (x == 5 && z == -4) return 9002;
+    if (x == -5 && z == 4) return 9003;
+    if (x == 5 && z == 4) return 9004;
+    return 0;
+  }
 
   @override
   String get title => 'Blackjack';
@@ -318,7 +330,7 @@ class BlackjackController extends GameController<BjState, BjAction> {
     final tiles = <TesseraTile>[];
     for (var z = -5; z <= 5; z++) {
       for (var x = -6; x <= 6; x++) {
-        tiles.add(TesseraTile(x: x, y: z, def: _felt));
+        tiles.add(TesseraTile(x: x, y: z, def: _felt, id: _cornerId(x, z)));
       }
     }
 
@@ -377,15 +389,29 @@ class BlackjackController extends GameController<BjState, BjAction> {
       cards: cards,
       hands: hands,
       cardDraws: deck > 0 ? draws : const [],
-      camera: const TesseraCameraPose(
+      camera: TesseraCameraPose(
         focusX: 0,
         focusY: 0,
-        distance: 13.0,
+        distance: _camDistance,
         yaw: 0,
         pitch: 0.95,
         fov: 0.72,
       ),
     );
+  }
+
+  @override
+  List<TesseraScene>? onResize(TesseraController c, BjState state, double w, double h) {
+    final fit = c.cameraFitDistance(tileIds: _fitCorners, padding: 0.09);
+    if (fit == null) return null;
+    // Fit only ever pulls back from the tuned landscape distance (the ground-
+    // plane fit ignores the raised hand cards), so portrait stops cropping
+    // without landscape ever zooming in tighter than 13.
+    final dist = math.max(fit, 13.0);
+    if (dist == _camDistance) return null;
+    _camDistance = dist;
+    final scenes = render(state); // settled (last) frame, re-fitted
+    return scenes.isEmpty ? null : [scenes.last];
   }
 
   @override

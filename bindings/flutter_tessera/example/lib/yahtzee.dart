@@ -202,6 +202,18 @@ YState _score(YState s, int category) {
 class YahtzeeController extends GameController<YState, YAction> {
   int _felt = 0;
   int _die = 0;
+  double _camDistance = 12.0;
+
+  // Four corner tiles hugging the dice area — fed to cameraFitDistance so the
+  // whole table stays framed in portrait as well as landscape.
+  static const List<int> _fitCorners = [9001, 9002, 9003, 9004];
+  int _cornerId(int x, int z) {
+    if (x == -4 && z == -3) return 9001;
+    if (x == 4 && z == -3) return 9002;
+    if (x == -4 && z == 3) return 9003;
+    if (x == 4 && z == 3) return 9004;
+    return 0;
+  }
 
   @override
   String get title => 'Yahtzee';
@@ -238,7 +250,7 @@ class YahtzeeController extends GameController<YState, YAction> {
     final tiles = <TesseraTile>[];
     for (var z = -4; z <= 4; z++) {
       for (var x = -6; x <= 6; x++) {
-        tiles.add(TesseraTile(x: x, y: z, def: _felt));
+        tiles.add(TesseraTile(x: x, y: z, def: _felt, id: _cornerId(x, z)));
       }
     }
 
@@ -261,15 +273,28 @@ class YahtzeeController extends GameController<YState, YAction> {
     return TesseraScene(
       tiles: tiles,
       dice: dice,
-      camera: const TesseraCameraPose(
+      camera: TesseraCameraPose(
         focusX: 0,
         focusY: 0.6,
-        distance: 12.0,
+        distance: _camDistance,
         yaw: 0,
         pitch: 0.98,
         fov: 0.72,
       ),
     );
+  }
+
+  @override
+  List<TesseraScene>? onResize(TesseraController c, YState state, double w, double h) {
+    final fit = c.cameraFitDistance(tileIds: _fitCorners, padding: 0.09);
+    if (fit == null) return null;
+    // Fit only ever pulls back from the tuned landscape distance (the ground-
+    // plane fit ignores the raised dice height), so portrait stops cropping
+    // without landscape ever zooming in tighter than 12.
+    final dist = math.max(fit, 12.0);
+    if (dist == _camDistance) return null;
+    _camDistance = dist;
+    return [_scene(state)];
   }
 
   @override
