@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Add the dice API: `TesseraDiceFace` / `TesseraDiceDef` / `TesseraDiceThrow`
+  structs and `Tessera.registerDiceDef`, `diceDefFaceCount`, `addDice`,
+  `removeDice`, `clearDice`, `diceCount`, `diceFace`, `diceAllIdle` — register
+  procedural per-face-sprite dice and throw them into the scene. Mirrors the new
+  C API.
+
 ## 0.2.0
 
 - Add `tessera_render_rgba` binding (`Tessera.renderRgba`) — advance + render one

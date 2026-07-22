@@ -66,6 +66,17 @@ typedef struct {
 
 typedef struct { TesseraParticleSpec on_add, on_remove; } TesseraEffectDef;
 
+typedef uint64_t TesseraDiceId;
+typedef struct { TesseraBytes sprite; } TesseraDiceFace;
+typedef struct {
+    const TesseraDiceFace* faces; size_t face_count;
+    float size; float tint[4];
+} TesseraDiceDef;
+typedef struct {
+    TesseraDiceId id; TesseraDefId def; uint32_t face;
+    float position[3]; uint32_t seed; float throw_s;
+} TesseraDiceThrow;
+
 typedef struct { int32_t x, y; } TesseraCoord;
 typedef struct { float x, y; } TesseraCoordF;
 typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; TesseraTileId id; } TesseraTilePlacement;
@@ -113,6 +124,15 @@ TesseraDefId tessera_register_entity_def(TesseraEngine*, const TesseraEntityDef*
 TesseraDefId tessera_register_effect_def(TesseraEngine*, const TesseraEffectDef*);
 uint32_t     tessera_entity_def_anim_count(TesseraEngine*, TesseraDefId);
 const char*  tessera_entity_def_anim_name(TesseraEngine*, TesseraDefId, uint32_t);
+
+TesseraDefId tessera_register_dice_def(TesseraEngine*, const TesseraDiceDef*);
+uint32_t     tessera_dice_def_face_count(TesseraEngine*, TesseraDefId);
+void         tessera_add_dice(TesseraEngine*, const TesseraDiceThrow*);
+void         tessera_remove_dice(TesseraEngine*, TesseraDiceId);
+void         tessera_clear_dice(TesseraEngine*);
+uint32_t     tessera_dice_count(TesseraEngine*);
+bool         tessera_dice_face(TesseraEngine*, TesseraDiceId, uint32_t* out_face);
+bool         tessera_dice_all_idle(TesseraEngine*);
 
 void tessera_set_state(TesseraEngine*, const TesseraState*);
 bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* out);

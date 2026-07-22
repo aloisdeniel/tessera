@@ -166,6 +166,44 @@ final class TesseraEffectDef extends Struct {
 }
 
 // ======================================================================
+//  Dice
+// ======================================================================
+/// One face of a die: an encoded sprite image (shown centred on / filling it).
+final class TesseraDiceFace extends Struct {
+  external TesseraBytes sprite;
+}
+
+/// A die type. [faces] points at [faceCount] sprites (face index 0..count-1);
+/// [faceCount] must be >= 2. [size] is the bounding diameter (<=0 => 1.0);
+/// [tint] multiplies the sprites (all-zero => white).
+final class TesseraDiceDef extends Struct {
+  external Pointer<TesseraDiceFace> faces;
+  @Size()
+  external int faceCount;
+  @Float()
+  external double size;
+  @Array(4)
+  external Array<Float> tint;
+}
+
+/// A dice throw: settle [face] up at world-space [position]; [seed] varies the
+/// tumble; [throwS] is the throw duration in seconds (<=0 => default).
+final class TesseraDiceThrow extends Struct {
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int def;
+  @Uint32()
+  external int face;
+  @Array(3)
+  external Array<Float> position;
+  @Uint32()
+  external int seed;
+  @Float()
+  external double throwS;
+}
+
+// ======================================================================
 //  Immutable state
 // ======================================================================
 final class TesseraCoord extends Struct {
@@ -368,6 +406,23 @@ typedef _AnimCountD = int Function(Pointer<TesseraEngine>, int);
 typedef _AnimNameC = Pointer<Utf8> Function(Pointer<TesseraEngine>, Uint32, Uint32);
 typedef _AnimNameD = Pointer<Utf8> Function(Pointer<TesseraEngine>, int, int);
 
+typedef _RegDiceC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
+typedef _RegDiceD = int Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
+typedef _DiceFaceCountC = Uint32 Function(Pointer<TesseraEngine>, Uint32);
+typedef _DiceFaceCountD = int Function(Pointer<TesseraEngine>, int);
+typedef _AddDiceC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraDiceThrow>);
+typedef _AddDiceD = void Function(Pointer<TesseraEngine>, Pointer<TesseraDiceThrow>);
+typedef _RemoveDiceC = Void Function(Pointer<TesseraEngine>, Uint64);
+typedef _RemoveDiceD = void Function(Pointer<TesseraEngine>, int);
+typedef _ClearDiceC = Void Function(Pointer<TesseraEngine>);
+typedef _ClearDiceD = void Function(Pointer<TesseraEngine>);
+typedef _DiceCountC = Uint32 Function(Pointer<TesseraEngine>);
+typedef _DiceCountD = int Function(Pointer<TesseraEngine>);
+typedef _DiceFaceC = Bool Function(Pointer<TesseraEngine>, Uint64, Pointer<Uint32>);
+typedef _DiceFaceD = bool Function(Pointer<TesseraEngine>, int, Pointer<Uint32>);
+typedef _DiceAllIdleC = Bool Function(Pointer<TesseraEngine>);
+typedef _DiceAllIdleD = bool Function(Pointer<TesseraEngine>);
+
 typedef _SetStateC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
 typedef _SetStateD = void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
 typedef _PickC = Bool Function(Pointer<TesseraEngine>, Float, Float, Pointer<TesseraPick>);
@@ -466,6 +521,22 @@ class Tessera {
       _lib.lookupFunction<_AnimCountC, _AnimCountD>('tessera_entity_def_anim_count');
   late final _AnimNameD _animName =
       _lib.lookupFunction<_AnimNameC, _AnimNameD>('tessera_entity_def_anim_name');
+
+  late final _RegDiceD _registerDiceDef =
+      _lib.lookupFunction<_RegDiceC, _RegDiceD>('tessera_register_dice_def');
+  late final _DiceFaceCountD _diceDefFaceCount = _lib
+      .lookupFunction<_DiceFaceCountC, _DiceFaceCountD>('tessera_dice_def_face_count');
+  late final _AddDiceD _addDice = _lib.lookupFunction<_AddDiceC, _AddDiceD>('tessera_add_dice');
+  late final _RemoveDiceD _removeDice =
+      _lib.lookupFunction<_RemoveDiceC, _RemoveDiceD>('tessera_remove_dice');
+  late final _ClearDiceD _clearDice =
+      _lib.lookupFunction<_ClearDiceC, _ClearDiceD>('tessera_clear_dice');
+  late final _DiceCountD _diceCount =
+      _lib.lookupFunction<_DiceCountC, _DiceCountD>('tessera_dice_count');
+  late final _DiceFaceD _diceFace =
+      _lib.lookupFunction<_DiceFaceC, _DiceFaceD>('tessera_dice_face');
+  late final _DiceAllIdleD _diceAllIdle =
+      _lib.lookupFunction<_DiceAllIdleC, _DiceAllIdleD>('tessera_dice_all_idle');
 
   late final _SetStateD _setState =
       _lib.lookupFunction<_SetStateC, _SetStateD>('tessera_set_state');
@@ -570,6 +641,39 @@ class Tessera {
   int entityDefAnimCount(int def) => _animCount(_engine, def);
   String entityDefAnimName(int def, int index) =>
       _animName(_engine, def, index).toDartString();
+
+  // ---- dice (imperative; render-thread, like setTiming/setLight) ----
+  /// Register a dice def (per-face sprites); returns a TesseraDefId (0 = fail).
+  int registerDiceDef(Pointer<TesseraDiceDef> def) => _registerDiceDef(_engine, def);
+
+  /// Number of faces of a registered dice def (0 if not a dice def).
+  int diceDefFaceCount(int def) => _diceDefFaceCount(_engine, def);
+
+  /// Throw a die (or re-throw one with the same id), landing on the requested
+  /// face at a floating world position.
+  void addDice(Pointer<TesseraDiceThrow> spec) => _addDice(_engine, spec);
+
+  /// Begin removing a die (fade + shrink out). Unknown id => no-op.
+  void removeDice(int id) => _removeDice(_engine, id);
+
+  /// Begin removing every live die.
+  void clearDice() => _clearDice(_engine);
+
+  /// Number of live dice (including those fading in/out).
+  int get diceCount => _diceCount(_engine);
+
+  /// The face targeted by a live die, or null if the id isn't present.
+  int? diceFace(int id) {
+    final out = calloc<Uint32>();
+    try {
+      return _diceFace(_engine, id, out) ? out.value : null;
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// True when every live die has settled (no tumble or fade in progress).
+  bool get diceAllIdle => _diceAllIdle(_engine);
 
   // ---- state / timing / quality / light ----
   void setState(Pointer<TesseraState> s) => _setState(_engine, s);

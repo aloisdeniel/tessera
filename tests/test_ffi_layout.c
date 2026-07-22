@@ -90,6 +90,24 @@ SIZE_IS(TesseraEffectDef, 200);
 OFF_IS(TesseraEffectDef, on_add, 0);
 OFF_IS(TesseraEffectDef, on_remove, 100);
 
+/* ---- dice ---- */
+SIZE_IS(TesseraDiceFace, 32);
+OFF_IS(TesseraDiceFace, sprite, 0);
+
+SIZE_IS(TesseraDiceDef, 40);
+OFF_IS(TesseraDiceDef, faces, 0);
+OFF_IS(TesseraDiceDef, face_count, 8);
+OFF_IS(TesseraDiceDef, size, 16);
+OFF_IS(TesseraDiceDef, tint, 20);
+
+SIZE_IS(TesseraDiceThrow, 40);
+OFF_IS(TesseraDiceThrow, id, 0);
+OFF_IS(TesseraDiceThrow, def, 8);
+OFF_IS(TesseraDiceThrow, face, 12);
+OFF_IS(TesseraDiceThrow, position, 16);
+OFF_IS(TesseraDiceThrow, seed, 28);
+OFF_IS(TesseraDiceThrow, throw_s, 32);
+
 /* ======================================================================= *
  *  Immutable state
  * ======================================================================= */
@@ -267,6 +285,20 @@ int main(void) {
     P_SIZE(TesseraEffectDef);
     P_OFF(TesseraEffectDef, on_add);
     P_OFF(TesseraEffectDef, on_remove);
+
+    P_SIZE(TesseraDiceFace);
+    P_SIZE(TesseraDiceDef);
+    P_OFF(TesseraDiceDef, faces);
+    P_OFF(TesseraDiceDef, face_count);
+    P_OFF(TesseraDiceDef, size);
+    P_OFF(TesseraDiceDef, tint);
+    P_SIZE(TesseraDiceThrow);
+    P_OFF(TesseraDiceThrow, id);
+    P_OFF(TesseraDiceThrow, def);
+    P_OFF(TesseraDiceThrow, face);
+    P_OFF(TesseraDiceThrow, position);
+    P_OFF(TesseraDiceThrow, seed);
+    P_OFF(TesseraDiceThrow, throw_s);
 
     P_SIZE(TesseraCoord);
     P_OFF(TesseraCoord, x);
