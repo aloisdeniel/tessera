@@ -3,11 +3,10 @@
 // A direct port of the rules half of examples/chess/main.c. The architecture is
 // the classic reducer loop:
 //
-//     GameState + Action  --gameApply-->  GameState   (pure, no side effects)
+//     GameState + Move  --gameApply-->  GameState   (pure, no side effects)
 //
 // Board squares hold `kind` in 1..6 (chess*), sign carries color: +white,
 // -black, 0 empty. The `Game` controller threads a persistent entity id through
-// each square so the renderer animates a *slide* rather than a teleport.
 
 import 'chess_gen.dart';
 
@@ -21,8 +20,8 @@ int pieceKind(int v) => v < 0 ? -v : v;
 int pieceColor(int v) => v < 0 ? black : white;
 
 /// A single move.
-class Action {
-  Action(this.from, this.to, {this.promo = 0, this.isCastle = 0, this.isEp = 0});
+class Move {
+  Move(this.from, this.to, {this.promo = 0, this.isCastle = 0, this.isEp = 0});
   final int from;
   final int to;
   final int promo; // promoted kind, or 0
@@ -154,8 +153,8 @@ int kingSquare(GameState g, int color) {
   return -1;
 }
 
-/// (PrevState, Action) -> NewState — pure.
-GameState gameApply(GameState prev, Action a) {
+/// (PrevState, Move) -> NewState — pure.
+GameState gameApply(GameState prev, Move a) {
   final next = GameState.from(prev);
   final moving = next.sq[a.from];
   final color = pieceColor(moving);
@@ -204,16 +203,16 @@ GameState gameApply(GameState prev, Action a) {
 
 // ---- move generation (pseudo-legal, then filtered to fully legal) ----
 
-void _addPawn(List<Action> list, int from, int to, bool promo, bool ep) {
+void _addPawn(List<Move> list, int from, int to, bool promo, bool ep) {
   if (promo) {
-    list.add(Action(from, to, promo: chessQueen));
+    list.add(Move(from, to, promo: chessQueen));
   } else {
-    list.add(Action(from, to, isEp: ep ? 1 : 0));
+    list.add(Move(from, to, isEp: ep ? 1 : 0));
   }
 }
 
-List<Action> genPseudo(GameState g) {
-  final list = <Action>[];
+List<Move> genPseudo(GameState g) {
+  final list = <Move>[];
   final me = g.side;
   for (var s = 0; s < 64; ++s) {
     final v = g.sq[s];
@@ -251,7 +250,7 @@ List<Action> genPseudo(GameState g) {
         final nf = f + kn[i][0], nr = r + kn[i][1];
         if (nf < 0 || nf > 7 || nr < 0 || nr > 7) continue;
         final tv = g.sq[sqOf(nf, nr)];
-        if (tv == 0 || pieceColor(tv) != me) list.add(Action(s, sqOf(nf, nr)));
+        if (tv == 0 || pieceColor(tv) != me) list.add(Move(s, sqOf(nf, nr)));
       }
     } else if (kind == chessKing) {
       for (var df = -1; df <= 1; ++df) {
@@ -260,7 +259,7 @@ List<Action> genPseudo(GameState g) {
           final nf = f + df, nr = r + dr;
           if (nf < 0 || nf > 7 || nr < 0 || nr > 7) continue;
           final tv = g.sq[sqOf(nf, nr)];
-          if (tv == 0 || pieceColor(tv) != me) list.add(Action(s, sqOf(nf, nr)));
+          if (tv == 0 || pieceColor(tv) != me) list.add(Move(s, sqOf(nf, nr)));
         }
       }
       // castling: rights set, squares empty, king not passing through check
@@ -273,7 +272,7 @@ List<Action> genPseudo(GameState g) {
           !isAttacked(g, sqOf(4, hr), me ^ 1) &&
           !isAttacked(g, sqOf(5, hr), me ^ 1) &&
           !isAttacked(g, sqOf(6, hr), me ^ 1)) {
-        list.add(Action(sqOf(4, hr), sqOf(6, hr), isCastle: 1));
+        list.add(Move(sqOf(4, hr), sqOf(6, hr), isCastle: 1));
       }
       if ((g.castle & qbit) != 0 &&
           g.sq[sqOf(3, hr)] == 0 &&
@@ -282,7 +281,7 @@ List<Action> genPseudo(GameState g) {
           !isAttacked(g, sqOf(4, hr), me ^ 1) &&
           !isAttacked(g, sqOf(3, hr), me ^ 1) &&
           !isAttacked(g, sqOf(2, hr), me ^ 1)) {
-        list.add(Action(sqOf(4, hr), sqOf(2, hr), isCastle: 2));
+        list.add(Move(sqOf(4, hr), sqOf(2, hr), isCastle: 2));
       }
     } else {
       // sliders
@@ -312,10 +311,10 @@ List<Action> genPseudo(GameState g) {
           if (nf < 0 || nf > 7 || nr < 0 || nr > 7) break;
           final tv = g.sq[sqOf(nf, nr)];
           if (tv == 0) {
-            list.add(Action(s, sqOf(nf, nr)));
+            list.add(Move(s, sqOf(nf, nr)));
             continue;
           }
-          if (pieceColor(tv) != me) list.add(Action(s, sqOf(nf, nr)));
+          if (pieceColor(tv) != me) list.add(Move(s, sqOf(nf, nr)));
           break;
         }
       }
@@ -325,10 +324,10 @@ List<Action> genPseudo(GameState g) {
 }
 
 /// Fully legal moves: pseudo-legal minus those leaving our king in check.
-List<Action> genLegal(GameState g) {
+List<Move> genLegal(GameState g) {
   final pseudo = genPseudo(g);
   final me = g.side;
-  final out = <Action>[];
+  final out = <Move>[];
   for (final a in pseudo) {
     final nx = gameApply(g, a);
     final ks = kingSquare(nx, me);
@@ -362,7 +361,7 @@ int _pieceValue(int kind) {
 }
 
 /// Pick a move for the side to move, or null if there are none (game over).
-Action? aiPickAction(GameState g, ChessRng rng) {
+Move? aiPickAction(GameState g, ChessRng rng) {
   final moves = genLegal(g);
   if (moves.isEmpty) return null;
 
@@ -399,69 +398,8 @@ Action? aiPickAction(GameState g, ChessRng rng) {
   return moves[bestI];
 }
 
-// ---- controller: threads a persistent entity id through each square ----
-
-/// Threads a stable entity id through each square so the renderer animates a
-/// move (a piece sliding) rather than a teleport.
-class Game {
-  Game() {
-    reset();
-  }
-
-  final GameState state = GameState();
-  final List<int> ids = List<int>.filled(64, 0); // entity id per square (0 = none)
-  Action? last; // last action applied (for logging)
-  bool gameOver = false;
-
-  void reset() {
-    state.reset();
-    for (var i = 0; i < 64; ++i) {
-      ids[i] = 0;
-    }
-    var id = 1;
-    for (var s = 0; s < 64; ++s) {
-      if (state.sq[s] != 0) ids[s] = id++;
-    }
-    last = null;
-    gameOver = false;
-  }
-
-  /// Apply an action to BOTH the rules state and the id grid, in lockstep.
-  void apply(Action a) {
-    final color = pieceColor(state.sq[a.from]);
-
-    if (a.isEp != 0) {
-      final capR = rankOf(a.to) - (color == white ? 1 : -1);
-      ids[sqOf(fileOf(a.to), capR)] = 0; // captured pawn vanishes
-    }
-    ids[a.to] = ids[a.from]; // mover keeps its id (slides)
-    ids[a.from] = 0;
-    if (a.isCastle != 0) {
-      final r = rankOf(a.from);
-      if (a.isCastle == 1) {
-        ids[sqOf(5, r)] = ids[sqOf(7, r)];
-        ids[sqOf(7, r)] = 0;
-      } else {
-        ids[sqOf(3, r)] = ids[sqOf(0, r)];
-        ids[sqOf(0, r)] = 0;
-      }
-    }
-
-    final nx = gameApply(state, a);
-    state
-      ..sq.setAll(0, nx.sq)
-      ..side = nx.side
-      ..castle = nx.castle
-      ..ep = nx.ep
-      ..ply = nx.ply;
-    last = a;
-
-    if (genLegal(state).isEmpty) gameOver = true;
-  }
-}
-
 /// Algebraic-ish move string, e.g. "e2e4".
-String moveStr(Action a) {
+String moveStr(Move a) {
   final ff = String.fromCharCode('a'.codeUnitAt(0) + fileOf(a.from));
   final tf = String.fromCharCode('a'.codeUnitAt(0) + fileOf(a.to));
   return '$ff${rankOf(a.from) + 1}$tf${rankOf(a.to) + 1}';

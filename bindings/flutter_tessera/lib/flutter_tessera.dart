@@ -18,7 +18,8 @@
 /// )
 /// ```
 ///
-/// See `example/` for a full game of chess.
+/// See `example/` for a menu of three games — Chess (entities), Blackjack
+/// (cards) and Yahtzee (dice) — on a small shared reducer framework.
 library;
 
 export 'src/tessera_controller.dart';

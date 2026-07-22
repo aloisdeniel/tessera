@@ -140,6 +140,74 @@ class TesseraController {
     return id;
   }
 
+  /// Register an atlas (texture) from encoded image [image] bytes (PNG/JPG/…).
+  /// Returns its def id (0 = failure). Referenced by card faces.
+  int registerAtlas(Uint8List image) {
+    final bytes = calloc<Uint8>(image.length);
+    bytes.asTypedList(image.length).setAll(0, image);
+    final def = calloc<t.TesseraBytes>();
+    def.ref
+      ..data = bytes.cast<Void>()
+      ..size = image.length;
+    final id = _engine.registerAtlas(def); // copies the bytes it needs
+    calloc.free(def);
+    calloc.free(bytes);
+    return id;
+  }
+
+  /// Register a card definition (visible/hidden/back atlas ids). Returns its def
+  /// id (0 = failure). Place cards/piles/hands via [setScene].
+  int registerCardType(TesseraCardType type) {
+    final def = calloc<t.TesseraCardDef>();
+    def.ref
+      ..visibleAtlas = type.visibleAtlas
+      ..hiddenAtlas = type.hiddenAtlas
+      ..backAtlas = type.backAtlas
+      ..width = type.width
+      ..height = type.height
+      ..thickness = type.thickness
+      ..cornerRadius = type.cornerRadius;
+    for (var i = 0; i < 4; ++i) {
+      def.ref.tint[i] = type.tint[i];
+    }
+    // visible/hidden/back UV rects are left zero => "use the whole texture".
+    final id = _engine.registerCardDef(def);
+    calloc.free(def);
+    return id;
+  }
+
+  /// Register a dice definition from per-face sprite images. Returns its def id
+  /// (0 = failure). Place dice via [setScene].
+  int registerDiceType(TesseraDiceType type) {
+    final n = type.faces.length;
+    final faces = calloc<t.TesseraDiceFace>(n == 0 ? 1 : n);
+    final buffers = <Pointer<Uint8>>[];
+    for (var i = 0; i < n; ++i) {
+      final img = type.faces[i];
+      final b = calloc<Uint8>(img.length);
+      b.asTypedList(img.length).setAll(0, img);
+      buffers.add(b);
+      faces[i].sprite
+        ..data = b.cast<Void>()
+        ..size = img.length;
+    }
+    final def = calloc<t.TesseraDiceDef>();
+    def.ref
+      ..faces = faces
+      ..faceCount = n
+      ..size = type.size;
+    for (var i = 0; i < 4; ++i) {
+      def.ref.tint[i] = type.tint[i];
+    }
+    final id = _engine.registerDiceDef(def); // copies/decodes the sprites
+    calloc.free(def);
+    for (final b in buffers) {
+      calloc.free(b);
+    }
+    calloc.free(faces);
+    return id;
+  }
+
   /// Set the directional light + ambient.
   void setLight(TesseraLightData light) {
     final l = calloc<t.TesseraLight>();
@@ -219,6 +287,14 @@ class TesseraController {
         scene.tiles.isEmpty ? 1 : scene.tiles.length);
     final ents = calloc<t.TesseraEntityPlacement>(
         scene.entities.isEmpty ? 1 : scene.entities.length);
+    final cards = calloc<t.TesseraCardPlacement>(
+        scene.cards.isEmpty ? 1 : scene.cards.length);
+    final draws = calloc<t.TesseraCardDrawPlacement>(
+        scene.cardDraws.isEmpty ? 1 : scene.cardDraws.length);
+    final hands = calloc<t.TesseraHandPlacement>(
+        scene.hands.isEmpty ? 1 : scene.hands.length);
+    final dice = calloc<t.TesseraDicePlacement>(
+        scene.dice.isEmpty ? 1 : scene.dice.length);
 
     for (var i = 0; i < scene.tiles.length; ++i) {
       final s = scene.tiles[i];
@@ -243,6 +319,65 @@ class TesseraController {
         ..x = s.x
         ..y = s.y;
     }
+    for (var i = 0; i < scene.cards.length; ++i) {
+      final s = scene.cards[i];
+      final p = cards[i];
+      p
+        ..id = s.id
+        ..def = s.def
+        ..hidden = s.hidden
+        ..hand = s.hand
+        ..handSlot = s.handSlot;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+      }
+      for (var k = 0; k < 4; ++k) {
+        p.orientation[k] = s.orientation[k];
+      }
+    }
+    for (var i = 0; i < scene.cardDraws.length; ++i) {
+      final s = scene.cardDraws[i];
+      final p = draws[i];
+      p
+        ..id = s.id
+        ..def = s.def
+        ..count = s.count
+        ..topHidden = s.topHidden;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+      }
+      for (var k = 0; k < 4; ++k) {
+        p.orientation[k] = s.orientation[k];
+      }
+    }
+    for (var i = 0; i < scene.hands.length; ++i) {
+      final s = scene.hands[i];
+      final p = hands[i];
+      p
+        ..id = s.id
+        ..spreadDeg = s.spreadDeg
+        ..radius = s.radius
+        ..cardSpacing = s.cardSpacing;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+      }
+      for (var k = 0; k < 4; ++k) {
+        p.orientation[k] = s.orientation[k];
+      }
+    }
+    for (var i = 0; i < scene.dice.length; ++i) {
+      final s = scene.dice[i];
+      final p = dice[i];
+      p
+        ..id = s.id
+        ..def = s.def
+        ..face = s.face
+        ..seed = s.seed
+        ..throwS = s.throwS;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+      }
+    }
 
     final st = calloc<t.TesseraState>();
     st.ref
@@ -252,7 +387,15 @@ class TesseraController {
       ..entityCount = scene.entities.length
       ..effects = nullptr
       ..effectCount = 0
-      ..epoch = scene.epoch;
+      ..epoch = scene.epoch
+      ..cards = cards
+      ..cardCount = scene.cards.length
+      ..cardDraws = draws
+      ..cardDrawCount = scene.cardDraws.length
+      ..hands = hands
+      ..handCount = scene.hands.length
+      ..dice = dice
+      ..diceCount = scene.dice.length;
     st.ref.camera
       ..distance = scene.camera.distance
       ..yaw = scene.camera.yaw
@@ -266,6 +409,10 @@ class TesseraController {
     calloc.free(st);
     calloc.free(tiles);
     calloc.free(ents);
+    calloc.free(cards);
+    calloc.free(draws);
+    calloc.free(hands);
+    calloc.free(dice);
   }
 
   /// True when no transitions are active (any-thread).

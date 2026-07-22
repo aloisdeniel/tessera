@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Cards & dice in the high-level API.** New value types (`TesseraCardType`,
+  `TesseraDiceType`, and the `TesseraCard` / `TesseraCardDraw` / `TesseraHand` /
+  `TesseraDie` placements), `TesseraController.registerAtlas` /
+  `registerCardType` / `registerDiceType`, and `TesseraScene` gained
+  `cards` / `cardDraws` / `hands` / `dice`. `setScene` marshals them all.
+- **Example app is now a menu of three games** (`example/`): Chess (entities),
+  Blackjack (cards) and Yahtzee (dice), each built on a small shared reducer
+  framework — a sealed action + sealed state, a pure `update`, and a `render`
+  that projects state into one or a sequence of `TesseraScene`s.
+
 - **Zero-copy presentation on Apple platforms.** Instead of reading the engine
   back into a CPU RGBA buffer and blitting it through a Metal presenter, the
   plugin now reparents the engine's SDL swapchain `CAMetalLayer`-backed metal

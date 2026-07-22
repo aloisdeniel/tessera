@@ -89,6 +89,46 @@ class TesseraEntityType {
   final int onDespawnEffect;
 }
 
+/// A card definition: three textures referenced by *atlas def id* (register the
+/// images with [TesseraController.registerAtlas] first). [hiddenAtlas] is the
+/// concealing front; [backAtlas] the reverse. Dimensions are world units; <= 0
+/// selects a default (a slab a little smaller than 2x3 tiles).
+class TesseraCardType {
+  const TesseraCardType({
+    required this.visibleAtlas,
+    required this.hiddenAtlas,
+    required this.backAtlas,
+    this.width = 0,
+    this.height = 0,
+    this.thickness = 0,
+    this.cornerRadius = 0,
+    this.tint = const [1, 1, 1, 1],
+  });
+
+  final int visibleAtlas;
+  final int hiddenAtlas;
+  final int backAtlas;
+  final double width;
+  final double height;
+  final double thickness;
+  final double cornerRadius;
+  final List<double> tint;
+}
+
+/// A dice definition built from per-face sprite images ([faces], length >= 2 —
+/// 2=coin, 6=cube, N=barrel). [size] is the bounding diameter.
+class TesseraDiceType {
+  const TesseraDiceType({
+    required this.faces,
+    this.size = 1.0,
+    this.tint = const [1, 1, 1, 1],
+  });
+
+  final List<Uint8List> faces;
+  final double size;
+  final List<double> tint;
+}
+
 /// A tile placed on the grid at ([x], [y]) using tile def [def]. [id] is an
 /// optional stable instance id (0 = unqueryable).
 class TesseraTile {
@@ -127,6 +167,93 @@ class TesseraEntity {
   final int anim;
 }
 
+/// A card placed in the world. [orientation] is a quaternion (xyzw; all-zero =>
+/// identity, which lays the card flat, front up). [hidden] shows the concealing
+/// front (crossfades when toggled). If [hand] is non-zero the card is arranged
+/// by that hand's fan ([position]/[orientation] ignored); [handSlot] orders it.
+class TesseraCard {
+  const TesseraCard({
+    required this.id,
+    required this.def,
+    this.position = const [0, 0, 0],
+    this.orientation = const [0, 0, 0, 0],
+    this.hidden = false,
+    this.hand = 0,
+    this.handSlot = 0,
+  });
+
+  final int id;
+  final int def;
+  final List<double> position;
+  final List<double> orientation;
+  final bool hidden;
+  final int hand;
+  final int handSlot;
+}
+
+/// A pile of cards drawn as one slab (thickness tracks [count]). The top face
+/// shows the def's visible (or hidden when [topHidden]) texture; the bottom the
+/// def's hidden texture.
+class TesseraCardDraw {
+  const TesseraCardDraw({
+    required this.id,
+    required this.def,
+    required this.count,
+    this.position = const [0, 0, 0],
+    this.orientation = const [0, 0, 0, 0],
+    this.topHidden = false,
+  });
+
+  final int id;
+  final int def;
+  final int count;
+  final List<double> position;
+  final List<double> orientation;
+  final bool topHidden;
+}
+
+/// A hand anchor that fans out the cards whose [TesseraCard.hand] equals its id.
+/// [orientation] is a quaternion; identity faces the fronts toward +Z. All of
+/// [spreadDeg]/[radius]/[cardSpacing] default when <= 0.
+class TesseraHand {
+  const TesseraHand({
+    required this.id,
+    this.position = const [0, 0, 0],
+    this.orientation = const [0, 0, 0, 0],
+    this.spreadDeg = 0,
+    this.radius = 0,
+    this.cardSpacing = 0,
+  });
+
+  final int id;
+  final List<double> position;
+  final List<double> orientation;
+  final double spreadDeg;
+  final double radius;
+  final double cardSpacing;
+}
+
+/// A die placed in the world. A die that newly appears (by [id]) is thrown and
+/// settles with [face] up at [position]; one that vanishes fades out. Changing
+/// def/face/seed/position re-throws it.
+class TesseraDie {
+  const TesseraDie({
+    required this.id,
+    required this.def,
+    this.face = 0,
+    this.position = const [0, 0, 0],
+    this.seed = 0,
+    this.throwS = 0,
+  });
+
+  final int id;
+  final int def;
+  final int face;
+  final List<double> position;
+  final int seed;
+  final double throwS;
+}
+
 /// The orbit camera. [focusX]/[focusY] are continuous grid coordinates (may sit
 /// between tiles); [yaw]/[pitch]/[fov] are radians.
 class TesseraCameraPose {
@@ -152,14 +279,22 @@ class TesseraCameraPose {
 /// scenes and animates the transitions.
 class TesseraScene {
   const TesseraScene({
-    required this.tiles,
-    required this.entities,
+    this.tiles = const [],
+    this.entities = const [],
+    this.cards = const [],
+    this.cardDraws = const [],
+    this.hands = const [],
+    this.dice = const [],
     required this.camera,
     this.epoch = 0,
   });
 
   final List<TesseraTile> tiles;
   final List<TesseraEntity> entities;
+  final List<TesseraCard> cards;
+  final List<TesseraCardDraw> cardDraws;
+  final List<TesseraHand> hands;
+  final List<TesseraDie> dice;
   final TesseraCameraPose camera;
   final int epoch;
 }
