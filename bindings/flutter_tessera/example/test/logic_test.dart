@@ -8,6 +8,8 @@ import 'package:flutter_tessera_example/blackjack.dart';
 import 'package:flutter_tessera_example/chess.dart';
 import 'package:flutter_tessera_example/chess_gen.dart';
 import 'package:flutter_tessera_example/chess_rules.dart';
+import 'package:flutter_tessera_example/dungeon.dart';
+import 'package:flutter_tessera_example/dungeon_art.dart';
 import 'package:flutter_tessera_example/yahtzee.dart';
 
 void main() {
@@ -75,6 +77,78 @@ void main() {
       s = yUpdate(s, const YToggleKeep(0));
       s = yUpdate(s, const YRoll());
       expect((s as YRolled).dice[0], held);
+    });
+  });
+
+  group('dungeon', () {
+    DgState walk(DgState s) {
+      var guard = 0;
+      while (s is DgMoving && guard++ < 40) {
+        s = dgUpdate(s, const DgStep());
+      }
+      return s;
+    }
+
+    final base = Core.initial();
+
+    test('a roll produces a bounded move, clamped at a blocking monster', () {
+      // Monster sits at idx 8; standing on 7, any roll must stop on 8.
+      final s = dgUpdate(DgRoll(base.copy(heroPos: 7)), const DgRollMove());
+      expect(s, isA<DgMoving>());
+      expect((s as DgMoving).target, 8);
+      expect(walk(s), isA<DgCombat>()); // arriving on a monster starts a duel
+    });
+
+    test('landing on a loot tile draws a card, then returns to the roll', () {
+      final drew = walk(DgMoving(base.copy(heroPos: 5), 6)); // loot at idx 6
+      expect(drew, isA<DgDrew>());
+      expect((drew as DgDrew).c.hand.length, 1);
+      expect(drew.c.deck.length, base.deck.length - 1);
+      expect(dgUpdate(drew, const DgAfterDraw()), isA<DgRoll>());
+    });
+
+    test('reaching the last tile wins', () {
+      expect(walk(DgMoving(base.copy(heroPos: kGoal - 1), kGoal)), isA<DgWon>());
+    });
+
+    test('winning a duel removes the monster', () {
+      final combat = DgCombat(base,
+          mon: 0, heroSeed: 1, monSeed: 2, heroDie: 6, monDie: 1, bonus: 0);
+      final r = dgUpdate(combat, const DgFight());
+      expect(r, isA<DgRoll>());
+      expect((r as DgRoll).c.monsters[0].alive, isFalse);
+    });
+
+    test('losing a duel costs a life; a shield soaks the hit instead', () {
+      final combat = DgCombat(base,
+          mon: 0, heroSeed: 1, monSeed: 2, heroDie: 1, monDie: 6, bonus: 0);
+      expect((dgUpdate(combat, const DgFight()) as DgRoll).c.hp, kMaxHp - 1);
+
+      final shielded = base.copy(hand: const [ItemCard(1, itemShield)]);
+      final r = dgUpdate(
+          DgCombat(shielded,
+              mon: 0, heroSeed: 1, monSeed: 2, heroDie: 1, monDie: 6, bonus: 0),
+          const DgFight()) as DgRoll;
+      expect(r.c.hp, kMaxHp); // no life lost
+      expect(r.c.handCount(itemShield), 0); // shield consumed
+    });
+
+    test('playing a sword adds to the attack and discards the card', () {
+      final armed = base.copy(hand: const [ItemCard(2, itemSword)]);
+      final s = dgUpdate(
+          DgCombat(armed,
+              mon: 0, heroSeed: 1, monSeed: 2, heroDie: 3, monDie: 6, bonus: 0),
+          const DgPlaySword()) as DgCombat;
+      expect(s.bonus, kSwordBonus);
+      expect(s.heroTotal, 3 + kSwordBonus);
+      expect(s.c.handCount(itemSword), 0);
+    });
+
+    test('a potion heals one life and is consumed', () {
+      final hurt = base.copy(hp: 1, hand: const [ItemCard(3, itemPotion)]);
+      final r = dgUpdate(DgRoll(hurt), const DgDrinkPotion()) as DgRoll;
+      expect(r.c.hp, 2);
+      expect(r.c.handCount(itemPotion), 0);
     });
   });
 

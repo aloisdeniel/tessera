@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'blackjack.dart';
 import 'chess.dart';
+import 'dungeon.dart';
 import 'game.dart';
 import 'yahtzee.dart';
 
@@ -28,6 +29,7 @@ _Entry _entry<S, A>(GameController<S, A> Function() make) {
 }
 
 final List<_Entry> _games = [
+  _entry(() => DungeonController()),
   _entry(() => ChessController()),
   _entry(() => BlackjackController()),
   _entry(() => YahtzeeController()),
@@ -46,7 +48,7 @@ class MenuPage extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.fromLTRB(8, 8, 8, 16),
             child: Text(
-              'Three tabletop games rendered with the Tessera engine.\n'
+              'Four tabletop games rendered with the Tessera engine.\n'
               'Pick one to play, or tap the robot to watch it auto-play.',
               style: TextStyle(fontSize: 14, height: 1.4),
             ),
