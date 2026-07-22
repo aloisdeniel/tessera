@@ -116,8 +116,10 @@ final class TesseraPlatformView: NSView {
         let (w, h) = drawablePixelSize()
         if w == 0 || h == 0 { return }
 
+        var sizeChanged = false
         if w != bufW || h != bufH {
             bufW = w; bufH = h
+            sizeChanged = true
             ftessera_resize(bridge, Int32(w), Int32(h), Float(scale()))
             // Keep the reparented view filling us. It was attached before Flutter
             // sized the platform view, so its frame must be updated here — a zero
@@ -137,6 +139,16 @@ final class TesseraPlatformView: NSView {
 
         // Advance + render + present straight to the swapchain. No CPU copy.
         ftessera_present(bridge, dt)
+
+        // Notify Dart AFTER present so the pending scene has been promoted this
+        // tick — cameraFitDistance fits to live tiles, which don't exist until
+        // the first tick. Sending before present would race the initial fit.
+        if sizeChanged {
+            channel.invokeMethod("resize", arguments: [
+                "width": Double(bounds.width),
+                "height": Double(bounds.height),
+            ])
+        }
     }
 
     private func pick(_ x: Double, _ y: Double) -> [String: Any] {

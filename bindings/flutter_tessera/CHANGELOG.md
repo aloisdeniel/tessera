@@ -9,6 +9,19 @@
   `ftessera_present` (macOS + iOS). New bridge accessors `ftessera_native_window`
   / `ftessera_metal_view_tag` locate the view; the `MetalPresenter` blit path is
   removed. Android keeps the `tessera_render_rgba` → `Surface` blit.
+- **Camera fit works when embedded / on orientation change.** The engine's
+  fit-distance and picking derived their aspect from `SDL_GetWindowSize`, which
+  is stale for a host-owned window we never resize through SDL — so the fit used
+  the wrong aspect (e.g. over-zoomed in portrait). It now uses the live drawable
+  size + density when embedded. `TesseraController` gains an `onResize(w, h)`
+  callback (fired by the plugin after each frame whose size changed, once the
+  scene is live) so apps can re-fit; the example re-frames the board there,
+  covering both the initial layout and rotation.
+- **Fix an engine leak / hot-restart failure on iOS.** The `CADisplayLink`
+  retained the platform view, so it (and its engine) never tore down — leaking on
+  every teardown and, on hot restart, stacking a second engine on the old one.
+  The render loop now runs through a weak proxy so `deinit` fires. `handle` also
+  surfaces the native create error instead of a bare 0.
 
 ## 0.2.0
 

@@ -58,9 +58,21 @@ static bool ray_sphere(const vec3 o, const vec3 d, const vec3 c, float r, float*
  * is identical either way). Returns false on a zero-sized viewport. */
 static bool pick_logical_size(TesseraEngine* e, float* W, float* H) {
     int lw = 0, lh = 0;
-    if (e->gpu.window) SDL_GetWindowSize(e->gpu.window, &lw, &lh);
-    *W = lw > 0 ? (float)lw : (float)e->gpu.width;
-    *H = lh > 0 ? (float)lh : (float)e->gpu.height;
+    /* When the engine owns its window (desktop) SDL tracks the live logical
+     * size, so use it. When embedded (a host-owned window we never resize
+     * through SDL — Flutter drives the drawable via tessera_resize instead),
+     * SDL_GetWindowSize is stale: it reports the creation-time size, giving the
+     * wrong aspect after a layout/orientation change. Derive the logical size
+     * from the live drawable pixels and density in that case. */
+    if (e->gpu.window && e->gpu.owns_window) SDL_GetWindowSize(e->gpu.window, &lw, &lh);
+    if (lw > 0 && lh > 0) {
+        *W = (float)lw;
+        *H = (float)lh;
+    } else {
+        float d = e->gpu.pixel_density > 0.0f ? e->gpu.pixel_density : 1.0f;
+        *W = (float)e->gpu.width / d;
+        *H = (float)e->gpu.height / d;
+    }
     return *W > 0.0f && *H > 0.0f;
 }
 

@@ -75,9 +75,20 @@ class _ChessPageState extends State<ChessPage> {
       cameraS: 0.9,
     ));
 
-    // Fit the camera to the board corners, then push the opening position.
-    final fit = c.cameraFitDistance(tileIds: _scene.cornerTileIds, padding: 0.06);
-    if (fit != null) _scene.camDistance = fit;
+    // Fit the camera to the board on every (re)size. This is where the framing
+    // happens: the fit needs live tiles (they exist only after the first tick
+    // promotes the scene) and the real view aspect, so it can't run here in
+    // setup — onResize fires after the first frame is presented, and again on
+    // every orientation / window change.
+    c.onResize = (_, _) {
+      final fit = c.cameraFitDistance(tileIds: _scene.cornerTileIds, padding: 0.06);
+      if (fit != null && fit != _scene.camDistance) {
+        _scene.camDistance = fit;
+        c.setScene(_scene.build(_game));
+      }
+    };
+
+    // Push the opening position (framed by onResize once the view is sized).
     c.setScene(_scene.build(_game));
 
     await c.start();

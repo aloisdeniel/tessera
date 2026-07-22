@@ -35,12 +35,31 @@ DynamicLibrary _defaultLibrary() {
 /// `onCreated` callback; do the def/light/quality/timing setup, push an initial
 /// scene, then call [start].
 class TesseraController {
-  TesseraController._(this._channel, this._engine);
+  TesseraController._(this._channel, this._engine) {
+    _channel.setMethodCallHandler(_handleNativeCall);
+  }
 
   final MethodChannel _channel;
   final t.Tessera _engine;
   bool _started = false;
   bool _disposed = false;
+
+  /// Called when the view's logical (point) size changes — on first layout and
+  /// on every resize / orientation change. The engine has already been resized,
+  /// so this is the moment to recompute [cameraFitDistance] and push a scene
+  /// with the new camera `distance`. Arguments are the logical width/height.
+  void Function(double width, double height)? onResize;
+
+  Future<Object?> _handleNativeCall(MethodCall call) async {
+    switch (call.method) {
+      case 'resize':
+        final args = call.arguments as Map<Object?, Object?>?;
+        final w = (args?['width'] as num?)?.toDouble();
+        final h = (args?['height'] as num?)?.toDouble();
+        if (w != null && h != null && w > 0 && h > 0) onResize?.call(w, h);
+    }
+    return null;
+  }
 
   /// Whether the native render loop has been started.
   bool get started => _started;
@@ -166,7 +185,8 @@ class TesseraController {
 
   /// Smallest orbit distance keeping every listed tile/entity id on screen with
   /// a fractional [padding] margin. Pure query; feed the result into your
-  /// camera's `distance`. Call during setup (before [start]).
+  /// camera's `distance`. Uses the live viewport aspect, so call it during setup
+  /// AND from [onResize] to re-fit after a layout/orientation change.
   double? cameraFitDistance({
     List<int> tileIds = const [],
     List<int> entityIds = const [],
@@ -275,6 +295,8 @@ class TesseraController {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    onResize = null;
+    _channel.setMethodCallHandler(null);
     _engine.dispose(); // no-op for a fromHandle wrapper (host owns lifecycle)
   }
 

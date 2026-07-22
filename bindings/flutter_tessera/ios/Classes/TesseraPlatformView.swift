@@ -94,7 +94,13 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
     private func handle(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
         switch call.method {
         case "handle":
-            result(bridge != nil ? Int(ftessera_engine_handle(bridge)) : 0)
+            if let bridge = bridge {
+                result(Int(ftessera_engine_handle(bridge)))
+            } else {
+                result(FlutterError(code: "no_engine",
+                                    message: String(cString: ftessera_create_error()),
+                                    details: nil))
+            }
         case "start":
             start()
             result(nil)
@@ -113,12 +119,18 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
     private func start() {
         guard link == nil, bridge != nil else { return }
         lastTime = CACurrentMediaTime()
-        let l = CADisplayLink(target: self, selector: #selector(renderFrame))
+        // A CADisplayLink retains its target and the run loop retains the link,
+        // so targeting `self` directly would keep this view (and its engine)
+        // alive forever — leaking on every teardown and, on hot restart, stacking
+        // a second engine on the un-released old one. Drive it through a weak
+        // proxy so `deinit` runs and tears the engine down.
+        let l = CADisplayLink(target: WeakRenderProxy(self),
+                              selector: #selector(WeakRenderProxy.tick))
         l.add(to: .main, forMode: .common)
         link = l
     }
 
-    @objc private func renderFrame() {
+    fileprivate func renderFrame() {
         guard let bridge = bridge else { return }
 
         // The metal view may not be reachable at init time; keep trying for a
@@ -133,8 +145,10 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
         let (w, h) = drawablePixelSize()
         if w == 0 || h == 0 { return }
 
+        var sizeChanged = false
         if w != bufW || h != bufH {
             bufW = w; bufH = h
+            sizeChanged = true
             ftessera_resize(bridge, Int32(w), Int32(h), Float(scale()))
             // Keep the reparented view filling the container. It was attached
             // before Flutter sized the platform view, so its frame must be
@@ -157,6 +171,16 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
 
         // Advance + render + present straight to the swapchain. No CPU copy.
         ftessera_present(bridge, dt)
+
+        // Notify Dart AFTER present so the pending scene has been promoted this
+        // tick — cameraFitDistance fits to live tiles, which don't exist until
+        // the first tick. Sending before present would race the initial fit.
+        if sizeChanged {
+            channel.invokeMethod("resize", arguments: [
+                "width": Double(container.bounds.width),
+                "height": Double(container.bounds.height),
+            ])
+        }
         let err = String(cString: ftessera_last_error(bridge))
         if !err.isEmpty && err != lastLoggedError {
             lastLoggedError = err
@@ -216,4 +240,12 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
         // from the container and releases SDL's reference to it.
         if let bridge = bridge { ftessera_destroy(bridge) }
     }
+}
+
+/// Weak forwarder so the CADisplayLink does not retain the platform view (which
+/// would prevent teardown; see start()).
+private final class WeakRenderProxy {
+    weak var target: TesseraPlatformView?
+    init(_ target: TesseraPlatformView) { self.target = target }
+    @objc func tick() { target?.renderFrame() }
 }
