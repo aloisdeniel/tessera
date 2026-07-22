@@ -15,6 +15,10 @@ typedef struct TsSnapshot {
     TesseraTilePlacement*   tiles;    size_t tile_count;
     TesseraEntityPlacement* entities; size_t entity_count;
     TesseraEffectPlacement* effects;  size_t effect_count;
+    TesseraCardPlacement*     cards;      size_t card_count;
+    TesseraCardDrawPlacement* card_draws; size_t card_draw_count;
+    TesseraHandPlacement*     hands;      size_t hand_count;
+    TesseraDicePlacement*     dice;       size_t dice_count;
     TesseraCamera camera;
     uint64_t      epoch;
     void*         block;   /* single backing allocation (may be NULL if empty) */

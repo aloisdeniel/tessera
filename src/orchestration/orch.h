@@ -13,6 +13,7 @@
 #include "core/core.h"
 #include "core/tmath.h"
 #include "anim/anim.h"
+#include "card/card.h"
 #include "state.h"
 #include "tessera.h"
 
@@ -63,9 +64,37 @@ typedef struct {
     bool    alive;
 } TsTileInst;
 
+/* Live per-card instance. Covers both single cards and card piles (draws); a
+ * pile sets `is_draw` and animates its `thick` (thickness from card count). The
+ * front (or pile top) crossfades visible<->hidden via `mix`. Cards attached to a
+ * hand have their transform overridden by the hand fan (computed on diff). */
+typedef struct {
+    uint64_t     id;         /* card id or draw id (namespaced by is_draw) */
+    TesseraDefId def;
+    bool         is_draw;
+    /* transform endpoints */
+    vec3    from_pos, to_pos;
+    versor  from_rot, to_rot;
+    float   from_scale, to_scale;
+    float   from_alpha, to_alpha;
+    TsTween tween;
+    /* front crossfade (0 = visible, 1 = hidden) */
+    float   from_mix, to_mix;
+    TsTween mix_tween;
+    /* pile thickness (world units) */
+    float   from_thick, to_thick;
+    TsTween thick_tween;
+    uint32_t count;
+    bool    hidden;          /* last target hidden / top_hidden */
+    bool    removing, alive;
+    /* current interpolated */
+    vec3    pos; versor rot; float scale, alpha, mix, thick;
+} TsCardInst;
+
 struct TsOrch {
     TsEntityInst* entities; size_t entity_count, entity_cap;
     TsTileInst*   tiles;    size_t tile_count,   tile_cap;
+    TsCardInst*   cards;    size_t card_count,   card_cap;
     bool          seeded;   /* first promotion snaps instead of animating */
 };
 
@@ -100,6 +129,11 @@ bool ts_orch_tile_pos(const struct TsOrch* o, TesseraTileId id, vec3 out);
 /* Build the frame draw list from live instances into `arena`. Returns count. */
 size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
                               TsArena* arena, struct TsDrawItem** out);
+
+/* Build the card/pile draw items into `arena` (drawn with the card pipeline).
+ * Returns count with *out pointing at the arena array. */
+size_t ts_orch_build_cards(struct TsOrch* o, TesseraEngine* e,
+                           TsArena* arena, TsCardDrawItem** out);
 
 /* A blob-shadow decal cast by an entity onto the ground plane (M7). */
 typedef struct {

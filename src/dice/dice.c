@@ -15,6 +15,7 @@
 
 #include "engine.h"
 #include "registry.h"
+#include "state.h"
 #include "anim/anim.h"
 #include "stb_image.h"
 
@@ -848,7 +849,7 @@ static DiceInst* dice_alloc(TsDice* d) {
     return it;
 }
 
-void ts_dice_add(TsDice* d, TesseraEngine* e, const TesseraDiceThrow* spec) {
+void ts_dice_add(TsDice* d, TesseraEngine* e, const TsDiceThrow* spec) {
     if (!d || !e || !spec) return;
     TsDef* def = ts_registry_get(&e->registry, spec->def, TS_DEF_DICE);
     if (!def || !def->as.dice.valid) return;
@@ -1035,6 +1036,65 @@ void ts_dice_advance(TsDice* d, float dt) {
             continue;
         }
         ++i;
+    }
+}
+
+/* ==========================================================================
+ *  State diff: throw newly-appeared dice, remove vanished ones
+ * ======================================================================= */
+static const TesseraDicePlacement* find_dice_placement(const TsSnapshot* s,
+                                                        TesseraDiceId id) {
+    if (!s) return NULL;
+    for (size_t i = 0; i < s->dice_count; ++i)
+        if (s->dice[i].id == id) return &s->dice[i];
+    return NULL;
+}
+
+/* True when two placements describe the same throw (so we must NOT re-throw a
+ * die that is already settling/settled on an unchanged placement). */
+static bool dice_placement_same(const TesseraDicePlacement* a,
+                                const TesseraDicePlacement* b) {
+    if (!a || !b) return false;
+    return a->def == b->def && a->face == b->face && a->seed == b->seed &&
+           a->throw_s == b->throw_s &&
+           a->position[0] == b->position[0] &&
+           a->position[1] == b->position[1] &&
+           a->position[2] == b->position[2];
+}
+
+void ts_dice_on_promote(TesseraEngine* e, const TsSnapshot* prev,
+                        const TsSnapshot* next, float remove_s) {
+    if (!e) return;
+    size_t nd = next ? next->dice_count : 0;
+    /* Lazily create the live-set only if there is (or was) something to do. */
+    if (!e->dice) {
+        if (nd == 0) return;
+        e->dice = ts_dice_create();
+        if (!e->dice) return;
+    }
+    TsDice* d = e->dice;
+
+    /* Throw dice that are new, or whose placement changed since prev. */
+    for (size_t i = 0; i < nd; ++i) {
+        const TesseraDicePlacement* p = &next->dice[i];
+        if (p->id == 0) continue;
+        const TesseraDicePlacement* pp = find_dice_placement(prev, p->id);
+        bool live = dice_find(d, p->id) != NULL;
+        if (live && pp && dice_placement_same(pp, p)) continue;  /* unchanged */
+        TsDiceThrow t = { .id = p->id, .def = p->def, .face = p->face,
+                          .seed = p->seed, .throw_s = p->throw_s };
+        t.position[0] = p->position[0];
+        t.position[1] = p->position[1];
+        t.position[2] = p->position[2];
+        ts_dice_add(d, e, &t);
+    }
+
+    /* Remove live dice absent from the next state. */
+    for (size_t i = 0; i < d->count; ++i) {
+        DiceInst* it = &d->items[i];
+        if (!it->alive || it->removing) continue;
+        if (!find_dice_placement(next, it->id))
+            ts_dice_remove(d, it->id, remove_s);
     }
 }
 

@@ -4,6 +4,8 @@
 #include "orchestration/orch.h"
 #include "anim/skeleton.h"
 #include "fx/fx.h"
+#include "dice/dice.h"
+#include "card/card.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -67,6 +69,51 @@ static void record_blobs(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
         glm_vec4_copy((vec4){ 0.0f, 0.0f, 1.0f, 1.0f }, ou.uv_rect);
         SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
         SDL_DrawGPUIndexedPrimitives(pass, quad->index_count, 1, 0, 0, 0);
+    }
+}
+
+/* Draw the live cards / piles with the dedicated card pipeline (3 samplers +
+ * crossfade). Runs after the opaque mesh pass, depth-tested and depth-writing so
+ * cards occlude one another correctly; alpha-blended for fades/flips. */
+static void record_cards(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
+                         SDL_GPURenderPass* pass, const TsFrameUniform* fu) {
+    TsGpu* g = &e->gpu;
+    if (!g->card_pipeline || !e->orch) return;
+
+    TsCardDrawItem* cards = NULL;
+    size_t nc = ts_orch_build_cards(e->orch, e, &e->frame_arena, &cards);
+    if (nc == 0) return;
+
+    SDL_BindGPUGraphicsPipeline(pass, g->card_pipeline);
+    SDL_PushGPUVertexUniformData(cmd, 0, fu, sizeof *fu);
+    SDL_PushGPUFragmentUniformData(cmd, 0, fu, sizeof *fu);
+
+    for (size_t i = 0; i < nc; ++i) {
+        const TsCardDrawItem* c = &cards[i];
+        if (!c->mesh || !c->mesh->vbo) continue;
+
+        TsCardObjectUniform ou;
+        glm_mat4_copy((vec4*)c->model, ou.model);
+        glm_vec4_copy((float*)c->tint, ou.tint);
+        glm_vec4_copy((float*)c->uv_visible, ou.uv_visible);
+        glm_vec4_copy((float*)c->uv_hidden, ou.uv_hidden);
+        glm_vec4_copy((float*)c->uv_back, ou.uv_back);
+        glm_vec4_copy((vec4){ c->mix, 0.0f, 0.0f, 0.0f }, ou.params);
+        SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+        SDL_PushGPUFragmentUniformData(cmd, 1, &ou, sizeof ou);
+
+        SDL_GPUBufferBinding vb = { .buffer = c->mesh->vbo, .offset = 0 };
+        SDL_GPUBufferBinding ib = { .buffer = c->mesh->ibo, .offset = 0 };
+        SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+        SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+        SDL_GPUTexture* white = e->registry.white.texture;
+        SDL_GPUTextureSamplerBinding tsb[3] = {
+            { .texture = c->tex_visible ? c->tex_visible : white, .sampler = g->linear_sampler },
+            { .texture = c->tex_hidden  ? c->tex_hidden  : white, .sampler = g->linear_sampler },
+            { .texture = c->tex_back    ? c->tex_back    : white, .sampler = g->linear_sampler },
+        };
+        SDL_BindGPUFragmentSamplers(pass, 0, tsb, 3);
+        SDL_DrawGPUIndexedPrimitives(pass, c->mesh->index_count, 1, 0, 0, 0);
     }
 }
 
@@ -148,12 +195,14 @@ void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
     e->camera.dirty = true;
     ts_camera_update(&e->camera, aspect);
 
-    TsDrawItem* items = NULL;
-    size_t count = ts_scene_build_drawlist(e, &e->frame_arena, &items);
-    if (count == 0 || !g->mesh_pipeline) return;
-
     TsFrameUniform fu;
     fill_frame_uniform(e, &fu);
+
+    /* Opaque mesh + dice geometry. A scene with only cards (no tiles/entities)
+     * still needs the card/decal/particle passes below, so don't early-return on
+     * an empty mesh list — just skip the mesh loop. */
+    TsDrawItem* items = NULL;
+    size_t count = g->mesh_pipeline ? ts_scene_build_drawlist(e, &e->frame_arena, &items) : 0;
 
     /* Bind the pipeline lazily so mixed static/skinned scenes only switch when
      * needed. bound: 0=none, 1=static mesh, 2=skinned. */
@@ -201,6 +250,10 @@ void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
         SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
         SDL_DrawGPUIndexedPrimitives(pass, it->mesh->index_count, 1, 0, 0, 0);
     }
+
+    /* Cards use their own pipeline; draw them (depth-writing) before the
+     * translucent decal/particle passes. */
+    record_cards(e, cmd, pass, &fu);
 
     /* M7 blob shadows, M6 particles: translucent passes after opaque geometry. */
     record_blobs(e, cmd, pass, &fu);
@@ -284,6 +337,7 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
             if (e->orch) ts_orch_on_promote(e->orch, e, prev, next, &e->timing);
             if (!e->fx) e->fx = ts_fx_create();
             ts_fx_on_promote(e, prev, next);
+            ts_dice_on_promote(e, prev, next, e->timing.remove_s);
             apply_camera(e, &next->camera);
         }
     }

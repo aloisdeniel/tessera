@@ -165,28 +165,52 @@ static void register_die(TesseraEngine* e, uint32_t faces, float size, float x,
     g_ntypes++;
 }
 
-/* Throw every die type to a fresh random face + trajectory. */
+/* ------------------------------------------------------------------ scene */
+static TesseraDefId g_felt = 0;
+static TesseraTilePlacement g_tiles[15 * 9];
+static size_t g_ntiles = 0;
+static TesseraDicePlacement g_dice[8];
+static int g_nlive = 0;
+
+/* Push the whole scene (felt + live dice) as one immutable state. */
+static void push_state(TesseraEngine* e) {
+    TesseraState st = {0};
+    st.tiles = g_tiles; st.tile_count = g_ntiles;
+    st.dice = g_dice; st.dice_count = (size_t)g_nlive;
+    st.camera.focus.x = 0.0f; st.camera.focus.y = 0.0f;
+    st.camera.distance = 13.5f;
+    st.camera.yaw = 0.28f;
+    st.camera.pitch = 0.80f;
+    st.camera.fov = 0.9f;
+    tessera_set_state(e, &st);
+}
+
+/* Throw every die type to a fresh random face + trajectory (state-driven). */
 static void throw_all(TesseraEngine* e, unsigned* rng) {
+    g_nlive = 0;
     for (int i = 0; i < g_ntypes; ++i) {
         if (!g_types[i].def) continue;
         *rng = *rng * 1664525u + 1013904223u;
         uint32_t face = (*rng >> 8) % g_types[i].faces;
         uint32_t seed = (*rng >> 3);
-        TesseraDiceThrow t = {0};
-        t.id = (TesseraDiceId)(i + 1);
-        t.def = g_types[i].def;
-        t.face = face;
-        t.position[0] = g_types[i].x;
-        t.position[1] = 0.55f;           /* float above the felt */
-        t.position[2] = 0.0f;
-        t.seed = seed;
-        t.throw_s = 1.2f;
-        tessera_add_dice(e, &t);
+        TesseraDicePlacement* p = &g_dice[g_nlive++];
+        memset(p, 0, sizeof *p);
+        p->id = (TesseraDiceId)(i + 1);
+        p->def = g_types[i].def;
+        p->face = face;
+        p->position[0] = g_types[i].x;
+        p->position[1] = 0.55f;           /* float above the felt */
+        p->position[2] = 0.0f;
+        p->seed = seed;
+        p->throw_s = 1.2f;
     }
+    push_state(e);
 }
 
-/* ------------------------------------------------------------------ scene */
-static TesseraDefId g_felt = 0;
+static void clear_dice(TesseraEngine* e) {
+    g_nlive = 0;
+    push_state(e);
+}
 
 static void build_scene(TesseraEngine* e) {
     TesseraTileDef felt = {0};
@@ -194,25 +218,17 @@ static void build_scene(TesseraEngine* e) {
     felt.thickness = 0.2f;
     g_felt = tessera_register_tile_def(e, &felt);
 
-    static TesseraTilePlacement tiles[15 * 9];
-    size_t n = 0;
+    g_ntiles = 0;
     for (int z = -4; z <= 4; ++z)
         for (int x = -7; x <= 7; ++x) {
-            tiles[n].coord.x = x; tiles[n].coord.y = z;
-            tiles[n].tile_def = g_felt;
-            tiles[n].variant = 0;
-            tiles[n].id = 0;
-            n++;
+            g_tiles[g_ntiles].coord.x = x; g_tiles[g_ntiles].coord.y = z;
+            g_tiles[g_ntiles].tile_def = g_felt;
+            g_tiles[g_ntiles].variant = 0;
+            g_tiles[g_ntiles].id = 0;
+            g_ntiles++;
         }
 
-    TesseraState st = {0};
-    st.tiles = tiles; st.tile_count = n;
-    st.camera.focus.x = 0.0f; st.camera.focus.y = 0.0f;
-    st.camera.distance = 13.5f;
-    st.camera.yaw = 0.28f;
-    st.camera.pitch = 0.80f;
-    st.camera.fov = 0.9f;
-    tessera_set_state(e, &st);
+    push_state(e);
 }
 
 /* ------------------------------------------------------------------ demo */
@@ -302,7 +318,7 @@ int main(int argc, char** argv) {
                 case SDLK_ESCAPE: running = false; break;
                 case SDLK_SPACE:
                 case SDLK_R: throw_all(e, &rng); break;
-                case SDLK_C: tessera_clear_dice(e); break;
+                case SDLK_C: clear_dice(e); break;
                 case SDLK_LEFT:  tessera__debug_orbit(e, -0.12f, 0, 0); break;
                 case SDLK_RIGHT: tessera__debug_orbit(e,  0.12f, 0, 0); break;
                 case SDLK_UP:    tessera__debug_orbit(e, 0, -0.08f, 0); break;

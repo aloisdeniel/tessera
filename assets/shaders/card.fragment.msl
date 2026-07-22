@@ -1,0 +1,83 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;
+    float4   ambient;
+    float4   light_color;
+    float4   camera_pos;
+};
+struct CardUniform {
+    float4x4 model;
+    float4   tint;
+    float4   uv_visible;
+    float4   uv_hidden;
+    float4   uv_back;
+    float4   params;       // x = mix (0 visible .. 1 hidden)
+};
+
+struct VSOut {
+    float4 position [[position]];
+    float3 world_pos;
+    float3 normal;
+    float2 uv;
+    float  face;
+};
+
+static inline float3 srgb_to_linear(float3 c) { return pow(max(c, 0.0), 2.2); }
+static inline float3 linear_to_srgb(float3 c) { return pow(max(c, 0.0), 1.0 / 2.2); }
+
+static inline float cel_ramp(float ndl) {
+    const float bands = 3.0;
+    float scaled = ndl * bands;
+    float lower  = floor(scaled);
+    float frac   = scaled - lower;
+    float soft   = smoothstep(0.35, 0.65, frac);
+    return (lower + soft) / bands;
+}
+
+// Map local 0..1 uv into an atlas rect (u0,v0,u1,v1).
+static inline float2 remap(float2 uv, float4 rect) {
+    return rect.xy + uv * (rect.zw - rect.xy);
+}
+
+fragment float4 fs_main(VSOut in [[stage_in]],
+                        constant FrameUniform& frame [[buffer(0)]],
+                        constant CardUniform&  card  [[buffer(1)]],
+                        texture2d<float> tex_visible [[texture(0)]],
+                        texture2d<float> tex_hidden  [[texture(1)]],
+                        texture2d<float> tex_back    [[texture(2)]],
+                        sampler samp                 [[sampler(0)]])
+{
+    float4 texel;
+    if (in.face < 0.5) {
+        // front: crossfade visible <-> hidden
+        float4 vis = tex_visible.sample(samp, remap(in.uv, card.uv_visible));
+        float4 hid = tex_hidden.sample(samp, remap(in.uv, card.uv_hidden));
+        texel = mix(vis, hid, clamp(card.params.x, 0.0, 1.0));
+    } else if (in.face < 1.5) {
+        // back / bottom
+        texel = tex_back.sample(samp, remap(in.uv, card.uv_back));
+    } else {
+        // edge rim: plain (tinted) paper
+        texel = float4(1.0, 1.0, 1.0, 1.0);
+    }
+    texel *= card.tint;
+
+    float3 n = normalize(in.normal);
+    float3 L = normalize(-frame.light_dir.xyz);
+    float3 V = normalize(frame.camera_pos.xyz - in.world_pos);
+    float3 albedo = srgb_to_linear(texel.rgb);
+
+    float ndl  = max(dot(n, L), 0.0);
+    float ramp = cel_ramp(ndl);
+    float3 ambient = srgb_to_linear(frame.ambient.rgb);
+    float3 direct  = frame.light_color.rgb * frame.light_color.a * ramp;
+    float3 lit     = albedo * (ambient + direct);
+
+    float rim = pow(1.0 - max(dot(n, V), 0.0), 4.0);
+    lit += rim * 0.10 * frame.light_color.rgb;
+
+    return float4(linear_to_srgb(lit), texel.a);
+}

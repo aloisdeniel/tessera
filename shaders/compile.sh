@@ -24,4 +24,6 @@ compile particle.frag particle.fragment
 compile dof.vert      dof.vertex
 compile dof.frag      dof.fragment
 compile skinned.vert  skinned.vertex
+compile card.vert     card.vertex
+compile card.frag     card.fragment
 echo "SPIR-V shaders rebuilt."

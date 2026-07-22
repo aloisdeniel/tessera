@@ -51,18 +51,35 @@ void ts_dice_free_model(TsGpu* gpu, TsDiceModel* m);
 /* ---- live dice set ---------------------------------------------------- */
 typedef struct TsDice TsDice;
 
+/* Internal throw spec (built from a TesseraDicePlacement during a state diff). */
+typedef struct {
+    TesseraDiceId id;
+    TesseraDefId  def;
+    uint32_t      face;
+    float         position[3];
+    uint32_t      seed;
+    float         throw_s;
+} TsDiceThrow;
+
 TsDice* ts_dice_create(void);
 void    ts_dice_destroy(TsDice* d);
 
 /* Throw a die (or re-throw an existing one with the same id). Reads the model
  * for `spec->def` from the engine registry. No-op if the def is not a dice. */
-void ts_dice_add(TsDice* d, TesseraEngine* e, const TesseraDiceThrow* spec);
+void ts_dice_add(TsDice* d, TesseraEngine* e, const TsDiceThrow* spec);
 /* Begin removing a die (fade + shrink over fade_s). Unknown id => no-op. */
 void ts_dice_remove(TsDice* d, TesseraDiceId id, float fade_s);
 /* Begin removing every live die. */
 void ts_dice_clear(TsDice* d, float fade_s);
 /* Advance all tumbles + fades by dt (already scaled by speed_multiplier). */
 void ts_dice_advance(TsDice* d, float dt);
+
+/* Diff the dice placements in prev->next and drive throws/removals. `prev` may
+ * be NULL (first state). Creates the live-set lazily on the engine. Called from
+ * the engine on each promotion (mirrors ts_fx_on_promote). */
+struct TsSnapshot;
+void ts_dice_on_promote(TesseraEngine* e, const struct TsSnapshot* prev,
+                        const struct TsSnapshot* next, float remove_s);
 
 bool     ts_dice_all_idle(const TsDice* d);
 uint32_t ts_dice_count(const TsDice* d);

@@ -83,19 +83,27 @@ int main(void) {
         CHECK(tessera_dice_def_face_count(e, defs[i]) == counts[i]);
     }
 
-    /* throw one of each, landing on a chosen face (< its face count) */
+    /* throw one of each, landing on a chosen face (< its face count) — via state */
     uint32_t want[ND] = { 1, 3, 4, 6, 11, 19, 7 };
+    TesseraDicePlacement dice[ND];
+    memset(dice, 0, sizeof dice);
     for (int i = 0; i < ND; ++i) {
-        TesseraDiceThrow t = {0};
-        t.id = (TesseraDiceId)(i + 1);
-        t.def = defs[i];
-        t.face = want[i];
-        t.position[0] = (float)(i * 2 - 6);
-        t.position[1] = 0.5f;
-        t.seed = (uint32_t)(i * 17 + 3);
-        t.throw_s = 1.0f;
-        tessera_add_dice(e, &t);
+        dice[i].id = (TesseraDiceId)(i + 1);
+        dice[i].def = defs[i];
+        dice[i].face = want[i];
+        dice[i].position[0] = (float)(i * 2 - 6);
+        dice[i].position[1] = 0.5f;
+        dice[i].seed = (uint32_t)(i * 17 + 3);
+        dice[i].throw_s = 1.0f;
     }
+    TesseraState st = {0};
+    st.dice = dice; st.dice_count = ND;
+    st.camera.distance = 14.0f; st.camera.pitch = 0.8f; st.camera.fov = 0.9f;
+    tessera_set_state(e, &st);
+
+    unsigned char buf[64 * 64 * 4];
+    /* first frame promotes the state and throws every die */
+    CHECK(tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf));
     CHECK(tessera_dice_count(e) == ND);
     CHECK(!tessera_dice_all_idle(e));
 
@@ -104,7 +112,6 @@ int main(void) {
     CHECK(tessera_dice_face(e, 2, &f0) && f0 == want[1]);
 
     /* advance until settled (cap the iterations) */
-    unsigned char buf[64 * 64 * 4];
     int steps = 0;
     while (!tessera_dice_all_idle(e) && steps < 600) {
         CHECK(tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf));
@@ -120,23 +127,30 @@ int main(void) {
         CHECK(f == want[i]);
     }
 
-    /* remove one: it fades then culls */
-    tessera_remove_dice(e, 3);
+    /* remove one: drop it from the state — it fades then culls */
+    TesseraDicePlacement fewer[ND - 1];
+    int w = 0;
+    for (int i = 0; i < ND; ++i) if (dice[i].id != 3) fewer[w++] = dice[i];
+    st.dice = fewer; st.dice_count = ND - 1;
+    tessera_set_state(e, &st);
     for (int i = 0; i < 120 && tessera_dice_count(e) == ND; ++i)
         tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf);
     CHECK(tessera_dice_count(e) == ND - 1);
 
-    /* clear the rest */
-    tessera_clear_dice(e);
+    /* clear the rest: state with no dice */
+    st.dice = NULL; st.dice_count = 0;
+    tessera_set_state(e, &st);
     for (int i = 0; i < 200 && tessera_dice_count(e) > 0; ++i)
         tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf);
     CHECK(tessera_dice_count(e) == 0);
     CHECK(tessera_dice_all_idle(e));
 
-    /* re-throw with the same id after everything cleared */
-    TesseraDiceThrow again = { .id = 42, .def = defs[0], .face = 0,
-                               .position = {0, 0.5f, 0}, .seed = 5, .throw_s = 0.5f };
-    tessera_add_dice(e, &again);
+    /* re-throw with a fresh id after everything cleared */
+    TesseraDicePlacement again = { .id = 42, .def = defs[0], .face = 0,
+                                   .position = {0, 0.5f, 0}, .seed = 5, .throw_s = 0.5f };
+    st.dice = &again; st.dice_count = 1;
+    tessera_set_state(e, &st);
+    tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf);
     CHECK(tessera_dice_count(e) == 1);
 
     tessera_destroy(e);

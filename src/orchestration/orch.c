@@ -24,6 +24,16 @@
  * the blob-shadow plane (y=0.02) so the base doesn't z-fight the shadow either. */
 #define TS_ENTITY_LIFT 0.035f
 
+/* ---- card constants ---- */
+#define TS_CARD_FLIP_S   0.32f    /* visible<->hidden crossfade duration       */
+#define TS_CARD_THICK_S  0.30f    /* pile thickness (count) tween duration     */
+#define TS_CARD_PER_CARD 0.012f   /* pile thickness added per extra card       */
+#define TS_CARD_MAX_THICK 0.9f    /* clamp pile thickness (world units)        */
+/* hand-fan defaults (used when the placement leaves a field <= 0) */
+#define TS_HAND_SPREAD   0.5f     /* total fan angle (radians)                 */
+#define TS_HAND_SPACING  0.62f    /* lateral spacing between cards (world)     */
+#define TS_HAND_RADIUS   3.0f     /* arc dip radius (world)                    */
+
 /* ------------------------------------------------------------ lifecycle */
 struct TsOrch* ts_orch_create(void) {
     struct TsOrch* o = (struct TsOrch*)calloc(1, sizeof *o);
@@ -34,6 +44,7 @@ void ts_orch_destroy(struct TsOrch* o) {
     if (!o) return;
     free(o->entities);
     free(o->tiles);
+    free(o->cards);
     free(o);
 }
 
@@ -58,6 +69,24 @@ static TsTileInst* orch_add_tile(struct TsOrch* o) {
     TsTileInst* inst = &o->tiles[o->tile_count++];
     memset(inst, 0, sizeof *inst);
     return inst;
+}
+
+static TsCardInst* orch_add_card(struct TsOrch* o) {
+    if (o->card_count == o->card_cap) {
+        size_t nc = o->card_cap ? o->card_cap * 2 : 8;
+        o->cards = (TsCardInst*)realloc(o->cards, nc * sizeof(TsCardInst));
+        o->card_cap = nc;
+    }
+    TsCardInst* inst = &o->cards[o->card_count++];
+    memset(inst, 0, sizeof *inst);
+    return inst;
+}
+
+static TsCardInst* orch_find_card(struct TsOrch* o, uint64_t id, bool is_draw) {
+    for (size_t i = 0; i < o->card_count; ++i)
+        if (o->cards[i].id == id && o->cards[i].is_draw == is_draw)
+            return &o->cards[i];
+    return NULL;
 }
 
 /* ------------------------------------------------------------- lookups */
@@ -281,6 +310,231 @@ static void setup_anim(TsEntityInst* inst, TesseraEngine* e,
     }
 }
 
+/* ============================================================ cards */
+/* Quaternion from a placement's xyzw (all-zero => identity). */
+static void placement_quat(const float q[4], versor out) {
+    if (q[0] == 0.0f && q[1] == 0.0f && q[2] == 0.0f && q[3] == 0.0f) {
+        glm_quat_identity(out);
+        return;
+    }
+    versor v = { q[0], q[1], q[2], q[3] };
+    glm_quat_normalize_to(v, out);
+}
+
+/* Find a hand placement by id in a snapshot. */
+static const TesseraHandPlacement* find_hand(const TsSnapshot* s, TesseraHandId id) {
+    if (!s || id == 0) return NULL;
+    for (size_t i = 0; i < s->hand_count; ++i)
+        if (s->hands[i].id == id) return &s->hands[i];
+    return NULL;
+}
+
+/* Order two cards within a hand: by hand_slot, then id (stable fan slots). */
+static bool card_before(const TesseraCardPlacement* a, const TesseraCardPlacement* b) {
+    if (a->hand_slot != b->hand_slot) return a->hand_slot < b->hand_slot;
+    return a->id < b->id;
+}
+
+/* World transform of a card fanned in a hand: rank r of count N. Cards face the
+ * hand's local +Z, spread along local +X and dip at the ends; each is rolled
+ * about the front axis so the fan splays. The model front is +Y, so a base
+ * rotation stands it up to face +Z. */
+static void hand_fan_target(const TesseraHandPlacement* h, uint32_t r, uint32_t n,
+                            vec3 out_pos, versor out_rot) {
+    float spread  = h->spread_deg > 0.0f ? glm_rad(h->spread_deg) : TS_HAND_SPREAD;
+    float spacing = h->card_spacing > 0.0f ? h->card_spacing : TS_HAND_SPACING;
+    float radius  = h->radius > 0.0f ? h->radius : TS_HAND_RADIUS;
+
+    float t = (n > 1) ? ((float)r / (float)(n - 1) - 0.5f) : 0.0f;  /* -0.5..0.5 */
+    float theta = t * spread;
+    float xoff = ((float)r - (float)(n - 1) * 0.5f) * spacing;
+    float yoff = -(1.0f - cosf(theta)) * radius;
+    float zoff = (float)r * 0.01f;                 /* stagger toward the viewer */
+    vec3 local = { xoff, yoff, zoff };
+
+    versor hrot; placement_quat(h->orientation, hrot);
+    vec3 rotated; glm_quat_rotatev(hrot, local, rotated);
+    out_pos[0] = h->position[0] + rotated[0];
+    out_pos[1] = h->position[1] + rotated[1];
+    out_pos[2] = h->position[2] + rotated[2];
+
+    /* stand the card up (front +Y -> +Z), then roll it in-plane by -theta */
+    versor base; glm_quatv(base, GLM_PI_2f, (vec3){1.0f, 0.0f, 0.0f});
+    versor roll; glm_quatv(roll, -theta, (vec3){0.0f, 0.0f, 1.0f});
+    versor local_rot; glm_quat_mul(roll, base, local_rot);
+    glm_quat_mul(hrot, local_rot, out_rot);
+    glm_quat_normalize(out_rot);
+}
+
+/* Target transform for card index `i` in `next` (free placement or hand fan). */
+static void card_target(const TsSnapshot* next, size_t i, vec3 out_pos, versor out_rot) {
+    const TesseraCardPlacement* cp = &next->cards[i];
+    const TesseraHandPlacement* h = find_hand(next, cp->hand);
+    if (cp->hand != 0 && h) {
+        /* rank within the hand + total count */
+        uint32_t n = 0, r = 0;
+        for (size_t j = 0; j < next->card_count; ++j) {
+            const TesseraCardPlacement* o = &next->cards[j];
+            if (o->hand != cp->hand) continue;
+            n++;
+            if (j != i && card_before(o, cp)) r++;
+        }
+        if (n == 0) n = 1;
+        hand_fan_target(h, r, n, out_pos, out_rot);
+        return;
+    }
+    out_pos[0] = cp->position[0];
+    out_pos[1] = cp->position[1];
+    out_pos[2] = cp->position[2];
+    placement_quat(cp->orientation, out_rot);
+}
+
+/* Pile thickness (world units) for a card count. */
+static float draw_thickness(TesseraEngine* e, TesseraDefId def, uint32_t count) {
+    float base = 0.03f;
+    TsDef* d = ts_registry_get(&e->registry, def, TS_DEF_CARD);
+    if (d && d->as.card.valid) base = d->as.card.thickness;
+    float extra = count > 1 ? (float)(count - 1) * TS_CARD_PER_CARD : 0.0f;
+    float t = base + extra;
+    return t > TS_CARD_MAX_THICK ? TS_CARD_MAX_THICK : t;
+}
+
+/* Snap a card instance to its target (tweens complete). */
+static void card_snap(TsCardInst* c, uint64_t id, TesseraDefId def, bool is_draw,
+                      const vec3 pos, const versor rot, bool hidden,
+                      float thick, uint32_t count) {
+    c->id = id; c->def = def; c->is_draw = is_draw;
+    glm_vec3_copy((float*)pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
+    glm_quat_copy((float*)rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
+    c->from_scale = c->to_scale = 1.0f;
+    c->from_alpha = c->to_alpha = 1.0f;
+    c->hidden = hidden;
+    c->from_mix = c->to_mix = hidden ? 1.0f : 0.0f;
+    c->from_thick = c->to_thick = thick;
+    c->count = count;
+    c->removing = false; c->alive = true;
+    glm_vec3_copy((float*)pos, c->pos); glm_quat_copy((float*)rot, c->rot);
+    c->scale = 1.0f; c->alpha = 1.0f; c->mix = c->to_mix; c->thick = thick;
+    ts_tween_start(&c->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+    ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+    ts_tween_start(&c->thick_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+/* Spawn a card (fade + pop in) at its target. */
+static void card_spawn(TsCardInst* c, uint64_t id, TesseraDefId def, bool is_draw,
+                       const vec3 pos, const versor rot, bool hidden,
+                       float thick, uint32_t count, float add_s) {
+    card_snap(c, id, def, is_draw, pos, rot, hidden, thick, count);
+    c->from_scale = 0.0f; c->to_scale = 1.0f;
+    c->from_alpha = 0.0f; c->to_alpha = 1.0f;
+    c->scale = 0.0f; c->alpha = 0.0f;
+    ts_tween_start(&c->tween, add_s, 0.0f, TS_EASE_OUT_BACK);
+}
+
+/* Retarget a live card toward a new target, tweening from the current pose. */
+static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
+                          const versor rot, bool hidden, float thick, uint32_t count,
+                          const TesseraTiming* timing) {
+    c->def = def;
+    glm_vec3_copy(c->pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
+    glm_quat_copy(c->rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
+    c->from_scale = c->scale; c->to_scale = 1.0f;
+    c->from_alpha = c->alpha; c->to_alpha = 1.0f;
+    c->removing = false; c->alive = true;
+    ts_tween_start(&c->tween, timing->move_s, 0.0f, TS_EASE_OUT_CUBIC);
+
+    if (hidden != c->hidden) {                     /* flip: crossfade the front */
+        c->from_mix = c->mix; c->to_mix = hidden ? 1.0f : 0.0f;
+        ts_tween_start(&c->mix_tween, TS_CARD_FLIP_S, 0.0f, TS_EASE_IN_OUT_CUBIC);
+        c->hidden = hidden;
+    } else {
+        c->from_mix = c->to_mix = c->mix;
+        ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+    }
+    if (thick != c->to_thick) {                    /* count changed: grow/shrink */
+        c->from_thick = c->thick; c->to_thick = thick;
+        ts_tween_start(&c->thick_tween, TS_CARD_THICK_S, 0.0f, TS_EASE_OUT_CUBIC);
+    } else {
+        c->from_thick = c->to_thick = thick;
+        ts_tween_start(&c->thick_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+    }
+    c->count = count;
+}
+
+static void card_remove(TsCardInst* c, float remove_s) {
+    glm_vec3_copy(c->pos, c->from_pos); glm_vec3_copy(c->pos, c->to_pos);
+    glm_quat_copy(c->rot, c->from_rot); glm_quat_copy(c->rot, c->to_rot);
+    c->from_scale = c->scale; c->to_scale = 0.0f;
+    c->from_alpha = c->alpha; c->to_alpha = 0.0f;
+    c->from_mix = c->to_mix = c->mix;
+    c->from_thick = c->to_thick = c->thick;
+    c->removing = true;
+    ts_tween_start(&c->tween, remove_s, 0.0f, TS_EASE_IN_CUBIC);
+    ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+    ts_tween_start(&c->thick_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+/* Diff cards + card-draws (present in both single card and pile forms). */
+static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next,
+                      const TesseraTiming* timing, bool seed) {
+    size_t nc  = next ? next->card_count : 0;
+    size_t ncd = next ? next->card_draw_count : 0;
+
+    if (seed) o->card_count = 0;
+
+    /* single cards */
+    for (size_t i = 0; i < nc; ++i) {
+        const TesseraCardPlacement* cp = &next->cards[i];
+        if (cp->id == 0) continue;
+        vec3 pos; versor rot; card_target(next, i, pos, rot);
+        float thick = draw_thickness(e, cp->def, 1);
+        if (seed) {
+            card_snap(orch_add_card(o), cp->id, cp->def, false, pos, rot,
+                      cp->hidden, thick, 1);
+            continue;
+        }
+        TsCardInst* c = orch_find_card(o, cp->id, false);
+        if (c) card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, timing);
+        else   card_spawn(orch_add_card(o), cp->id, cp->def, false, pos, rot,
+                          cp->hidden, thick, 1, timing->add_s);
+    }
+
+    /* card piles (draws) */
+    for (size_t i = 0; i < ncd; ++i) {
+        const TesseraCardDrawPlacement* dp = &next->card_draws[i];
+        if (dp->id == 0) continue;
+        vec3 pos = { dp->position[0], dp->position[1], dp->position[2] };
+        versor rot; placement_quat(dp->orientation, rot);
+        float thick = draw_thickness(e, dp->def, dp->count);
+        if (seed) {
+            card_snap(orch_add_card(o), dp->id, dp->def, true, pos, rot,
+                      dp->top_hidden, thick, dp->count);
+            continue;
+        }
+        TsCardInst* c = orch_find_card(o, dp->id, true);
+        if (c) card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, timing);
+        else   card_spawn(orch_add_card(o), dp->id, dp->def, true, pos, rot,
+                          dp->top_hidden, thick, dp->count, timing->add_s);
+    }
+
+    if (seed) return;
+
+    /* live cards/piles absent from next: begin removal */
+    for (size_t i = 0; i < o->card_count; ++i) {
+        TsCardInst* c = &o->cards[i];
+        if (c->removing) continue;
+        bool present = false;
+        if (c->is_draw) {
+            for (size_t j = 0; j < ncd; ++j)
+                if (next->card_draws[j].id == c->id) { present = true; break; }
+        } else {
+            for (size_t j = 0; j < nc; ++j)
+                if (next->cards[j].id == c->id) { present = true; break; }
+        }
+        if (!present) card_remove(c, timing->remove_s);
+    }
+}
+
 /* --------------------------------------------------------- on_promote */
 void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* prev,
                         const TsSnapshot* next, const TesseraTiming* timing) {
@@ -325,6 +579,7 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
             t->alive = true;
             ts_tween_start(&t->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
         }
+        card_diff(o, e, next, timing, true);
         o->seeded = true;
         free(targets);
         return;
@@ -409,6 +664,8 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
         }
     }
 
+    card_diff(o, e, next, timing, false);
+
     o->seeded = true;
     free(targets);
 }
@@ -476,6 +733,28 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
         }
         ++i;
     }
+
+    /* cards + piles */
+    for (size_t i = 0; i < o->card_count;) {
+        TsCardInst* c = &o->cards[i];
+        ts_tween_advance(&c->tween, dt);
+        ts_tween_advance(&c->mix_tween, dt);
+        ts_tween_advance(&c->thick_tween, dt);
+        float p = ts_tween_value01(&c->tween);
+        glm_vec3_lerp(c->from_pos, c->to_pos, p, c->pos);
+        glm_quat_slerp(c->from_rot, c->to_rot, p, c->rot);
+        c->scale = ts_lerpf(c->from_scale, c->to_scale, p);
+        c->alpha = ts_lerpf(c->from_alpha, c->to_alpha, p);
+        c->mix   = ts_lerpf(c->from_mix, c->to_mix, ts_tween_value01(&c->mix_tween));
+        c->thick = ts_lerpf(c->from_thick, c->to_thick, ts_tween_value01(&c->thick_tween));
+
+        if (c->removing && ts_tween_done(&c->tween)) {
+            o->cards[i] = o->cards[o->card_count - 1];
+            o->card_count--;
+            continue;
+        }
+        ++i;
+    }
 }
 
 /* ----------------------------------------------------------- queries */
@@ -488,11 +767,17 @@ bool ts_orch_is_idle(const struct TsOrch* o) {
         const TsTileInst* t = &o->tiles[i];
         if (t->removing || !ts_tween_done(&t->tween)) return false;
     }
+    for (size_t i = 0; i < o->card_count; ++i) {
+        const TsCardInst* c = &o->cards[i];
+        if (c->removing || !ts_tween_done(&c->tween) ||
+            !ts_tween_done(&c->mix_tween) || !ts_tween_done(&c->thick_tween))
+            return false;
+    }
     return true;
 }
 
 bool ts_orch_has_content(const struct TsOrch* o) {
-    return o->entity_count > 0 || o->tile_count > 0;
+    return o->entity_count > 0 || o->tile_count > 0 || o->card_count > 0;
 }
 
 bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out) {
@@ -638,6 +923,59 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         ++w;
     }
 
+    return w;
+}
+
+/* ----------------------------------------------------------- cards */
+size_t ts_orch_build_cards(struct TsOrch* o, TesseraEngine* e,
+                           TsArena* arena, TsCardDrawItem** out) {
+    *out = NULL;
+    if (o->card_count == 0) return 0;
+    TsCardDrawItem* items = TS_ARENA_ARR(arena, TsCardDrawItem, o->card_count);
+    if (!items) return 0;
+    *out = items;
+
+    size_t w = 0;
+    for (size_t i = 0; i < o->card_count; ++i) {
+        TsCardInst* c = &o->cards[i];
+        if (c->scale <= 0.001f || c->alpha <= 0.003f) continue;
+        TsDef* d = ts_registry_get(&e->registry, c->def, TS_DEF_CARD);
+        if (!d || !d->as.card.valid) continue;
+        const TsCardModel* cm = &d->as.card;
+
+        TsCardDrawItem* it = &items[w];
+        memset(it, 0, sizeof *it);
+        it->mesh = &cm->mesh;
+
+        float base = cm->thickness > 0.0f ? cm->thickness : 0.03f;
+        float sy = c->scale * (c->is_draw ? (c->thick / base) : 1.0f);
+        vec3 sc = { c->scale, sy, c->scale };
+        vec3 dpos; glm_vec3_copy(c->pos, dpos);
+        if (c->is_draw) {   /* rest the pile base on its placement point */
+            vec3 up = { 0.0f, 0.5f * c->thick * c->scale, 0.0f }, wl;
+            glm_quat_rotatev(c->rot, up, wl);
+            glm_vec3_add(dpos, wl, dpos);
+        }
+        ts_trs(dpos, c->rot, sc, it->model);
+
+        it->tint[0] = cm->tint[0]; it->tint[1] = cm->tint[1];
+        it->tint[2] = cm->tint[2]; it->tint[3] = cm->tint[3] * c->alpha;
+        it->mix = c->mix;
+
+        glm_vec4_copy((float*)&cm->visible_uv, it->uv_visible);
+        glm_vec4_copy((float*)&cm->hidden_uv,  it->uv_hidden);
+        it->tex_visible = ts_registry_atlas_texture(&e->registry, cm->visible_atlas);
+        it->tex_hidden  = ts_registry_atlas_texture(&e->registry, cm->hidden_atlas);
+        /* a pile's bottom face always shows the hidden texture */
+        if (c->is_draw) {
+            glm_vec4_copy((float*)&cm->hidden_uv, it->uv_back);
+            it->tex_back = ts_registry_atlas_texture(&e->registry, cm->hidden_atlas);
+        } else {
+            glm_vec4_copy((float*)&cm->back_uv, it->uv_back);
+            it->tex_back = ts_registry_atlas_texture(&e->registry, cm->back_atlas);
+        }
+        ++w;
+    }
     return w;
 }
 

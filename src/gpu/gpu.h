@@ -64,6 +64,17 @@ typedef struct {
     vec4 uv_rect;   /* remap base UVs into an atlas region (u0,v0,u1,v1) */
 } TsObjectUniform;
 
+/* Per-card uniform: three atlas rects (front visible / hidden / back) plus a
+ * crossfade factor. Front fragments lerp visible<->hidden by params.x. */
+typedef struct {
+    mat4 model;
+    vec4 tint;
+    vec4 uv_visible;
+    vec4 uv_hidden;
+    vec4 uv_back;
+    vec4 params;    /* x = mix (0 visible .. 1 hidden); yzw unused */
+} TsCardObjectUniform;
+
 typedef struct {
     SDL_GPUDevice* device;
     SDL_Window*    window;
@@ -94,6 +105,7 @@ typedef struct {
     SDL_GPUGraphicsPipeline* particle_add;    /* additive particles (M6)     */
     SDL_GPUGraphicsPipeline* particle_alpha;  /* alpha particles (M6)        */
     SDL_GPUGraphicsPipeline* dof_pipeline;    /* depth-of-field post pass     */
+    SDL_GPUGraphicsPipeline* card_pipeline;   /* flat card slab (3-sampler)   */
     SDL_GPUSampler*          linear_sampler;
     SDL_GPUSampler*          point_sampler;   /* nearest, for depth sampling  */
 
@@ -138,6 +150,7 @@ bool ts_gpu_create_blob_pipeline(TsGpu* g, char* err, size_t err_sz);       /* M
 bool ts_gpu_create_particle_pipelines(TsGpu* g, char* err, size_t err_sz);  /* M6 */
 bool ts_gpu_create_skinned_pipeline(TsGpu* g, char* err, size_t err_sz);    /* M5 */
 bool ts_gpu_create_dof_pipeline(TsGpu* g, char* err, size_t err_sz);        /* DoF */
+bool ts_gpu_create_card_pipeline(TsGpu* g, char* err, size_t err_sz);       /* cards */
 void ts_gpu_release_pipelines(TsGpu* g);
 
 /* Ensure the offscreen scene color target matches (w,h). Returns false on fail. */

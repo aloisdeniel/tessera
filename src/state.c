@@ -19,20 +19,32 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     s->epoch  = src->epoch;
 
     /* Treat NULL arrays as empty regardless of the reported count. */
-    size_t nt = src->tiles    ? src->tile_count   : 0;
-    size_t ne = src->entities ? src->entity_count : 0;
-    size_t nf = src->effects  ? src->effect_count : 0;
+    size_t nt  = src->tiles      ? src->tile_count      : 0;
+    size_t ne  = src->entities   ? src->entity_count    : 0;
+    size_t nf  = src->effects    ? src->effect_count    : 0;
+    size_t nc  = src->cards      ? src->card_count      : 0;
+    size_t ncd = src->card_draws ? src->card_draw_count : 0;
+    size_t nh  = src->hands      ? src->hand_count      : 0;
+    size_t ndi = src->dice       ? src->dice_count      : 0;
 
-    size_t bytes_t = nt * sizeof(TesseraTilePlacement);
-    size_t bytes_e = ne * sizeof(TesseraEntityPlacement);
-    size_t bytes_f = nf * sizeof(TesseraEffectPlacement);
+    size_t bytes_t  = nt  * sizeof(TesseraTilePlacement);
+    size_t bytes_e  = ne  * sizeof(TesseraEntityPlacement);
+    size_t bytes_f  = nf  * sizeof(TesseraEffectPlacement);
+    size_t bytes_c  = nc  * sizeof(TesseraCardPlacement);
+    size_t bytes_cd = ncd * sizeof(TesseraCardDrawPlacement);
+    size_t bytes_h  = nh  * sizeof(TesseraHandPlacement);
+    size_t bytes_di = ndi * sizeof(TesseraDicePlacement);
 
-    /* Pack the three arrays into a single allocation, keeping each segment
-     * aligned for its element type. */
-    size_t off_t = 0;
-    size_t off_e = ts_align_up(off_t + bytes_t, _Alignof(TesseraEntityPlacement));
-    size_t off_f = ts_align_up(off_e + bytes_e, _Alignof(TesseraEffectPlacement));
-    size_t total = off_f + bytes_f;
+    /* Pack every array into a single allocation, each segment aligned for its
+     * element type. */
+    size_t off_t  = 0;
+    size_t off_e  = ts_align_up(off_t  + bytes_t,  _Alignof(TesseraEntityPlacement));
+    size_t off_f  = ts_align_up(off_e  + bytes_e,  _Alignof(TesseraEffectPlacement));
+    size_t off_c  = ts_align_up(off_f  + bytes_f,  _Alignof(TesseraCardPlacement));
+    size_t off_cd = ts_align_up(off_c  + bytes_c,  _Alignof(TesseraCardDrawPlacement));
+    size_t off_h  = ts_align_up(off_cd + bytes_cd, _Alignof(TesseraHandPlacement));
+    size_t off_di = ts_align_up(off_h  + bytes_h,  _Alignof(TesseraDicePlacement));
+    size_t total  = off_di + bytes_di;
 
     if (total > 0) {
         s->block = malloc(total);
@@ -56,6 +68,26 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
             s->effects = (TesseraEffectPlacement*)(base + off_f);
             memcpy(s->effects, src->effects, bytes_f);
             s->effect_count = nf;
+        }
+        if (nc) {
+            s->cards = (TesseraCardPlacement*)(base + off_c);
+            memcpy(s->cards, src->cards, bytes_c);
+            s->card_count = nc;
+        }
+        if (ncd) {
+            s->card_draws = (TesseraCardDrawPlacement*)(base + off_cd);
+            memcpy(s->card_draws, src->card_draws, bytes_cd);
+            s->card_draw_count = ncd;
+        }
+        if (nh) {
+            s->hands = (TesseraHandPlacement*)(base + off_h);
+            memcpy(s->hands, src->hands, bytes_h);
+            s->hand_count = nh;
+        }
+        if (ndi) {
+            s->dice = (TesseraDicePlacement*)(base + off_di);
+            memcpy(s->dice, src->dice, bytes_di);
+            s->dice_count = ndi;
         }
     }
 

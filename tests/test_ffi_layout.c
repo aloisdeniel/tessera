@@ -100,13 +100,19 @@ OFF_IS(TesseraDiceDef, face_count, 8);
 OFF_IS(TesseraDiceDef, size, 16);
 OFF_IS(TesseraDiceDef, tint, 20);
 
-SIZE_IS(TesseraDiceThrow, 40);
-OFF_IS(TesseraDiceThrow, id, 0);
-OFF_IS(TesseraDiceThrow, def, 8);
-OFF_IS(TesseraDiceThrow, face, 12);
-OFF_IS(TesseraDiceThrow, position, 16);
-OFF_IS(TesseraDiceThrow, seed, 28);
-OFF_IS(TesseraDiceThrow, throw_s, 32);
+/* ---- cards ---- */
+SIZE_IS(TesseraCardDef, 92);
+OFF_IS(TesseraCardDef, visible_atlas, 0);
+OFF_IS(TesseraCardDef, visible_uv, 4);
+OFF_IS(TesseraCardDef, hidden_atlas, 20);
+OFF_IS(TesseraCardDef, hidden_uv, 24);
+OFF_IS(TesseraCardDef, back_atlas, 40);
+OFF_IS(TesseraCardDef, back_uv, 44);
+OFF_IS(TesseraCardDef, width, 60);
+OFF_IS(TesseraCardDef, height, 64);
+OFF_IS(TesseraCardDef, thickness, 68);
+OFF_IS(TesseraCardDef, corner_radius, 72);
+OFF_IS(TesseraCardDef, tint, 76);
 
 /* ======================================================================= *
  *  Immutable state
@@ -134,6 +140,39 @@ OFF_IS(TesseraEffectPlacement, def, 8);
 OFF_IS(TesseraEffectPlacement, coord, 12);
 OFF_IS(TesseraEffectPlacement, attach_entity_id, 24);
 
+SIZE_IS(TesseraDicePlacement, 40);
+OFF_IS(TesseraDicePlacement, id, 0);
+OFF_IS(TesseraDicePlacement, def, 8);
+OFF_IS(TesseraDicePlacement, face, 12);
+OFF_IS(TesseraDicePlacement, position, 16);
+OFF_IS(TesseraDicePlacement, seed, 28);
+OFF_IS(TesseraDicePlacement, throw_s, 32);
+
+SIZE_IS(TesseraCardPlacement, 64);
+OFF_IS(TesseraCardPlacement, id, 0);
+OFF_IS(TesseraCardPlacement, def, 8);
+OFF_IS(TesseraCardPlacement, position, 12);
+OFF_IS(TesseraCardPlacement, orientation, 24);
+OFF_IS(TesseraCardPlacement, hidden, 40);
+OFF_IS(TesseraCardPlacement, hand, 48);
+OFF_IS(TesseraCardPlacement, hand_slot, 56);
+
+SIZE_IS(TesseraCardDrawPlacement, 48);
+OFF_IS(TesseraCardDrawPlacement, id, 0);
+OFF_IS(TesseraCardDrawPlacement, def, 8);
+OFF_IS(TesseraCardDrawPlacement, position, 12);
+OFF_IS(TesseraCardDrawPlacement, orientation, 24);
+OFF_IS(TesseraCardDrawPlacement, count, 40);
+OFF_IS(TesseraCardDrawPlacement, top_hidden, 44);
+
+SIZE_IS(TesseraHandPlacement, 48);
+OFF_IS(TesseraHandPlacement, id, 0);
+OFF_IS(TesseraHandPlacement, position, 8);
+OFF_IS(TesseraHandPlacement, orientation, 20);
+OFF_IS(TesseraHandPlacement, spread_deg, 36);
+OFF_IS(TesseraHandPlacement, radius, 40);
+OFF_IS(TesseraHandPlacement, card_spacing, 44);
+
 SIZE_IS(TesseraCamera, 24);
 OFF_IS(TesseraCamera, focus, 0);
 OFF_IS(TesseraCamera, distance, 8);
@@ -141,7 +180,7 @@ OFF_IS(TesseraCamera, yaw, 12);
 OFF_IS(TesseraCamera, pitch, 16);
 OFF_IS(TesseraCamera, fov, 20);
 
-SIZE_IS(TesseraState, 80);
+SIZE_IS(TesseraState, 144);
 OFF_IS(TesseraState, tiles, 0);
 OFF_IS(TesseraState, tile_count, 8);
 OFF_IS(TesseraState, entities, 16);
@@ -150,6 +189,14 @@ OFF_IS(TesseraState, effects, 32);
 OFF_IS(TesseraState, effect_count, 40);
 OFF_IS(TesseraState, camera, 48);
 OFF_IS(TesseraState, epoch, 72);
+OFF_IS(TesseraState, cards, 80);
+OFF_IS(TesseraState, card_count, 88);
+OFF_IS(TesseraState, card_draws, 96);
+OFF_IS(TesseraState, card_draw_count, 104);
+OFF_IS(TesseraState, hands, 112);
+OFF_IS(TesseraState, hand_count, 120);
+OFF_IS(TesseraState, dice, 128);
+OFF_IS(TesseraState, dice_count, 136);
 
 /* ======================================================================= *
  *  Picking
@@ -292,13 +339,28 @@ int main(void) {
     P_OFF(TesseraDiceDef, face_count);
     P_OFF(TesseraDiceDef, size);
     P_OFF(TesseraDiceDef, tint);
-    P_SIZE(TesseraDiceThrow);
-    P_OFF(TesseraDiceThrow, id);
-    P_OFF(TesseraDiceThrow, def);
-    P_OFF(TesseraDiceThrow, face);
-    P_OFF(TesseraDiceThrow, position);
-    P_OFF(TesseraDiceThrow, seed);
-    P_OFF(TesseraDiceThrow, throw_s);
+
+    P_SIZE(TesseraCardDef);
+    P_OFF(TesseraCardDef, visible_atlas);
+    P_OFF(TesseraCardDef, hidden_atlas);
+    P_OFF(TesseraCardDef, back_atlas);
+    P_OFF(TesseraCardDef, width);
+    P_OFF(TesseraCardDef, tint);
+
+    P_SIZE(TesseraDicePlacement);
+    P_OFF(TesseraDicePlacement, id);
+    P_OFF(TesseraDicePlacement, position);
+
+    P_SIZE(TesseraCardPlacement);
+    P_OFF(TesseraCardPlacement, id);
+    P_OFF(TesseraCardPlacement, orientation);
+    P_OFF(TesseraCardPlacement, hand);
+
+    P_SIZE(TesseraCardDrawPlacement);
+    P_OFF(TesseraCardDrawPlacement, count);
+
+    P_SIZE(TesseraHandPlacement);
+    P_OFF(TesseraHandPlacement, spread_deg);
 
     P_SIZE(TesseraCoord);
     P_OFF(TesseraCoord, x);
