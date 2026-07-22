@@ -143,15 +143,37 @@ static bool build_atlas(TsGpu* gpu, TsArena* arena, const TsLog* log,
         stbi_image_free(px);
     }
 
-    /* Spare cell (caps): opaque light-grey plastic body colour. */
+    /* Spare cell: the body colour used by the bevels / caps / rim. Approximate it
+     * by averaging the border pixels of the face sprites (usually the plate's
+     * background), so the bevels match the faces instead of a generic grey. */
     if (spare) {
+        unsigned long ar = 0, ag = 0, ab = 0, npx = 0;
+        for (uint32_t f = 0; f < nfaces; ++f) {
+            int col = (int)f % cols, row = (int)f / cols;
+            int x0 = col * DICE_CELL_PX + DICE_CELL_PAD;
+            int y0 = row * DICE_CELL_PX + DICE_CELL_PAD;
+            for (int x = 0; x < inner; x += 4)
+                for (int e = 0; e < 2; ++e) {
+                    int yy = e ? inner - 1 : 0;
+                    uint8_t* o = &atlas[((y0 + yy) * aw + (x0 + x)) * 4];
+                    if (o[3] > 10) { ar += o[0]; ag += o[1]; ab += o[2]; npx++; }
+                }
+            for (int y = 0; y < inner; y += 4)
+                for (int e = 0; e < 2; ++e) {
+                    int xx = e ? inner - 1 : 0;
+                    uint8_t* o = &atlas[((y0 + y) * aw + (x0 + xx)) * 4];
+                    if (o[3] > 10) { ar += o[0]; ag += o[1]; ab += o[2]; npx++; }
+                }
+        }
+        uint8_t br = 205, bg = 205, bb = 205;
+        if (npx > 0) { br = (uint8_t)(ar/npx); bg = (uint8_t)(ag/npx); bb = (uint8_t)(ab/npx); }
         int col = (int)nfaces % cols, row = (int)nfaces / cols;
         int x0 = col * DICE_CELL_PX + DICE_CELL_PAD;
         int y0 = row * DICE_CELL_PX + DICE_CELL_PAD;
         for (int y = 0; y < inner; ++y)
             for (int x = 0; x < inner; ++x) {
                 uint8_t* o = &atlas[((y0 + y) * aw + (x0 + x)) * 4];
-                o[0] = o[1] = o[2] = 205; o[3] = 255;
+                o[0] = br; o[1] = bg; o[2] = bb; o[3] = 255;
             }
     }
 
@@ -250,106 +272,18 @@ static void face_uv_frame(vec3 n, vec3 right, vec3 up) {
 /* ==========================================================================
  *  Geometry
  *    coin (2), cube (6), Platonic solids (4/8/12/20), barrel prism (other N)
+ *
+ *  The convex solids are CHAMFERED: each textured face is inset toward its
+ *  centroid and the gap left along every edge and corner is filled with small
+ *  body-coloured bevel facets, so the die has softened edges/corners instead of
+ *  razor-sharp ones.
  * ======================================================================= */
 
-/* A square face centred at `n*R`, spanning ±R along an upright, non-mirrored
- * tangent frame; the sprite fills the face edge-to-edge. */
-static void add_square_face(DiceMesh* m, vec3 n, float R, const vec4 uvr, versor rest) {
-    vec3 right, up; face_uv_frame(n, right, up);
-    vec3 t; glm_vec3_copy(right, t);      /* texture u-axis */
-    vec3 s; glm_vec3_negate_to(up, s);    /* texture v-axis (down) */
-    static const float SQ[4][2] = {{0,0},{1,0},{1,1},{0,1}};
-    vec3 cor[4];
-    for (int k = 0; k < 4; ++k) {
-        float du = (SQ[k][0]*2.0f - 1.0f) * R;
-        float dv = (SQ[k][1]*2.0f - 1.0f) * R;
-        cor[k][0] = n[0]*R + t[0]*du + s[0]*dv;
-        cor[k][1] = n[1]*R + t[1]*du + s[1]*dv;
-        cor[k][2] = n[2]*R + t[2]*du + s[2]*dv;
-    }
-    add_quad(m, cor[0], cor[1], cor[2], cor[3], n, uvr, SQ);
-    face_rest(n, rest);
-}
-
-/* A flat convex-polygon face from `nv` coplanar vertices (any order). The
- * outward normal is taken from the centroid direction (valid for our
- * origin-centred solids). The square sprite is mapped centred on the face's
- * circumscribed circle, so it is centred and fills the face; the polygon is
- * triangulated as a fan. */
-static void add_polygon_face(DiceMesh* m, const vec3* v, int nv, const vec4 uvr,
-                             versor rest) {
-    vec3 c = {0,0,0};
-    for (int i = 0; i < nv; ++i) glm_vec3_add(c, (float*)v[i], c);
-    glm_vec3_scale(c, 1.0f/(float)nv, c);
-    vec3 n; glm_vec3_normalize_to(c, n);
-    vec3 right, up; face_uv_frame(n, right, up);
-
-    float rad = 0.0f;
-    for (int i = 0; i < nv; ++i) {
-        vec3 d; glm_vec3_sub((float*)v[i], c, d);
-        float l = glm_vec3_norm(d); if (l > rad) rad = l;
-    }
-    if (rad < 1e-6f) rad = 1.0f;
-
-    /* order the vertices into a ring by angle around the centroid */
-    int order[16]; float ang[16];
-    for (int i = 0; i < nv; ++i) {
-        vec3 d; glm_vec3_sub((float*)v[i], c, d);
-        ang[i] = atan2f(glm_vec3_dot(d, up), glm_vec3_dot(d, right));
-        order[i] = i;
-    }
-    for (int a = 1; a < nv; ++a) {
-        int key = order[a]; float ka = ang[key]; int b = a;
-        while (b > 0 && ang[order[b-1]] > ka) { order[b] = order[b-1]; --b; }
-        order[b] = key;
-    }
-
-    float cu, cw; map_uv(uvr, 0.5f, 0.5f, &cu, &cw);
-    uint32_t ci = dm_vert(m, c, n, cu, cw);
-    uint32_t vi[16];
-    for (int k = 0; k < nv; ++k) {
-        const float* p = v[order[k]];
-        vec3 d; glm_vec3_sub((float*)p, c, d);
-        float lu = 0.5f + 0.5f * glm_vec3_dot(d, right) / rad;
-        float lw = 0.5f - 0.5f * glm_vec3_dot(d, up) / rad;
-        float u, w; map_uv(uvr, lu, lw, &u, &w);
-        vi[k] = dm_vert(m, (float*)p, n, u, w);
-    }
-    for (int k = 0; k < nv; ++k)
-        dm_tri(m, ci, vi[k], vi[(k+1)%nv], n);
-    face_rest(n, rest);
-}
-
-/* Emit `nfaces` faces of `face_size` vertices each from a shared vertex table,
- * with every vertex projected onto the sphere of radius R (regular solid). */
-static void emit_solid(DiceMesh* m, float R, const float (*V)[3], int nverts,
-                       const int* faces, int nfaces, int face_size,
-                       const vec4* uv, versor* rest) {
-    vec3* NV = (vec3*)malloc((size_t)nverts * sizeof(vec3));
-    for (int i = 0; i < nverts; ++i) {
-        vec3 p = { V[i][0], V[i][1], V[i][2] };
-        glm_vec3_normalize(p);
-        glm_vec3_scale(p, R, NV[i]);
-    }
-    for (int f = 0; f < nfaces; ++f) {
-        vec3 fv[16];
-        for (int k = 0; k < face_size; ++k)
-            glm_vec3_copy(NV[faces[f*face_size + k]], fv[k]);
-        add_polygon_face(m, fv, face_size, uv[f], rest[f]);
-    }
-    free(NV);
-}
-
-/* Cube (d6): six square faces, sprite filling each edge-to-edge. */
-static void build_cube(DiceMesh* m, float R, const vec4* uv, versor* rest) {
-    static const float FN[6][3] = {
-        {0,1,0},{0,-1,0},{1,0,0},{-1,0,0},{0,0,1},{0,0,-1}
-    };
-    for (int f = 0; f < 6; ++f) {
-        vec3 n = { FN[f][0], FN[f][1], FN[f][2] };
-        add_square_face(m, n, R, uv[f], rest[f]);
-    }
-}
+/* How far each face vertex is pulled toward its face centroid (fraction). The
+ * freed strip along the edges/corners becomes the bevel. */
+#define DICE_BEVEL 0.10f
+#define DICE_MAXV  20   /* most vertices of any supported solid (dodeca) */
+#define DICE_MAXFV 5    /* most vertices per face (dodeca pentagon)      */
 
 /* d4 "read-at-apex" rest: rotate the model so the chosen face sits in a natural
  * resting posture — the die balanced on the opposite face, this face tilted up
@@ -371,57 +305,185 @@ static void tetra_rest(vec3 n, vec3 up, versor out) {
     glm_mat4_quat(Q, out); glm_quat_normalize(out);
 }
 
-/* One triangular d4 face. Unlike the other solids the sprite "up" is baked
- * toward `apex` (its first vertex), so tetra_rest can present that vertex at the
- * top with the numeral upright. */
-static void add_tetra_face(DiceMesh* m, vec3 apex, vec3 b1, vec3 b2,
-                           const vec4 uvr, versor rest) {
-    vec3 v[3]; glm_vec3_copy(apex, v[0]); glm_vec3_copy(b1, v[1]); glm_vec3_copy(b2, v[2]);
-    vec3 cen; glm_vec3_add(v[0], v[1], cen); glm_vec3_add(cen, v[2], cen);
-    glm_vec3_scale(cen, 1.0f/3.0f, cen);
-    vec3 n; glm_vec3_normalize_to(cen, n);
-    vec3 mid; glm_vec3_add(b1, b2, mid); glm_vec3_scale(mid, 0.5f, mid);
-    vec3 up; glm_vec3_sub(apex, mid, up);
-    float d = glm_vec3_dot(up, n); vec3 tmp; glm_vec3_scale(n, d, tmp);
-    glm_vec3_sub(up, tmp, up); glm_vec3_normalize(up);
-    vec3 right; glm_vec3_cross(up, n, right); glm_vec3_normalize(right);
-
-    float rad = 0.0f;
-    for (int i = 0; i < 3; ++i) {
-        vec3 dd; glm_vec3_sub(v[i], cen, dd);
-        float l = glm_vec3_norm(dd); if (l > rad) rad = l;
-    }
-    if (rad < 1e-6f) rad = 1.0f;
-
-    float cu, cw; map_uv(uvr, 0.5f, 0.5f, &cu, &cw);
-    uint32_t ci = dm_vert(m, cen, n, cu, cw);
-    uint32_t vi[3];
-    for (int k = 0; k < 3; ++k) {
-        vec3 rel; glm_vec3_sub(v[k], cen, rel);
-        float lu = 0.5f + 0.5f * glm_vec3_dot(rel, right) / rad;
-        float lw = 0.5f - 0.5f * glm_vec3_dot(rel, up) / rad;
-        float u, w; map_uv(uvr, lu, lw, &u, &w);
-        vi[k] = dm_vert(m, v[k], n, u, w);
-    }
-    for (int k = 0; k < 3; ++k) dm_tri(m, ci, vi[k], vi[(k+1)%3], n);
-    tetra_rest(n, up, rest);
-}
-
-/* Tetrahedron (d4): four triangular faces, read at the apex. */
-static void build_tetra(DiceMesh* m, float R, const vec4* uv, versor* rest) {
-    static const float Vr[4][3] = { {1,1,1},{1,-1,-1},{-1,1,-1},{-1,-1,1} };
-    static const int F[4][3] = { {1,2,3},{0,3,2},{0,1,3},{0,2,1} };
-    vec3 V[4];
-    for (int i = 0; i < 4; ++i) {
+/* Build a chamfered convex solid from a vertex table + face index lists (each
+ * face `fs` vertices; vertices are projected to the sphere of radius R). Every
+ * textured face is inset toward its centroid; the freed strips are filled with
+ * bevel facets sampling `bevel_uv` (plain body colour): one quad per edge and
+ * one fan per original vertex. `up_hints[f]` (or NULL) sets each sprite's up
+ * direction; `square` maps quad faces edge-to-edge (cube) instead of onto the
+ * inscribed circle. rest[f] = face-up orientation (caller may override). */
+static void add_chamfered_solid(DiceMesh* m, float R, const float (*Vr)[3], int nverts,
+                                const int* faces, int nfaces, int fs,
+                                const vec4* uv, const vec4 bevel_uv, versor* rest,
+                                const float (*up_hints)[3], bool square) {
+    vec3 NV[DICE_MAXV];
+    for (int i = 0; i < nverts; ++i) {
         vec3 p = { Vr[i][0], Vr[i][1], Vr[i][2] };
-        glm_vec3_normalize(p); glm_vec3_scale(p, R, V[i]);
+        glm_vec3_normalize(p); glm_vec3_scale(p, R, NV[i]);
     }
-    for (int f = 0; f < 4; ++f)   /* apex = the face's first vertex */
-        add_tetra_face(m, V[F[f][0]], V[F[f][1]], V[F[f][2]], uv[f], rest[f]);
+    int  ring[DICE_MAXV][DICE_MAXFV];    /* per-face vertex indices, ring-ordered */
+    vec3 iv[DICE_MAXV][DICE_MAXFV];      /* per-face inset positions              */
+    vec3 fn[DICE_MAXV];                  /* per-face outward normals              */
+    float bcu, bcw; map_uv(bevel_uv, 0.5f, 0.5f, &bcu, &bcw);
+
+    /* ---- textured inset faces ---- */
+    for (int f = 0; f < nfaces; ++f) {
+        vec3 c = {0,0,0};
+        for (int k = 0; k < fs; ++k) glm_vec3_add(c, NV[faces[f*fs+k]], c);
+        glm_vec3_scale(c, 1.0f/(float)fs, c);
+        vec3 n; glm_vec3_normalize_to(c, n); glm_vec3_copy(n, fn[f]);
+
+        vec3 right, up;
+        if (up_hints) {
+            vec3 hint = { up_hints[f][0], up_hints[f][1], up_hints[f][2] };
+            float d = glm_vec3_dot(hint, n);
+            up[0]=hint[0]-d*n[0]; up[1]=hint[1]-d*n[1]; up[2]=hint[2]-d*n[2];
+            glm_vec3_normalize(up);
+            glm_vec3_cross(up, n, right); glm_vec3_normalize(right);
+        } else {
+            face_uv_frame(n, right, up);
+        }
+
+        /* ring order by angle around the centroid */
+        int idx[DICE_MAXFV]; float ang[DICE_MAXFV];
+        for (int k = 0; k < fs; ++k) {
+            idx[k] = faces[f*fs+k];
+            vec3 rel; glm_vec3_sub(NV[idx[k]], c, rel);
+            ang[k] = atan2f(glm_vec3_dot(rel, up), glm_vec3_dot(rel, right));
+        }
+        for (int a = 1; a < fs; ++a) {
+            int ki = idx[a]; float ka = ang[a]; int b = a;
+            while (b > 0 && ang[b-1] > ka) { ang[b]=ang[b-1]; idx[b]=idx[b-1]; --b; }
+            ang[b] = ka; idx[b] = ki;
+        }
+        for (int k = 0; k < fs; ++k) {
+            ring[f][k] = idx[k];
+            glm_vec3_lerp(NV[idx[k]], c, DICE_BEVEL, iv[f][k]);   /* inset */
+        }
+
+        /* UV extents (per-axis half-extent for square, else circumradius) */
+        float eu = 1e-6f, ev = 1e-6f, er = 1e-6f;
+        for (int k = 0; k < fs; ++k) {
+            vec3 rel; glm_vec3_sub(iv[f][k], c, rel);
+            float ru = fabsf(glm_vec3_dot(rel, right)), rv = fabsf(glm_vec3_dot(rel, up));
+            float rr = glm_vec3_norm(rel);
+            if (ru > eu) eu = ru; if (rv > ev) ev = rv; if (rr > er) er = rr;
+        }
+        float cu, cw; map_uv(uv[f], 0.5f, 0.5f, &cu, &cw);
+        uint32_t ci = dm_vert(m, c, n, cu, cw);
+        uint32_t vi[DICE_MAXFV];
+        for (int k = 0; k < fs; ++k) {
+            vec3 rel; glm_vec3_sub(iv[f][k], c, rel);
+            float lu, lw;
+            if (square) { lu = 0.5f + 0.5f*glm_vec3_dot(rel,right)/eu;
+                          lw = 0.5f - 0.5f*glm_vec3_dot(rel,up)/ev; }
+            else        { lu = 0.5f + 0.5f*glm_vec3_dot(rel,right)/er;
+                          lw = 0.5f - 0.5f*glm_vec3_dot(rel,up)/er; }
+            float u, w; map_uv(uv[f], lu, lw, &u, &w);
+            vi[k] = dm_vert(m, iv[f][k], n, u, w);
+        }
+        for (int k = 0; k < fs; ++k) dm_tri(m, ci, vi[k], vi[(k+1)%fs], n);
+        face_rest(n, rest[f]);
+    }
+
+    /* ---- edge bevels: one quad per shared edge (processed once, f<g) ---- */
+    for (int f = 0; f < nfaces; ++f)
+        for (int k = 0; k < fs; ++k) {
+            int a = ring[f][k], b = ring[f][(k+1)%fs];
+            int g = -1, ga = -1, gb = -1;
+            for (int gg = 0; gg < nfaces && g < 0; ++gg) {
+                if (gg == f) continue;
+                int pa = -1, pb = -1;
+                for (int kk = 0; kk < fs; ++kk) {
+                    if (ring[gg][kk] == a) pa = kk;
+                    if (ring[gg][kk] == b) pb = kk;
+                }
+                if (pa >= 0 && pb >= 0) { g = gg; ga = pa; gb = pb; }
+            }
+            if (g < 0 || g < f) continue;
+            vec3 n; glm_vec3_add(fn[f], fn[g], n); glm_vec3_normalize(n);
+            uint32_t q0 = dm_vert(m, iv[f][k],           n, bcu, bcw);
+            uint32_t q1 = dm_vert(m, iv[f][(k+1)%fs],    n, bcu, bcw);
+            uint32_t q2 = dm_vert(m, iv[g][gb],          n, bcu, bcw);
+            uint32_t q3 = dm_vert(m, iv[g][ga],          n, bcu, bcw);
+            dm_tri(m, q0, q1, q2, n); dm_tri(m, q0, q2, q3, n);
+        }
+
+    /* ---- corner bevels: one fan per original vertex ---- */
+    for (int v = 0; v < nverts; ++v) {
+        int fl[16], pl[16], cnt = 0;
+        for (int f = 0; f < nfaces && cnt < 16; ++f)
+            for (int k = 0; k < fs; ++k)
+                if (ring[f][k] == v) { fl[cnt]=f; pl[cnt]=k; cnt++; break; }
+        if (cnt < 3) continue;
+        vec3 vn; glm_vec3_normalize_to(NV[v], vn);
+        vec3 t0; { vec3 up = {0,1,0}; if (fabsf(glm_vec3_dot(vn,up))>0.9f){up[0]=1;up[1]=0;up[2]=0;}
+                   glm_vec3_cross(up, vn, t0); glm_vec3_normalize(t0); }
+        vec3 t1; glm_vec3_cross(vn, t0, t1);
+        float ang[16];
+        for (int j = 0; j < cnt; ++j) {
+            vec3 rel; glm_vec3_sub(iv[fl[j]][pl[j]], NV[v], rel);
+            ang[j] = atan2f(glm_vec3_dot(rel,t1), glm_vec3_dot(rel,t0));
+        }
+        for (int a = 1; a < cnt; ++a) {
+            int ff=fl[a], pp=pl[a]; float ka=ang[a]; int b=a;
+            while (b>0 && ang[b-1]>ka){ ang[b]=ang[b-1]; fl[b]=fl[b-1]; pl[b]=pl[b-1]; --b; }
+            ang[b]=ka; fl[b]=ff; pl[b]=pp;
+        }
+        vec3 cc = {0,0,0};
+        for (int j = 0; j < cnt; ++j) glm_vec3_add(cc, iv[fl[j]][pl[j]], cc);
+        glm_vec3_scale(cc, 1.0f/(float)cnt, cc);
+        uint32_t ci = dm_vert(m, cc, vn, bcu, bcw);
+        uint32_t cv[16];
+        for (int j = 0; j < cnt; ++j) cv[j] = dm_vert(m, iv[fl[j]][pl[j]], vn, bcu, bcw);
+        for (int j = 0; j < cnt; ++j) dm_tri(m, ci, cv[j], cv[(j+1)%cnt], vn);
+    }
 }
 
-/* Octahedron (d8): eight triangular faces. */
-static void build_octa(DiceMesh* m, float R, const vec4* uv, versor* rest) {
+/* Cube (d6): six square faces (sprite edge-to-edge), chamfered. Face order
+ * +Y,-Y,+X,-X,+Z,-Z matches the sprite indices. */
+static void build_cube(DiceMesh* m, float R, const vec4* uv, const vec4 bevel_uv,
+                       versor* rest) {
+    static const float V[8][3] = {
+        {-1,-1,-1},{1,-1,-1},{1,1,-1},{-1,1,-1},{-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}
+    };
+    static const int F[6*4] = {
+        3,2,6,7,  0,1,5,4,  1,2,6,5,  0,3,7,4,  4,5,6,7,  0,1,2,3
+    };
+    add_chamfered_solid(m, R, V, 8, F, 6, 4, uv, bevel_uv, rest, NULL, true);
+}
+
+/* Tetrahedron (d4): four triangular faces, chamfered and read at the apex. */
+static void build_tetra(DiceMesh* m, float R, const vec4* uv, const vec4 bevel_uv,
+                        versor* rest) {
+    static const float V[4][3] = { {1,1,1},{1,-1,-1},{-1,1,-1},{-1,-1,1} };
+    static const int F[4*3] = { 1,2,3, 0,3,2, 0,1,3, 0,2,1 };
+    vec3 NV[4];
+    for (int i = 0; i < 4; ++i) {
+        vec3 p = { V[i][0], V[i][1], V[i][2] };
+        glm_vec3_normalize(p); glm_vec3_scale(p, R, NV[i]);
+    }
+    /* per-face in-plane "up" toward the apex (first listed vertex) */
+    float hints[4][3]; vec3 n[4], up[4];
+    for (int f = 0; f < 4; ++f) {
+        int ia=F[f*3+0], ib=F[f*3+1], ic=F[f*3+2];
+        vec3 c; glm_vec3_add(NV[ia],NV[ib],c); glm_vec3_add(c,NV[ic],c);
+        glm_vec3_scale(c, 1.0f/3.0f, c);
+        glm_vec3_normalize_to(c, n[f]);
+        vec3 mid; glm_vec3_add(NV[ib],NV[ic],mid); glm_vec3_scale(mid,0.5f,mid);
+        vec3 u; glm_vec3_sub(NV[ia], mid, u);
+        float d = glm_vec3_dot(u,n[f]); vec3 tmp; glm_vec3_scale(n[f],d,tmp);
+        glm_vec3_sub(u, tmp, u); glm_vec3_normalize(u);
+        glm_vec3_copy(u, up[f]);
+        hints[f][0]=u[0]; hints[f][1]=u[1]; hints[f][2]=u[2];
+    }
+    add_chamfered_solid(m, R, V, 4, F, 4, 3, uv, bevel_uv, rest, hints, false);
+    for (int f = 0; f < 4; ++f) tetra_rest(n[f], up[f], rest[f]);   /* read-at-apex */
+}
+
+/* Octahedron (d8): eight triangular faces, chamfered. */
+static void build_octa(DiceMesh* m, float R, const vec4* uv, const vec4 bevel_uv,
+                       versor* rest) {
     static const float V[6][3] = {
         {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}
     };
@@ -429,30 +491,30 @@ static void build_octa(DiceMesh* m, float R, const vec4* uv, versor* rest) {
         0,2,4, 0,4,3, 0,3,5, 0,5,2,
         1,4,2, 1,3,4, 1,5,3, 1,2,5
     };
-    emit_solid(m, R, V, 6, F, 8, 3, uv, rest);
+    add_chamfered_solid(m, R, V, 6, F, 8, 3, uv, bevel_uv, rest, NULL, false);
 }
 
 /* Icosahedron (d20): twenty triangular faces (classic icosphere connectivity). */
-static void build_icosa(DiceMesh* m, float R, const vec4* uv, versor* rest) {
+static void build_icosa(DiceMesh* m, float R, const vec4* uv, const vec4 bevel_uv,
+                        versor* rest) {
     const float t = 1.61803399f;   /* golden ratio */
-    static float V[12][3];
-    const float src[12][3] = {
+    float V[12][3] = {
         {-1, t, 0},{ 1, t, 0},{-1,-t, 0},{ 1,-t, 0},
         { 0,-1, t},{ 0, 1, t},{ 0,-1,-t},{ 0, 1,-t},
         { t, 0,-1},{ t, 0, 1},{-t, 0,-1},{-t, 0, 1}
     };
-    memcpy(V, src, sizeof V); (void)t;
     static const int F[20*3] = {
         0,11,5,  0,5,1,   0,1,7,   0,7,10,  0,10,11,
         1,5,9,   5,11,4,  11,10,2, 10,7,6,  7,1,8,
         3,9,4,   3,4,2,   3,2,6,   3,6,8,   3,8,9,
         4,9,5,   2,4,11,  6,2,10,  8,6,7,   9,8,1
     };
-    emit_solid(m, R, V, 12, F, 20, 3, uv, rest);
+    add_chamfered_solid(m, R, (const float(*)[3])V, 12, F, 20, 3, uv, bevel_uv, rest, NULL, false);
 }
 
-/* Dodecahedron (d12): twelve pentagonal faces. */
-static void build_dodeca(DiceMesh* m, float R, const vec4* uv, versor* rest) {
+/* Dodecahedron (d12): twelve pentagonal faces, chamfered. */
+static void build_dodeca(DiceMesh* m, float R, const vec4* uv, const vec4 bevel_uv,
+                         versor* rest) {
     const float b = 0.61803399f;   /* 1/phi */
     const float c = 1.61803399f;   /* phi   */
     float V[20][3] = {
@@ -468,7 +530,7 @@ static void build_dodeca(DiceMesh* m, float R, const vec4* uv, versor* rest) {
         17, 3,11, 9, 1,  12, 1, 9, 5,14,  14, 5,19,18, 4,
         18,19, 7,15, 6,  13,15, 7,11, 3,   9,11, 7,19, 5
     };
-    emit_solid(m, R, (const float(*)[3])V, 20, F, 12, 5, uv, rest);
+    add_chamfered_solid(m, R, (const float(*)[3])V, 20, F, 12, 5, uv, bevel_uv, rest, NULL, false);
 }
 
 /* Barrel prism: N rectangular side faces (sprites 0..N-1), two plain caps that
@@ -511,26 +573,30 @@ static void build_prism(DiceMesh* m, uint32_t N, float R, float H,
 }
 
 /* Two-sided coin/token: top disc = sprite 0 (+Y), bottom disc = sprite 1 (-Y),
- * thin rim samples the spare cell. */
-static void build_coin(DiceMesh* m, float R, const vec4* uv, const vec4 cap_uv,
+ * with a beveled (chamfered) edge into a thin plain rim. */
+static void build_coin(DiceMesh* m, float R, const vec4* uv, const vec4 bevel_uv,
                        versor* rest) {
-    float hy = R * 0.16f;
     const int S = DICE_DISC_SEG;
+    float bw = R * DICE_BEVEL * 1.4f;             /* chamfer band width */
+    float rd = R - bw;                            /* textured disc radius */
+    float hy = R * 0.18f;                         /* half thickness */
+    float ry = hy - bw; if (ry < 0.02f * R) ry = 0.02f * R;   /* rim half-height */
+    float bcu, bcw; map_uv(bevel_uv, 0.5f, 0.5f, &bcu, &bcw);
+
     for (int face = 0; face < 2; ++face) {
-        float y = face == 0 ? hy : -hy;
-        vec3 n = { 0, face == 0 ? 1.0f : -1.0f, 0 };
+        float sgn = face == 0 ? 1.0f : -1.0f;
+        vec3 n = { 0, sgn, 0 };
         const vec4* r = &uv[face];
+        /* textured disc (radius rd) */
         float cu, cw; map_uv(*r, 0.5f, 0.5f, &cu, &cw);
-        vec3 ctr = { 0, y, 0 };
+        vec3 ctr = { 0, sgn * hy, 0 };
         uint32_t c = dm_vert(m, ctr, n, cu, cw);
         uint32_t prev = 0;
         for (int k = 0; k <= S; ++k) {
             float a = 6.2831853f * (float)(k % S) / (float)S;
             float cx = cosf(a), cz = sinf(a);
-            vec3 p = { R * cx, y, R * cz };
-            /* disc UV: sprite centred, radius fills the cell */
-            float lu = 0.5f + 0.5f * cx;
-            float lw = 0.5f - 0.5f * cz;
+            vec3 p = { rd * cx, sgn * hy, rd * cz };
+            float lu = 0.5f + 0.5f * cx, lw = 0.5f - 0.5f * cz;
             float u, w; map_uv(*r, lu, lw, &u, &w);
             uint32_t v = dm_vert(m, p, n, u, w);
             if (k == 0) { prev = v; continue; }
@@ -538,24 +604,33 @@ static void build_coin(DiceMesh* m, float R, const vec4* uv, const vec4 cap_uv,
             prev = v;
         }
         face_rest(n, rest[face]);
+        /* chamfer ring: disc edge (rd, sgn·hy) → rim edge (R, sgn·ry), plain */
+        for (int k = 0; k < S; ++k) {
+            float a0 = 6.2831853f * (float)k / (float)S;
+            float a1 = 6.2831853f * (float)(k + 1) / (float)S;
+            float am = 0.5f * (a0 + a1);
+            vec3 nn = { cosf(am) * 0.7f, sgn * 0.7f, sinf(am) * 0.7f };
+            vec3 p0 = { rd*cosf(a0), sgn*hy, rd*sinf(a0) };
+            vec3 p1 = { rd*cosf(a1), sgn*hy, rd*sinf(a1) };
+            vec3 p2 = { R*cosf(a1),  sgn*ry, R*sinf(a1) };
+            vec3 p3 = { R*cosf(a0),  sgn*ry, R*sinf(a0) };
+            uint32_t q0=dm_vert(m,p0,nn,bcu,bcw), q1=dm_vert(m,p1,nn,bcu,bcw),
+                     q2=dm_vert(m,p2,nn,bcu,bcw), q3=dm_vert(m,p3,nn,bcu,bcw);
+            dm_tri(m, q0, q1, q2, nn); dm_tri(m, q0, q2, q3, nn);
+        }
     }
-    /* rim (plain) */
-    float cu = 0.5f * (cap_uv[0] + cap_uv[2]);
-    float cw = 0.5f * (cap_uv[1] + cap_uv[3]);
+    /* vertical rim (plain) */
     for (int k = 0; k < S; ++k) {
         float a0 = 6.2831853f * (float)k / (float)S;
         float a1 = 6.2831853f * (float)(k + 1) / (float)S;
         vec3 n = { cosf(0.5f*(a0+a1)), 0, sinf(0.5f*(a0+a1)) };
-        vec3 p0 = { R*cosf(a0), -hy, R*sinf(a0) };
-        vec3 p1 = { R*cosf(a1), -hy, R*sinf(a1) };
-        vec3 p2 = { R*cosf(a1),  hy, R*sinf(a1) };
-        vec3 p3 = { R*cosf(a0),  hy, R*sinf(a0) };
-        uint32_t a = dm_vert(m, p0, n, cu, cw);
-        uint32_t b = dm_vert(m, p1, n, cu, cw);
-        uint32_t cc = dm_vert(m, p2, n, cu, cw);
-        uint32_t d = dm_vert(m, p3, n, cu, cw);
-        dm_tri(m, a, b, cc, n);
-        dm_tri(m, a, cc, d, n);
+        vec3 p0 = { R*cosf(a0), -ry, R*sinf(a0) };
+        vec3 p1 = { R*cosf(a1), -ry, R*sinf(a1) };
+        vec3 p2 = { R*cosf(a1),  ry, R*sinf(a1) };
+        vec3 p3 = { R*cosf(a0),  ry, R*sinf(a0) };
+        uint32_t a=dm_vert(m,p0,n,bcu,bcw), b=dm_vert(m,p1,n,bcu,bcw),
+                 cc=dm_vert(m,p2,n,bcu,bcw), d=dm_vert(m,p3,n,bcu,bcw);
+        dm_tri(m, a, b, cc, n); dm_tri(m, a, cc, d, n);
     }
 }
 
@@ -578,41 +653,36 @@ bool ts_dice_build_model(TsGpu* gpu, TsArena* arena, const TsLog* log,
     float size = def->size > 0.0f ? def->size : 1.0f;
     float R = size * 0.5f;
 
-    /* Pick the model. The five Platonic solids (and the cube) texture every
-     * face, so they need no spare cap cell; the coin (rim) and the barrel
-     * fallback (end caps) do. */
+    /* Pick the model. Every shape now reserves one spare atlas cell for the
+     * plain body colour used by the chamfer bevels (and the coin rim / barrel
+     * caps). */
     bool is_coin   = (N == 2);
     bool is_tetra  = (N == 4);
     bool is_cube   = (N == 6);
     bool is_octa   = (N == 8);
     bool is_dodeca = (N == 12);
     bool is_icosa  = (N == 20);
-    bool is_platonic = is_tetra || is_cube || is_octa || is_dodeca || is_icosa;
-    bool is_prism  = !(is_coin || is_platonic);
-    bool spare     = is_coin || is_prism;
 
     TsTexture atlas; vec4* uv = NULL; int cols = 1;
-    if (!build_atlas(gpu, arena, log, def, spare, &atlas, &uv, &cols, err, err_sz))
+    if (!build_atlas(gpu, arena, log, def, true, &atlas, &uv, &cols, err, err_sz))
         return false;
 
     versor* rest = TS_ARENA_ARR(arena, versor, N);
     if (!rest) { ts_gpu_free_texture(gpu, &atlas); snprintf(err, err_sz, "dice: rest alloc failed"); return false; }
-    vec4 cap_uv;
-    if (spare) glm_vec4_copy(uv[N], cap_uv);
-    else       glm_vec4_copy(uv[0], cap_uv);
+    vec4 bevel_uv; glm_vec4_copy(uv[N], bevel_uv);   /* spare cell = body colour */
 
     DiceMesh dm = {0};
-    if (is_coin)        build_coin(&dm, R, uv, cap_uv, rest);
-    else if (is_tetra)  build_tetra(&dm, R, uv, rest);
-    else if (is_cube)   build_cube(&dm, R, uv, rest);
-    else if (is_octa)   build_octa(&dm, R, uv, rest);
-    else if (is_dodeca) build_dodeca(&dm, R, uv, rest);
-    else if (is_icosa)  build_icosa(&dm, R, uv, rest);
+    if (is_coin)        build_coin(&dm, R, uv, bevel_uv, rest);
+    else if (is_tetra)  build_tetra(&dm, R, uv, bevel_uv, rest);
+    else if (is_cube)   build_cube(&dm, R, uv, bevel_uv, rest);
+    else if (is_octa)   build_octa(&dm, R, uv, bevel_uv, rest);
+    else if (is_dodeca) build_dodeca(&dm, R, uv, bevel_uv, rest);
+    else if (is_icosa)  build_icosa(&dm, R, uv, bevel_uv, rest);
     else {
         /* barrel fallback: square-ish side faces, clamped for extreme counts */
         float H = 2.0f * R * sinf(3.14159265f / (float)N);
         H = ts_clampf(H, 0.5f * R, 1.5f * R);
-        build_prism(&dm, N, R, H, uv, cap_uv, rest);
+        build_prism(&dm, N, R, H, uv, bevel_uv, rest);
     }
 
     bool ok = ts_gpu_upload_mesh(gpu, dm.v, dm.vc, dm.i, dm.ic, &out->mesh);

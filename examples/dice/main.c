@@ -273,9 +273,9 @@ int main(int argc, char** argv) {
     const unsigned char amber[3] = {224, 150, 60},  cocoa[3] = {50, 30, 12};
     const unsigned char red[3]   = {196, 66, 66},   cream[3] = {245, 240, 235};
     register_die(e, 2,  1.05f, -5.0f, gold,  brown);  /* d2 coin / token   */
-    register_die(e, 4,  1.35f, -3.0f, teal,  ink);    /* d4 tetrahedron    */
-    register_die(e, 6,  0.95f, -1.0f, ivory, dark);   /* d6 cube           */
-    register_die(e, 8,  1.25f,  1.0f, blue,  white);  /* d8 octahedron     */
+    register_die(e, 4,  1.45f, -3.0f, teal,  ink);    /* d4 tetrahedron    */
+    register_die(e, 6,  1.55f, -1.0f, ivory, dark);   /* d6 cube           */
+    register_die(e, 8,  1.30f,  1.0f, blue,  white);  /* d8 octahedron     */
     register_die(e, 12, 1.30f,  3.0f, amber, cocoa);  /* d12 dodecahedron  */
     register_die(e, 20, 1.30f,  5.0f, red,   cream);  /* d20 icosahedron   */
 

@@ -152,6 +152,12 @@ face**:
 The face counts `4/6/8/12/20` produce true **Platonic solids** (each generated
 from its exact vertex/face table); the cube fills each square face edge-to-edge,
 the other regular solids centre the sprite on the face's circumscribed circle.
+The solids are **chamfered** — each textured face is inset slightly and the gaps
+along the edges and corners are filled with small body-coloured bevel facets
+(the body colour is sampled from the sprites' borders), so the dice have
+softened edges instead of razor-sharp ones. `size` is the bounding-sphere
+diameter for the regular solids (so a cube's `size` is its long diagonal, not
+its face-to-face width).
 Every face's sprite tangent frame is chosen orientation-preserving (`u × v =
 -n`), so numerals read upright and un-mirrored on all faces. Each face also gets
 a *rest orientation* (the rotation that turns that face to point `+Y`), so any
