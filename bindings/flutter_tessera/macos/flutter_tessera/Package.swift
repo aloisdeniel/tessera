@@ -2,7 +2,8 @@
 //
 // Two targets:
 //   • CTessera         — the C bridge (tessera_bridge.c) + vendored tessera.h.
-//   • flutter_tessera  — the Swift plugin (platform view + Metal presenter).
+//   • flutter_tessera  — the Swift plugin (platform view; reparents the engine's
+//                        swapchain metal view for zero-copy presentation).
 //
 // The C target must find the SDL3 headers and link the prebuilt `libtessera`
 // and `SDL3` libraries. Those paths are environment-specific and CANNOT be

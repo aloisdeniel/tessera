@@ -1,8 +1,11 @@
 // TesseraPlatformView.swift (iOS) — one embedded Tessera engine in a UIView.
 //
-// The UIKit counterpart of the macOS platform view: a UIView backed by a
-// CAMetalLayer, owning the engine (via the C bridge) and a CADisplayLink render
-// loop on the main thread. Same per-view method channel (handle / start / pick).
+// The UIKit counterpart of the macOS platform view: a container UIView that
+// owns the engine (via the C bridge) and a CADisplayLink render loop on the main
+// thread. Presentation is zero-copy — the engine renders to the SDL window's
+// swapchain, and we reparent that swapchain's CAMetalLayer-backed metal view
+// into the container, so frames scan out straight into the Flutter surface with
+// no CPU round-trip or blit. Same per-view method channel (handle / start / pick).
 //
 // NOTE: reference implementation for the iOS build; not compiled in this
 // environment (no iOS toolchain/device here). The C bridge and shaders ARE
@@ -15,25 +18,24 @@ import CTessera
 #endif
 
 final class TesseraPlatformView: NSObject, FlutterPlatformView {
-    private let container: TesseraMetalView
+    private let container: UIView
     private let channel: FlutterMethodChannel
     private var bridge: OpaquePointer?      // FTessera*
-    private var presenter: MetalPresenter?
-    private var buffer = [UInt8]()
+    // The SDL-created metal view (backed by the engine's swapchain CAMetalLayer),
+    // reparented out of the hidden SDL window into `container`.
+    private var metalView: UIView?
     private var bufW = 0
     private var bufH = 0
     private var lastTime: CFTimeInterval = 0
     private var link: CADisplayLink?
 
     init(frame: CGRect, viewId: Int64, messenger: FlutterBinaryMessenger) {
-        container = TesseraMetalView(frame: frame)
+        container = UIView(frame: frame)
         channel = FlutterMethodChannel(
             name: "flutter_tessera/view_\(viewId)", binaryMessenger: messenger)
         super.init()
 
-        presenter = MetalPresenter()
-        container.metalLayer.device = presenter?.device
-        container.metalLayer.pixelFormat = .bgra8Unorm
+        container.backgroundColor = .clear
 
         let (w, h) = drawablePixelSize()
         // Bundled shaders live next to the plugin resources; hand the engine the
@@ -45,12 +47,49 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
             NSLog("flutter_tessera: engine create FAILED — \(err) (assetDir=\(dir))")
         }
 
+        // Pull the engine's swapchain metal view into our hierarchy so its
+        // CAMetalLayer composites in the Flutter window (zero-copy present).
+        attachMetalView()
+
         channel.setMethodCallHandler { [weak self] call, result in
             self?.handle(call, result)
         }
     }
 
     func view() -> UIView { container }
+
+    /// Find the SDL-created metal view in the hidden SDL window and reparent it
+    /// into the container. Its CAMetalLayer is the engine's swapchain target.
+    /// Returns true once attached. Idempotent; safe to retry.
+    @discardableResult
+    private func attachMetalView() -> Bool {
+        if metalView != nil { return true }
+        guard let bridge = bridge,
+              let winPtr = ftessera_native_window(bridge) else {
+            NSLog("flutter_tessera: no native window to reparent")
+            return false
+        }
+        let uiWindow = Unmanaged<UIWindow>.fromOpaque(winPtr).takeUnretainedValue()
+        let tag = Int(ftessera_metal_view_tag(bridge))
+        // The SDL metal view is the hidden window's rootViewController.view. That
+        // window is never made key-and-visible, so UIKit doesn't add the root
+        // view into window.subviews — window.viewWithTag(...) can't reach it.
+        // Go through the root view controller's view directly (then its subtree).
+        var mv = uiWindow.viewWithTag(tag)
+        if mv == nil, let root = uiWindow.rootViewController?.view {
+            mv = (root.tag == tag) ? root : root.viewWithTag(tag)
+        }
+        guard tag != 0, let metal = mv else { return false }
+
+        metal.frame = container.bounds
+        metal.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // The SDL view feeds SDL's (unpumped) event queue; let touches fall
+        // through to Flutter's gesture recognizers instead.
+        metal.isUserInteractionEnabled = false
+        container.addSubview(metal)
+        metalView = metal
+        return true
+    }
 
     private func handle(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
         switch call.method {
@@ -80,30 +119,60 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
     }
 
     @objc private func renderFrame() {
-        guard let bridge = bridge, let presenter = presenter else { return }
+        guard let bridge = bridge else { return }
+
+        // The metal view may not be reachable at init time; keep trying for a
+        // short while (capped so a genuine failure logs once and stops).
+        if metalView == nil && attachTries < 60 {
+            attachTries += 1
+            if !attachMetalView() && attachTries == 60 {
+                NSLog("flutter_tessera: metal view (tag \(Int(ftessera_metal_view_tag(bridge)))) not found after \(attachTries) tries")
+            }
+        }
+
         let (w, h) = drawablePixelSize()
         if w == 0 || h == 0 { return }
 
         if w != bufW || h != bufH {
             bufW = w; bufH = h
-            buffer = [UInt8](repeating: 0, count: w * h * 4)
             ftessera_resize(bridge, Int32(w), Int32(h), Float(scale()))
-            container.metalLayer.drawableSize = CGSize(width: w, height: h)
+            // Keep the reparented view filling the container. It was attached
+            // before Flutter sized the platform view, so its frame must be
+            // updated here (autoresizing alone doesn't fire reliably) — a zero
+            // frame means the layer composites nothing and, on iOS, SDL's
+            // layoutSubviews forces drawableSize to 0.
+            metalView?.frame = container.bounds
+            // SDL's own drawable-size auto-update runs off SDL window events,
+            // which we don't pump, so size the reparented layer ourselves.
+            if let layer = metalView?.layer as? CAMetalLayer {
+                layer.contentsScale = scale()
+                layer.drawableSize = CGSize(width: w, height: h)
+            }
+            logState(w: w, h: h)
         }
 
         let now = CACurrentMediaTime()
         let dt = min(0.1, now - lastTime)
         lastTime = now
 
-        let ok = buffer.withUnsafeMutableBytes { raw -> Bool in
-            ftessera_render_rgba(bridge, dt, Int32(w), Int32(h), raw.baseAddress, raw.count)
+        // Advance + render + present straight to the swapchain. No CPU copy.
+        ftessera_present(bridge, dt)
+        let err = String(cString: ftessera_last_error(bridge))
+        if !err.isEmpty && err != lastLoggedError {
+            lastLoggedError = err
+            NSLog("flutter_tessera: present error — \(err)")
         }
-        if !ok { return }
-        buffer.withUnsafeBytes { raw in
-            if let base = raw.baseAddress {
-                presenter.present(rgba: base, width: w, height: h, layer: container.metalLayer)
-            }
-        }
+    }
+
+    private var lastLoggedError = ""
+    private var attachTries = 0
+
+    /// One log line per size change: confirms the metal view is attached and
+    /// sized, and reports the drawable it presents into.
+    private func logState(w: Int, h: Int) {
+        let ds = (metalView?.layer as? CAMetalLayer)?.drawableSize ?? .zero
+        NSLog("flutter_tessera: view=\(metalView != nil) container=\(container.bounds.size) "
+            + "mvFrame=\(metalView?.frame.size ?? .zero) drawable=\(ds) px=\(w)x\(h)")
     }
 
     private func pick(_ x: Double, _ y: Double) -> [String: Any] {
@@ -143,12 +212,8 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
     deinit {
         link?.invalidate()
         channel.setMethodCallHandler(nil)
+        // ftessera_destroy tears down the swapchain, which removes the metal view
+        // from the container and releases SDL's reference to it.
         if let bridge = bridge { ftessera_destroy(bridge) }
     }
-}
-
-/// A UIView whose backing layer is a CAMetalLayer.
-final class TesseraMetalView: UIView {
-    override class var layerClass: AnyClass { CAMetalLayer.self }
-    var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 }

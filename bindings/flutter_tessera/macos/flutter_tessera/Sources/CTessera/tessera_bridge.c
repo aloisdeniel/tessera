@@ -1,9 +1,12 @@
 /*
  * tessera_bridge.c — implementation of the Swift<->Tessera bridge.
  *
- * Owns SDL and a hidden window so the engine renders offscreen (via
- * tessera_render_rgba) and the plugin presents the pixels into the platform
- * view's CAMetalLayer itself. See tessera_bridge.h.
+ * Owns SDL and a hidden window. The engine's swapchain targets that window's
+ * CAMetalLayer; the plugin reparents the SDL-created metal view (found via
+ * ftessera_native_window + ftessera_metal_view_tag) into the Flutter platform
+ * view and drives ftessera_present, so frames scan out directly with no CPU
+ * round-trip. ftessera_render_rgba (offscreen readback) is kept for headless /
+ * capture use. See tessera_bridge.h.
  */
 #include "tessera_bridge.h"
 
@@ -29,9 +32,11 @@ FTessera* ftessera_create(int32_t w, int32_t h, float density, const char* asset
         if (!SDL_Init(SDL_INIT_VIDEO)) return NULL;
     }
 
-    /* A hidden Metal window: the engine claims it for its GPU device/swapchain
-     * but we never present to it — frames come out via tessera_render_rgba and
-     * the plugin blits them into the platform view's own layer. */
+    /* A hidden Metal window: the engine claims it for its GPU device/swapchain.
+     * We never show it — instead the plugin reparents its CAMetalLayer-backed
+     * metal view into the on-screen Flutter view and presents straight to that
+     * swapchain (ftessera_present). The window's hidden state is irrelevant once
+     * the layer is composited by the host view. */
     SDL_Window* win = SDL_CreateWindow(
         "tessera-embedded", w, h,
         SDL_WINDOW_HIDDEN | SDL_WINDOW_METAL | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -68,6 +73,33 @@ bool ftessera_render_rgba(FTessera* f, double dt, int32_t w, int32_t h,
                           void* out_rgba, size_t out_size) {
     if (!f) return false;
     return tessera_render_rgba(f->engine, dt, w, h, out_rgba, out_size);
+}
+
+void ftessera_present(FTessera* f, double dt) {
+    if (!f) return;
+    /* Advance + render + present to the engine's swapchain (the reparented
+     * metal view's CAMetalLayer). No CPU copy. */
+    tessera_tick(f->engine, dt);
+}
+
+void* ftessera_native_window(FTessera* f) {
+    if (!f || !f->window) return NULL;
+    SDL_PropertiesID props = SDL_GetWindowProperties(f->window);
+#if defined(SDL_PLATFORM_IOS) || defined(SDL_PLATFORM_TVOS)
+    return SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+#else
+    return SDL_GetPointerProperty(props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+#endif
+}
+
+int64_t ftessera_metal_view_tag(FTessera* f) {
+    if (!f || !f->window) return 0;
+    SDL_PropertiesID props = SDL_GetWindowProperties(f->window);
+#if defined(SDL_PLATFORM_IOS) || defined(SDL_PLATFORM_TVOS)
+    return (int64_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_UIKIT_METAL_VIEW_TAG_NUMBER, 0);
+#else
+    return (int64_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_COCOA_METAL_VIEW_TAG_NUMBER, 0);
+#endif
 }
 
 void ftessera_resize(FTessera* f, int32_t w, int32_t h, float density) {

@@ -75,9 +75,11 @@ renderer, which requires the platform main thread).
 and Flutter's Dart runs on the UI thread, the native platform view owns the
 engine and render loop; Dart drives it via a per-view method channel plus FFI
 (the `tessera` package's `Tessera.fromHandle`) for the any-thread `set_state`.
-The engine renders offscreen through `tessera_render_rgba` (below) and the
-plugin blits the pixels into the view's `CAMetalLayer`. Its `example/` is the
-chess game as a live, interactive Flutter widget.
+On Apple platforms the plugin reparents the engine's SDL swapchain `CAMetalLayer`
+into the platform view and presents to it directly (zero-copy) — see the Flutter
+package README; Android renders offscreen through `tessera_render_rgba` (below)
+and blits the pixels into its `Surface`. Its `example/` is the chess game as a
+live, interactive Flutter widget.
 
 ## Embedding API — `tessera_render_rgba`
 

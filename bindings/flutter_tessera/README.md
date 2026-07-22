@@ -30,15 +30,18 @@ the UI thread, so the split is:
 
 | Concern | Runs where | How |
 |---|---|---|
-| Engine lifecycle + render loop | native, main thread | the platform view owns an `FTessera` bridge; a main-runloop timer calls `tessera_render_rgba` and blits into the view's `CAMetalLayer` |
+| Engine lifecycle + render loop | native, main thread | the platform view owns an `FTessera` bridge; a main-runloop timer calls `ftessera_present` (Apple: presents straight to the engine's swapchain) / blits an RGBA frame (Android) |
 | Def registration, light/quality/timing, camera fit | Dart UI thread, **before** `start()` | FFI (`Tessera.fromHandle`) — safe because the render loop is paused during setup |
 | `setScene` (hot path) | Dart UI thread, anytime | FFI `tessera_set_state` (any-thread, mutex-guarded) |
 | `pick`, `start` | native, main thread | per-view method channel `flutter_tessera/view_<id>` |
 
-Because the native engine renders offscreen (into an RGBA buffer via the
-`tessera_render_rgba` C API added for embedding) and the plugin presents those
-pixels into the platform view's own `CAMetalLayer`, Tessera composits cleanly
-inside the Flutter widget tree.
+On Apple platforms this is **zero-copy**: the engine renders to its SDL window's
+Metal swapchain, and the plugin reparents that swapchain's `CAMetalLayer`-backed
+metal view into the platform view (`ftessera_native_window` +
+`ftessera_metal_view_tag`), so frames scan out straight into the Flutter surface
+with no CPU round-trip — how a game is meant to present under SDL. Android keeps
+the offscreen path (`tessera_render_rgba` → blit into the `Surface`). Either way
+Tessera composits cleanly inside the Flutter widget tree.
 
 ## Platform support
 
@@ -48,10 +51,11 @@ inside the Flutter widget tree.
 | **iOS** | Metal (MSL) | Reference impl (Swift/UIKit + shared C bridge); needs an iOS build of libtessera + SDL3 |
 | **Android** | Vulkan (SPIR-V) | Reference impl (Kotlin/JNI + NDK); renders with the ported SPIR-V shaders (verified on Vulkan) |
 
-All three share the same C bridge (hidden SDL window → `tessera_render_rgba` →
-blit into the platform view's surface) and the same Dart `TesseraView` /
-`TesseraController`. macOS/iOS use a `CAMetalLayer` + Metal presenter; Android
-blits into the `Surface` via `ANativeWindow`.
+All three share the same C bridge (hidden SDL window) and the same Dart
+`TesseraView` / `TesseraController`. macOS/iOS reparent the engine's swapchain
+`CAMetalLayer` into the platform view and present directly (`ftessera_present`,
+zero-copy); Android blits an offscreen RGBA frame into the `Surface` via
+`ANativeWindow`.
 
 ### Shaders (Metal vs Vulkan)
 

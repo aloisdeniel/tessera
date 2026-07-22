@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Zero-copy presentation on Apple platforms.** Instead of reading the engine
+  back into a CPU RGBA buffer and blitting it through a Metal presenter, the
+  plugin now reparents the engine's SDL swapchain `CAMetalLayer`-backed metal
+  view directly into the Flutter platform view and presents to it with the new
+  `ftessera_present` (macOS + iOS). New bridge accessors `ftessera_native_window`
+  / `ftessera_metal_view_tag` locate the view; the `MetalPresenter` blit path is
+  removed. Android keeps the `tessera_render_rgba` → `Surface` blit.
+
 ## 0.2.0
 
 - Add **iOS** (Metal/UIKit) and **Android** (Vulkan/Kotlin+JNI+NDK) platform-view
