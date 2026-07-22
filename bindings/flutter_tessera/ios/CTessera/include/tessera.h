@@ -57,6 +57,10 @@ typedef struct TesseraEngine TesseraEngine;
 typedef uint32_t TesseraDefId;    /* 0 = invalid / none */
 typedef uint64_t TesseraEntityId; /* stable across states; key for diffing */
 typedef uint64_t TesseraTileId;   /* optional per-tile instance id (0 = none) */
+typedef uint64_t TesseraCardId;   /* live card instance id (0 = invalid)      */
+typedef uint64_t TesseraCardDrawId;/* live card-pile instance id (0 = invalid) */
+typedef uint64_t TesseraHandId;   /* live hand instance id (0 = none/invalid)  */
+typedef uint64_t TesseraDiceId;   /* live die instance id (0 = invalid)        */
 
 typedef enum {
     TESSERA_LOG_TRACE = 0,
@@ -200,6 +204,62 @@ typedef struct {
     TesseraEntityId attach_entity_id; /* 0 = anchored to tile coord (M6) */
 } TesseraEffectPlacement;
 
+/* A die in the scene. A placement that newly appears (by id) is thrown: it
+ * spawns airborne and tumbles to rest with `face` up, centred at `position`
+ * (world space; nothing constrains it to a tile). `seed` varies the tumble;
+ * `throw_s` is the tumble duration (<= 0 => default). A die absent from the next
+ * state fades out. Changing def/face/seed/position re-throws it. */
+typedef struct {
+    TesseraDiceId id;
+    TesseraDefId  def;
+    uint32_t      face;
+    float         position[3];
+    uint32_t      seed;
+    float         throw_s;
+} TesseraDicePlacement;
+
+/* A card in the scene. `orientation` is a quaternion (xyzw); identity lays the
+ * card flat with its front (+Y) facing up. `hidden` shows the concealing front
+ * texture (crossfades when toggled). If `hand` is non-zero the card is arranged
+ * by that hand's fan and `position`/`orientation` are ignored; `hand_slot`
+ * orders it in the fan (lower = one end). Position/orientation changes tween. */
+typedef struct {
+    TesseraCardId id;
+    TesseraDefId  def;
+    float         position[3];
+    float         orientation[4]; /* quaternion xyzw (all-zero => identity) */
+    bool          hidden;
+    TesseraHandId hand;           /* 0 => free placement                    */
+    uint32_t      hand_slot;
+} TesseraCardPlacement;
+
+/* A pile of cards drawn as one slab, always resting face-up on the ground.
+ * `count` sets the pile thickness (tweens when it changes). The top face shows
+ * the def's `visible` (or `hidden` when `top_hidden`) texture; the bottom face
+ * always shows the def's `hidden` texture. `orientation` is a quaternion;
+ * identity lies flat, top face up. */
+typedef struct {
+    TesseraCardDrawId id;
+    TesseraDefId      def;
+    float             position[3];
+    float             orientation[4]; /* quaternion xyzw (all-zero => identity) */
+    uint32_t          count;
+    bool              top_hidden;
+} TesseraCardDrawPlacement;
+
+/* A hand: a world-space anchor that fans out the cards assigned to it (the cards
+ * whose `hand` field equals this id). `orientation` is a quaternion; identity
+ * faces the card fronts toward +Z and spreads the fan along +X. All of
+ * `spread_deg` / `radius` / `card_spacing` default when <= 0. */
+typedef struct {
+    TesseraHandId id;
+    float         position[3];
+    float         orientation[4]; /* quaternion xyzw (all-zero => identity) */
+    float         spread_deg;
+    float         radius;
+    float         card_spacing;
+} TesseraHandPlacement;
+
 typedef struct {
     TesseraCoordF focus;        /* continuous grid focus; may sit between tiles */
     float distance, yaw, pitch; /* orbit params (radians for yaw/pitch) */
@@ -212,6 +272,11 @@ typedef struct {
     const TesseraEffectPlacement* effects;  size_t effect_count;
     TesseraCamera camera;
     uint64_t      epoch;        /* optional caller sequence number */
+    /* Appended after epoch so the offsets above stay stable. */
+    const TesseraCardPlacement*     cards;      size_t card_count;
+    const TesseraCardDrawPlacement* card_draws; size_t card_draw_count;
+    const TesseraHandPlacement*     hands;      size_t hand_count;
+    const TesseraDicePlacement*     dice;       size_t dice_count;
 } TesseraState;
 
 /* Deep-copies the snapshot; diffs against current; animates transitions.
@@ -382,6 +447,85 @@ typedef struct {
 /* Configure depth-of-field. Passing NULL or {.enabled=false} disables it (the
  * scene renders directly, no post pass). Applied on the next frame. */
 TESSERA_API void tessera_set_focus(TesseraEngine* e, const TesseraFocus* focus);
+
+/* =======================================================================
+ *  Dice (procedural polyhedral dice with per-face sprites)
+ *
+ *  Register a dice *definition* from a set of face sprites; the engine builds a
+ *  matching convex model (a cube for 6 faces, a two-sided token for 2, an
+ *  N-gonal barrel otherwise) and packs the sprites into one atlas, UV-mapped so
+ *  each sprite is centred on and fills its face. Dice are then placed into the
+ *  scene through tessera_set_state (see TesseraDicePlacement below): a die that
+ *  newly appears in a state spawns airborne and tumbles along a precomputed
+ *  trajectory, settling with the requested face pointing up; a die that vanishes
+ *  from the state fades out. Everything is state-driven — nothing imperative.
+ * ===================================================================== */
+
+/* One face of a die: an encoded sprite image (PNG/JPG bytes or a filesystem
+ * path), decoded like an atlas image. Shown centred on and filling the face. */
+typedef struct { TesseraBytes sprite; } TesseraDiceFace;
+
+/* A die type. `faces` lists `face_count` sprites (face index 0..count-1);
+ * `face_count` must be >= 2. `size` is the model's approximate diameter in world
+ * units (<= 0 => 1.0). `tint` multiplies the sprites (all-zero => white). */
+typedef struct {
+    const TesseraDiceFace* faces;
+    size_t                 face_count;
+    float                  size;
+    float                  tint[4];
+} TesseraDiceDef;
+
+TESSERA_API TesseraDefId tessera_register_dice_def(TesseraEngine* e, const TesseraDiceDef* def);
+
+/* Number of faces of a registered dice def (0 if `def` is not a dice def). */
+TESSERA_API uint32_t tessera_dice_def_face_count(TesseraEngine* e, TesseraDefId def);
+
+/* Number of live dice, including those still fading in or out. */
+TESSERA_API uint32_t tessera_dice_count(TesseraEngine* e);
+
+/* The face targeted (settling or settled) by a live die. Returns false for an
+ * unknown id; on success writes the face index to *out_face. */
+TESSERA_API bool tessera_dice_face(TesseraEngine* e, TesseraDiceId id, uint32_t* out_face);
+
+/* True when every live die has settled (no tumble or fade in progress). */
+TESSERA_API bool tessera_dice_all_idle(TesseraEngine* e);
+
+/* =======================================================================
+ *  Cards (flat textured cards, piles, and hands)
+ *
+ *  A card *definition* names three textures (as registered atlas ids, so the
+ *  shared ones cost nothing to reuse): the real front (`visible`), a concealing
+ *  front (`hidden`, shown so onlookers cannot deduce the card even while it is
+ *  in view), and the `back`. The engine builds a thin rounded slab a little
+ *  smaller than 2x3 tiles. Cards, card piles (draws) and hands are all placed
+ *  through tessera_set_state and animate on diff:
+ *    - a card toggling hidden<->visible crossfades its front texture;
+ *    - a card's position/orientation change tweens like an entity;
+ *    - a pile's card count change tweens its thickness;
+ *    - a hand overrides the positions of the cards assigned to it, arranging
+ *      them in a world-space fan that follows the hand's transform.
+ * ===================================================================== */
+
+/* A card type. Each face references a registered atlas id (0 => white) plus the
+ * sub-rect of that atlas to use. `hidden`/`back` are typically shared across
+ * every card def. Dimensions are world units; <= 0 selects a sensible default
+ * (a slab a little smaller than 2x3 tiles). `tint` multiplies all faces. */
+typedef struct {
+    TesseraDefId visible_atlas;  TesseraRect visible_uv;  /* the real front face   */
+    TesseraDefId hidden_atlas;   TesseraRect hidden_uv;   /* concealing front face */
+    TesseraDefId back_atlas;     TesseraRect back_uv;     /* the reverse face      */
+    float width;         /* across the short edge  (<= 0 => default ~1.84) */
+    float height;        /* along the long edge    (<= 0 => default ~2.76) */
+    float thickness;     /* single-card thickness  (<= 0 => default 0.03)  */
+    float corner_radius; /* rounded-corner radius  (<= 0 => default 0.12)  */
+    float tint[4];
+} TesseraCardDef;
+
+TESSERA_API TesseraDefId tessera_register_card_def(TesseraEngine* e, const TesseraCardDef* def);
+
+/* =======================================================================
+ *  Debug / dev hooks
+ * ===================================================================== */
 
 /* =======================================================================
  *  Debug / dev hooks

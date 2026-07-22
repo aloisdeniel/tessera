@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- **Breaking:** dice are now state-driven. Removed the imperative
+  `Tessera.addDice` / `removeDice` / `clearDice` and the `TesseraDiceThrow`
+  struct; place dice via a `TesseraDicePlacement` array on `TesseraState`
+  instead. `registerDiceDef`, `diceDefFaceCount`, `diceCount`, `diceFace` and
+  `diceAllIdle` remain.
+- Add the cards API: `TesseraCardDef` + `Tessera.registerCardDef`, and the
+  `TesseraCardPlacement` / `TesseraCardDrawPlacement` / `TesseraHandPlacement`
+  structs on `TesseraState` (with new `cards` / `cardDraws` / `hands` / `dice`
+  array fields) — flat textured cards, piles and fanned hands, all state-driven.
+  Mirrors the new C API.
+
 ## 0.3.0
 
 - Add the dice API: `TesseraDiceFace` / `TesseraDiceDef` / `TesseraDiceThrow`

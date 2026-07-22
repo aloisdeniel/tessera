@@ -67,21 +67,46 @@ typedef struct {
 typedef struct { TesseraParticleSpec on_add, on_remove; } TesseraEffectDef;
 
 typedef uint64_t TesseraDiceId;
+typedef uint64_t TesseraCardId;
+typedef uint64_t TesseraCardDrawId;
+typedef uint64_t TesseraHandId;
 typedef struct { TesseraBytes sprite; } TesseraDiceFace;
 typedef struct {
     const TesseraDiceFace* faces; size_t face_count;
     float size; float tint[4];
 } TesseraDiceDef;
+
 typedef struct {
-    TesseraDiceId id; TesseraDefId def; uint32_t face;
-    float position[3]; uint32_t seed; float throw_s;
-} TesseraDiceThrow;
+    TesseraDefId visible_atlas; TesseraRect visible_uv;
+    TesseraDefId hidden_atlas;  TesseraRect hidden_uv;
+    TesseraDefId back_atlas;    TesseraRect back_uv;
+    float width, height, thickness, corner_radius;
+    float tint[4];
+} TesseraCardDef;
 
 typedef struct { int32_t x, y; } TesseraCoord;
 typedef struct { float x, y; } TesseraCoordF;
 typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; TesseraTileId id; } TesseraTilePlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; uint16_t facing; uint32_t anim; } TesseraEntityPlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; TesseraEntityId attach_entity_id; } TesseraEffectPlacement;
+typedef struct {
+    TesseraDiceId id; TesseraDefId def; uint32_t face;
+    float position[3]; uint32_t seed; float throw_s;
+} TesseraDicePlacement;
+typedef struct {
+    TesseraCardId id; TesseraDefId def;
+    float position[3]; float orientation[4];
+    bool hidden; TesseraHandId hand; uint32_t hand_slot;
+} TesseraCardPlacement;
+typedef struct {
+    TesseraCardDrawId id; TesseraDefId def;
+    float position[3]; float orientation[4];
+    uint32_t count; bool top_hidden;
+} TesseraCardDrawPlacement;
+typedef struct {
+    TesseraHandId id; float position[3]; float orientation[4];
+    float spread_deg, radius, card_spacing;
+} TesseraHandPlacement;
 typedef struct { TesseraCoordF focus; float distance, yaw, pitch, fov; } TesseraCamera;
 
 typedef struct {
@@ -90,6 +115,10 @@ typedef struct {
     const TesseraEffectPlacement* effects;  size_t effect_count;
     TesseraCamera camera;
     uint64_t      epoch;
+    const TesseraCardPlacement*     cards;      size_t card_count;
+    const TesseraCardDrawPlacement* card_draws; size_t card_draw_count;
+    const TesseraHandPlacement*     hands;      size_t hand_count;
+    const TesseraDicePlacement*     dice;       size_t dice_count;
 } TesseraState;
 
 typedef struct {
@@ -125,11 +154,10 @@ TesseraDefId tessera_register_effect_def(TesseraEngine*, const TesseraEffectDef*
 uint32_t     tessera_entity_def_anim_count(TesseraEngine*, TesseraDefId);
 const char*  tessera_entity_def_anim_name(TesseraEngine*, TesseraDefId, uint32_t);
 
+TesseraDefId tessera_register_card_def(TesseraEngine*, const TesseraCardDef*);
+
 TesseraDefId tessera_register_dice_def(TesseraEngine*, const TesseraDiceDef*);
 uint32_t     tessera_dice_def_face_count(TesseraEngine*, TesseraDefId);
-void         tessera_add_dice(TesseraEngine*, const TesseraDiceThrow*);
-void         tessera_remove_dice(TesseraEngine*, TesseraDiceId);
-void         tessera_clear_dice(TesseraEngine*);
 uint32_t     tessera_dice_count(TesseraEngine*);
 bool         tessera_dice_face(TesseraEngine*, TesseraDiceId, uint32_t* out_face);
 bool         tessera_dice_all_idle(TesseraEngine*);

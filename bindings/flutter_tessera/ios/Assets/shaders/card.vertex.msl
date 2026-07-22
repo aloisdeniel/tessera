@@ -1,0 +1,46 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;
+    float4   ambient;
+    float4   light_color;
+    float4   camera_pos;
+};
+struct CardUniform {
+    float4x4 model;
+    float4   tint;
+    float4   uv_visible;   // u0,v0,u1,v1
+    float4   uv_hidden;
+    float4   uv_back;
+    float4   params;       // x = mix (0 visible .. 1 hidden)
+};
+
+struct VSIn {
+    float3 pos    [[attribute(0)]];
+    float3 normal [[attribute(1)]];
+    float2 uv     [[attribute(2)]];
+    float  face   [[attribute(3)]];
+};
+struct VSOut {
+    float4 position [[position]];
+    float3 world_pos;
+    float3 normal;
+    float2 uv;         // local 0..1 across the face
+    float  face;
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant FrameUniform& frame [[buffer(0)]],
+                     constant CardUniform&  card  [[buffer(1)]])
+{
+    VSOut out;
+    float4 world = card.model * float4(in.pos, 1.0);
+    out.position  = frame.view_proj * world;
+    out.world_pos = world.xyz;
+    out.normal    = normalize((card.model * float4(in.normal, 0.0)).xyz);
+    out.uv        = in.uv;
+    out.face      = in.face;
+    return out;
+}

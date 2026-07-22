@@ -165,6 +165,32 @@ final class TesseraEffectDef extends Struct {
   external TesseraParticleSpec onRemove;
 }
 
+/// A card type. Each face references a registered atlas id (0 => white) plus the
+/// sub-rect to use. [hiddenAtlas]/[backAtlas] are typically shared across a deck.
+/// Dimensions are world units; <= 0 selects a default (a slab a little smaller
+/// than 2x3 tiles). [tint] multiplies all faces.
+final class TesseraCardDef extends Struct {
+  @Uint32()
+  external int visibleAtlas;
+  external TesseraRect visibleUv;
+  @Uint32()
+  external int hiddenAtlas;
+  external TesseraRect hiddenUv;
+  @Uint32()
+  external int backAtlas;
+  external TesseraRect backUv;
+  @Float()
+  external double width;
+  @Float()
+  external double height;
+  @Float()
+  external double thickness;
+  @Float()
+  external double cornerRadius;
+  @Array(4)
+  external Array<Float> tint;
+}
+
 // ======================================================================
 //  Dice
 // ======================================================================
@@ -184,23 +210,6 @@ final class TesseraDiceDef extends Struct {
   external double size;
   @Array(4)
   external Array<Float> tint;
-}
-
-/// A dice throw: settle [face] up at world-space [position]; [seed] varies the
-/// tumble; [throwS] is the throw duration in seconds (<=0 => default).
-final class TesseraDiceThrow extends Struct {
-  @Uint64()
-  external int id;
-  @Uint32()
-  external int def;
-  @Uint32()
-  external int face;
-  @Array(3)
-  external Array<Float> position;
-  @Uint32()
-  external int seed;
-  @Float()
-  external double throwS;
 }
 
 // ======================================================================
@@ -254,6 +263,80 @@ final class TesseraEffectPlacement extends Struct {
   external int attachEntityId; // 0 = anchored to tile coord
 }
 
+/// A die in the scene. A placement that newly appears (by id) is thrown; one
+/// that vanishes fades out. Changing def/face/seed/position re-throws it.
+final class TesseraDicePlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int def;
+  @Uint32()
+  external int face;
+  @Array(3)
+  external Array<Float> position;
+  @Uint32()
+  external int seed;
+  @Float()
+  external double throwS;
+}
+
+/// A card in the scene. [orientation] is a quaternion (xyzw; all-zero =>
+/// identity, which lays it flat, front up). [hidden] shows the concealing front
+/// (crossfades when toggled). If [hand] is non-zero the card is arranged by that
+/// hand's fan ([position]/[orientation] ignored); [handSlot] orders it.
+final class TesseraCardPlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int def;
+  @Array(3)
+  external Array<Float> position;
+  @Array(4)
+  external Array<Float> orientation;
+  @Bool()
+  external bool hidden;
+  @Uint64()
+  external int hand; // 0 => free placement
+  @Uint32()
+  external int handSlot;
+}
+
+/// A pile of cards drawn as one slab (thickness tracks [count], tweens on
+/// change). Top face shows the def's visible (or hidden when [topHidden]);
+/// bottom always shows the def's hidden texture.
+final class TesseraCardDrawPlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int def;
+  @Array(3)
+  external Array<Float> position;
+  @Array(4)
+  external Array<Float> orientation;
+  @Uint32()
+  external int count;
+  @Bool()
+  external bool topHidden;
+}
+
+/// A hand: fans out the cards whose [TesseraCardPlacement.hand] equals its id.
+/// [orientation] is a quaternion; identity faces the fronts toward +Z and
+/// spreads along +X. spread/radius/spacing default when <= 0.
+final class TesseraHandPlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Array(3)
+  external Array<Float> position;
+  @Array(4)
+  external Array<Float> orientation;
+  @Float()
+  external double spreadDeg;
+  @Float()
+  external double radius;
+  @Float()
+  external double cardSpacing;
+}
+
 final class TesseraCamera extends Struct {
   external TesseraCoordF focus;
   @Float()
@@ -279,6 +362,19 @@ final class TesseraState extends Struct {
   external TesseraCamera camera;
   @Uint64()
   external int epoch; // optional caller sequence number
+  // Appended after epoch so the offsets above stay stable.
+  external Pointer<TesseraCardPlacement> cards;
+  @Size()
+  external int cardCount;
+  external Pointer<TesseraCardDrawPlacement> cardDraws;
+  @Size()
+  external int cardDrawCount;
+  external Pointer<TesseraHandPlacement> hands;
+  @Size()
+  external int handCount;
+  external Pointer<TesseraDicePlacement> dice;
+  @Size()
+  external int diceCount;
 }
 
 // ======================================================================
@@ -406,16 +502,12 @@ typedef _AnimCountD = int Function(Pointer<TesseraEngine>, int);
 typedef _AnimNameC = Pointer<Utf8> Function(Pointer<TesseraEngine>, Uint32, Uint32);
 typedef _AnimNameD = Pointer<Utf8> Function(Pointer<TesseraEngine>, int, int);
 
+typedef _RegCardC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraCardDef>);
+typedef _RegCardD = int Function(Pointer<TesseraEngine>, Pointer<TesseraCardDef>);
 typedef _RegDiceC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
 typedef _RegDiceD = int Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
 typedef _DiceFaceCountC = Uint32 Function(Pointer<TesseraEngine>, Uint32);
 typedef _DiceFaceCountD = int Function(Pointer<TesseraEngine>, int);
-typedef _AddDiceC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraDiceThrow>);
-typedef _AddDiceD = void Function(Pointer<TesseraEngine>, Pointer<TesseraDiceThrow>);
-typedef _RemoveDiceC = Void Function(Pointer<TesseraEngine>, Uint64);
-typedef _RemoveDiceD = void Function(Pointer<TesseraEngine>, int);
-typedef _ClearDiceC = Void Function(Pointer<TesseraEngine>);
-typedef _ClearDiceD = void Function(Pointer<TesseraEngine>);
 typedef _DiceCountC = Uint32 Function(Pointer<TesseraEngine>);
 typedef _DiceCountD = int Function(Pointer<TesseraEngine>);
 typedef _DiceFaceC = Bool Function(Pointer<TesseraEngine>, Uint64, Pointer<Uint32>);
@@ -522,15 +614,12 @@ class Tessera {
   late final _AnimNameD _animName =
       _lib.lookupFunction<_AnimNameC, _AnimNameD>('tessera_entity_def_anim_name');
 
+  late final _RegCardD _registerCardDef =
+      _lib.lookupFunction<_RegCardC, _RegCardD>('tessera_register_card_def');
   late final _RegDiceD _registerDiceDef =
       _lib.lookupFunction<_RegDiceC, _RegDiceD>('tessera_register_dice_def');
   late final _DiceFaceCountD _diceDefFaceCount = _lib
       .lookupFunction<_DiceFaceCountC, _DiceFaceCountD>('tessera_dice_def_face_count');
-  late final _AddDiceD _addDice = _lib.lookupFunction<_AddDiceC, _AddDiceD>('tessera_add_dice');
-  late final _RemoveDiceD _removeDice =
-      _lib.lookupFunction<_RemoveDiceC, _RemoveDiceD>('tessera_remove_dice');
-  late final _ClearDiceD _clearDice =
-      _lib.lookupFunction<_ClearDiceC, _ClearDiceD>('tessera_clear_dice');
   late final _DiceCountD _diceCount =
       _lib.lookupFunction<_DiceCountC, _DiceCountD>('tessera_dice_count');
   late final _DiceFaceD _diceFace =
@@ -642,22 +731,17 @@ class Tessera {
   String entityDefAnimName(int def, int index) =>
       _animName(_engine, def, index).toDartString();
 
-  // ---- dice (imperative; render-thread, like setTiming/setLight) ----
+  // ---- cards ----
+  /// Register a card def (visible/hidden/back atlas refs); returns a
+  /// TesseraDefId (0 = fail). Place cards/piles/hands via [setState].
+  int registerCardDef(Pointer<TesseraCardDef> def) => _registerCardDef(_engine, def);
+
+  // ---- dice (state-driven: place dice via setState / TesseraDicePlacement) ----
   /// Register a dice def (per-face sprites); returns a TesseraDefId (0 = fail).
   int registerDiceDef(Pointer<TesseraDiceDef> def) => _registerDiceDef(_engine, def);
 
   /// Number of faces of a registered dice def (0 if not a dice def).
   int diceDefFaceCount(int def) => _diceDefFaceCount(_engine, def);
-
-  /// Throw a die (or re-throw one with the same id), landing on the requested
-  /// face at a floating world position.
-  void addDice(Pointer<TesseraDiceThrow> spec) => _addDice(_engine, spec);
-
-  /// Begin removing a die (fade + shrink out). Unknown id => no-op.
-  void removeDice(int id) => _removeDice(_engine, id);
-
-  /// Begin removing every live die.
-  void clearDice() => _clearDice(_engine);
 
   /// Number of live dice (including those fading in/out).
   int get diceCount => _diceCount(_engine);
