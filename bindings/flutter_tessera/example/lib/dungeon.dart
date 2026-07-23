@@ -159,7 +159,7 @@ class DgRollMove extends DgAction {
   const DgRollMove();
 }
 
-/// Intrinsic: advance one tile toward the move target (drives the walk).
+/// Intrinsic: finish the move once the multi-step walk has played out.
 class DgStep extends DgAction {
   const DgStep();
 }
@@ -196,7 +196,8 @@ class DgRoll extends DgState {
   const DgRoll(super.c);
 }
 
-/// The hero is walking toward [target] (one tile per idle beat).
+/// The hero is walking toward [target] — the renderer plays the whole run as a
+/// single multi-step move (one hop per tile), then [DgStep] finishes it.
 class DgMoving extends DgState {
   const DgMoving(super.c, this.target);
   final int target;
@@ -272,12 +273,9 @@ DgState _roll(DgRoll s) {
   return DgMoving(c, target);
 }
 
-DgState _step(DgMoving s) {
-  if (s.c.heroPos >= s.target) return _arrive(s.c);
-  final c = s.c.copy(heroPos: s.c.heroPos + 1);
-  if (c.heroPos >= s.target) return _arrive(c);
-  return DgMoving(c, s.target);
-}
+// The whole walk plays as a single multi-step move (see `_scene`), so one beat
+// jumps the hero straight to the target tile and resolves what's on it.
+DgState _step(DgMoving s) => _arrive(s.c.copy(heroPos: s.target));
 
 /// The hero has reached a tile — resolve what's on it.
 DgState _arrive(Core c) {
@@ -496,11 +494,23 @@ class DungeonController extends GameController<DgState, DgAction> {
 
     final entities = <TesseraEntity>[];
     if (s is! DgLost) {
+      // While moving, place the hero on the destination tile and hand the
+      // renderer the whole run of intermediate tiles as a multi-step path — it
+      // hops the hero along them in one move, one tile at a time.
+      var heroIdx = c.heroPos;
+      var heroPath = const <(int, int)>[];
+      if (s is DgMoving && s.target > c.heroPos) {
+        heroIdx = s.target;
+        heroPath = [
+          for (var i = c.heroPos + 1; i <= s.target; i++) (kPath[i].x, kPath[i].z),
+        ];
+      }
       entities.add(TesseraEntity(
         id: _heroId,
         def: _hero,
-        x: kPath[c.heroPos].x,
-        y: kPath[c.heroPos].z,
+        x: kPath[heroIdx].x,
+        y: kPath[heroIdx].z,
+        path: heroPath,
       ));
     }
     for (var i = 0; i < c.monsters.length; i++) {

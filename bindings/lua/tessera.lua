@@ -87,7 +87,7 @@ typedef struct {
 typedef struct { int32_t x, y; } TesseraCoord;
 typedef struct { float x, y; } TesseraCoordF;
 typedef struct { TesseraCoord coord; TesseraDefId tile_def; uint32_t variant; TesseraTileId id; } TesseraTilePlacement;
-typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; uint16_t facing; uint32_t anim; } TesseraEntityPlacement;
+typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; uint16_t facing; uint32_t anim; const TesseraCoord* path; uint32_t path_count; } TesseraEntityPlacement;
 typedef struct { TesseraEntityId id; TesseraDefId def; TesseraCoord coord; TesseraEntityId attach_entity_id; } TesseraEffectPlacement;
 typedef struct {
     TesseraDiceId id; TesseraDefId def; uint32_t face;
@@ -98,6 +98,7 @@ typedef struct {
     float position[3]; float orientation[4];
     bool hidden; TesseraHandId hand; uint32_t hand_slot;
     TesseraCardDrawId source_draw;
+    const float* path; uint32_t path_count;
 } TesseraCardPlacement;
 typedef struct {
     TesseraCardDrawId id; TesseraDefId def;

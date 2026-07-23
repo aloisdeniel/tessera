@@ -149,6 +149,13 @@ class TesseraTile {
 
 /// An entity placed on the grid. [id] is stable across states (the diff key), so
 /// a change in [x]/[y] for the same id animates as a move.
+///
+/// [path] is an optional multi-step move: when it holds more than one coord the
+/// entity walks *through* them (each `(x, y)`, in order) — hopping from tile to
+/// tile — on its way to [x]/[y] rather than gliding straight there. The last
+/// entry must equal ([x], [y]). The whole walk takes `2 × moveS` (twice a single
+/// move, so the hops stay legible), split across the steps. Empty or
+/// single-element = a plain single move.
 class TesseraEntity {
   const TesseraEntity({
     required this.id,
@@ -157,6 +164,7 @@ class TesseraEntity {
     required this.y,
     this.facing = 0,
     this.anim = 0,
+    this.path = const [],
   });
 
   final int id;
@@ -165,6 +173,7 @@ class TesseraEntity {
   final int y;
   final int facing;
   final int anim;
+  final List<(int x, int y)> path;
 }
 
 /// A card placed in the world. [orientation] is a quaternion (xyzw; all-zero =>
@@ -186,6 +195,7 @@ class TesseraCard {
     this.hand = 0,
     this.handSlot = 0,
     this.sourceDraw = 0,
+    this.path = const [],
   });
 
   final int id;
@@ -196,6 +206,14 @@ class TesseraCard {
   final int hand;
   final int handSlot;
   final int sourceDraw;
+
+  /// Optional multi-step move for a *free* card (ignored while [hand] != 0):
+  /// when it holds more than one position (each `[x, y, z]`) the card tweens
+  /// *through* them in order rather than sliding straight to [position]. The
+  /// last entry must equal [position]. The whole move takes `2 × moveS` (twice a
+  /// single move), split across the steps. Empty or single-element = a plain
+  /// single move.
+  final List<List<double>> path;
 }
 
 /// A pile of cards drawn as one slab (thickness tracks [count]). The top face

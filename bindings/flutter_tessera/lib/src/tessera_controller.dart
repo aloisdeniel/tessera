@@ -295,6 +295,8 @@ class TesseraController {
         scene.hands.isEmpty ? 1 : scene.hands.length);
     final dice = calloc<t.TesseraDicePlacement>(
         scene.dice.isEmpty ? 1 : scene.dice.length);
+    // Per-placement multi-step path buffers, freed after setState (which copies).
+    final pathPtrs = <Pointer<NativeType>>[];
 
     for (var i = 0; i < scene.tiles.length; ++i) {
       final s = scene.tiles[i];
@@ -318,6 +320,18 @@ class TesseraController {
       p.coord
         ..x = s.x
         ..y = s.y;
+      if (s.path.length > 1) {
+        final pp = calloc<t.TesseraCoord>(s.path.length);
+        for (var k = 0; k < s.path.length; ++k) {
+          pp[k]
+            ..x = s.path[k].$1
+            ..y = s.path[k].$2;
+        }
+        p
+          ..path = pp
+          ..pathCount = s.path.length;
+        pathPtrs.add(pp);
+      }
     }
     for (var i = 0; i < scene.cards.length; ++i) {
       final s = scene.cards[i];
@@ -334,6 +348,18 @@ class TesseraController {
       }
       for (var k = 0; k < 4; ++k) {
         p.orientation[k] = s.orientation[k];
+      }
+      if (s.hand == 0 && s.path.length > 1) {
+        final pp = calloc<Float>(s.path.length * 3);
+        for (var k = 0; k < s.path.length; ++k) {
+          pp[k * 3 + 0] = s.path[k][0];
+          pp[k * 3 + 1] = s.path[k][1];
+          pp[k * 3 + 2] = s.path[k][2];
+        }
+        p
+          ..path = pp
+          ..pathCount = s.path.length;
+        pathPtrs.add(pp);
       }
     }
     for (var i = 0; i < scene.cardDraws.length; ++i) {
@@ -414,6 +440,9 @@ class TesseraController {
     calloc.free(draws);
     calloc.free(hands);
     calloc.free(dice);
+    for (final p in pathPtrs) {
+      calloc.free(p);
+    }
   }
 
   /// True when no transitions are active (any-thread).

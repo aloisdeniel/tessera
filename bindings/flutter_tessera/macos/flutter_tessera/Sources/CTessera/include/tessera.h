@@ -195,6 +195,17 @@ typedef struct {
     TesseraCoord    coord;
     uint16_t        facing;  /* 0..3 quadrant (square grid)       */
     uint32_t        anim;    /* active animation clip index (M5)  */
+    /* Optional multi-step move. When `path` is non-NULL and `path_count > 1`,
+     * an entity whose coord changed walks *through* the listed coords in order
+     * (`path[0]` first), hopping from tile to tile, instead of gliding straight
+     * to `coord`. The last entry must equal `coord` (the resting tile, still
+     * used for layout/picking). The whole walk takes `2 * move_s` (twice a
+     * single-tile move, so the hops stay legible), split evenly across the
+     * `path_count` steps. NULL or a count of 0/1 behaves exactly like a plain
+     * single move to `coord` at the normal `move_s`. The array is copied by
+     * tessera_set_state; the caller may free it immediately after. */
+    const TesseraCoord* path;
+    uint32_t            path_count;
 } TesseraEntityPlacement;
 
 typedef struct {
@@ -237,6 +248,16 @@ typedef struct {
     TesseraHandId hand;           /* 0 => free placement                    */
     uint32_t      hand_slot;
     TesseraCardDrawId source_draw;/* 0 => none; deal-from-pile spawn source */
+    /* Optional multi-step move for a *free* card (ignored while `hand != 0`).
+     * When `path` is non-NULL and `path_count > 1`, the card tweens through the
+     * listed positions in order (each 3 floats: x,y,z; `path[0]` first) rather
+     * than sliding straight to `position`. The last position must equal
+     * `position`. The whole move takes `2 * move_s` (twice a single move), split
+     * evenly across the `path_count` steps. NULL or a count of 0/1 is a plain
+     * single move at the normal `move_s`. `path` points at `path_count * 3`
+     * floats; copied by tessera_set_state. */
+    const float*  path;
+    uint32_t      path_count;
 } TesseraCardPlacement;
 
 /* A pile of cards drawn as one slab, always resting face-up on the ground.

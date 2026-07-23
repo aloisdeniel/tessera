@@ -251,6 +251,9 @@ final class TesseraEntityPlacement extends Struct {
   external int facing; // 0..3 quadrant
   @Uint32()
   external int anim; // active clip index
+  external Pointer<TesseraCoord> path; // multi-step waypoints (null => single move)
+  @Uint32()
+  external int pathCount;
 }
 
 final class TesseraEffectPlacement extends Struct {
@@ -301,6 +304,9 @@ final class TesseraCardPlacement extends Struct {
   external int handSlot;
   @Uint64()
   external int sourceDraw; // 0 => none; deal-from-pile spawn source
+  external Pointer<Float> path; // multi-step waypoints, 3 floats each (null => single move)
+  @Uint32()
+  external int pathCount;
 }
 
 /// A pile of cards drawn as one slab (thickness tracks [count], tweens on
