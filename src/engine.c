@@ -419,7 +419,37 @@ static bool resolve_camera_goal(TesseraEngine* e, const TesseraCamera* cam,
     }
 }
 
+/* Bit-exact float compare so NaN "keep current" sentinels match themselves. */
+static bool cam_feq(float a, float b) {
+    uint32_t ua, ub;
+    memcpy(&ua, &a, sizeof ua);
+    memcpy(&ub, &b, sizeof ub);
+    return ua == ub;
+}
+
+/* Two camera specs are the same goal when every field that feeds
+ * resolve_camera_goal matches (bit-exact, so sentinels compare equal). */
+static bool camera_spec_eq(const TesseraCamera* a, const TesseraCamera* b) {
+    if (a->mode != b->mode) return false;
+    if (a->target_id != b->target_id || a->focus_card_id != b->focus_card_id) return false;
+    if (!cam_feq(a->focus.x, b->focus.x) || !cam_feq(a->focus.y, b->focus.y)) return false;
+    if (!cam_feq(a->distance, b->distance)) return false;
+    if (!cam_feq(a->yaw, b->yaw) || !cam_feq(a->pitch, b->pitch)) return false;
+    if (!cam_feq(a->fov, b->fov) || !cam_feq(a->fit_padding, b->fit_padding)) return false;
+    for (int i = 0; i < 3; ++i) if (!cam_feq(a->position[i], b->position[i])) return false;
+    for (int i = 0; i < 4; ++i) if (!cam_feq(a->orientation[i], b->orientation[i])) return false;
+    for (int i = 0; i < 3; ++i) if (!cam_feq(a->target[i], b->target[i])) return false;
+    return true;
+}
+
 static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
+    /* Re-emitting the identical camera spec (common when one logical move plays
+     * as several scenes) must NOT restart the transition: a fresh tween would
+     * snap the eye back to the object's *old* position and then chase it, so a
+     * follow mode visibly trails its moving target. Detect the no-change case
+     * and keep the current tween / idle-follow running instead. */
+    bool same = e->cam_spec_have && camera_spec_eq(c, &e->cam_spec);
+
     /* Remember the promoted spec so advance_camera can re-resolve the goal each
      * tick (follow modes track a moving object). */
     e->cam_spec = *c;
@@ -437,6 +467,13 @@ static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
         e->cam_to = G;
         e->cam_have = true;
         e->cam_active = false;
+        return;
+    }
+    if (same) {
+        /* Unchanged goal: leave the in-flight tween (or idle-follow) alone so the
+         * camera stays locked onto the live target. advance_camera re-resolves G
+         * every tick, so tracking continues seamlessly across the scene swap. */
+        e->cam_to = G;
         return;
     }
     /* Tween from the current live pose to the new goal over timing.camera_s. */
