@@ -24,6 +24,7 @@
 #include <string.h>
 
 #define DICE_DEFAULT_THROW_S 1.15f
+#define DICE_DEFAULT_SLIDE_S 0.45f   /* reposition-only tween (no throw) */
 #define DICE_CELL_PX         256      /* atlas cell resolution                 */
 #define DICE_CELL_PAD        10       /* gutter around each cell (px), no bleed */
 #define DICE_DISC_SEG        48       /* segments for coin discs / prism caps  */
@@ -821,6 +822,13 @@ typedef struct {
     /* spawn / despawn */
     float  from_alpha, to_alpha, from_scale, to_scale;
     TsTween fade_tw;
+    /* reposition-only slide: when a die's placement changes in position alone
+     * (same id/def/face/seed/throw_s) we skip the throw and simply tween the
+     * position from where it is now to the new rest spot with an easeInOut
+     * curve, holding its rest orientation. */
+    bool    sliding;
+    vec3    slide_from;
+    TsTween slide_tw;
     bool   removing, resting, alive;
     /* current pose */
     vec3   pos; versor rot; float alpha, scale;
@@ -907,12 +915,28 @@ void ts_dice_add(TsDice* d, TesseraEngine* e, const TsDiceThrow* spec) {
     it->alpha = 0.0f; it->scale = it->from_scale;
 }
 
+/* Retarget a live die to a new position without re-throwing it: tween from its
+ * current on-screen pose to the new rest spot with an easeInOut curve, holding
+ * the (unchanged) rest orientation. Used when only the placement position moved. */
+static void dice_slide_to(DiceInst* it, const float pos[3], float slide_s) {
+    it->removing = false;
+    it->resting = false;
+    it->sliding = true;
+    glm_vec3_copy(it->pos, it->slide_from);        /* start where it is now */
+    glm_vec3_copy((float*)pos, it->rest_pos);      /* new destination        */
+    it->alpha = it->to_alpha = it->from_alpha = 1.0f;
+    it->scale = it->to_scale = it->from_scale = 1.0f;
+    ts_tween_start(&it->slide_tw, slide_s > 0.0f ? slide_s : DICE_DEFAULT_SLIDE_S,
+                   0.0f, TS_EASE_IN_OUT_CUBIC);
+}
+
 void ts_dice_remove(TsDice* d, TesseraDiceId id, float fade_s) {
     if (!d) return;
     DiceInst* it = dice_find(d, id);
     if (!it || it->removing) return;
     it->removing = true;
     it->resting = false;
+    it->sliding = false;
     it->from_alpha = it->alpha; it->to_alpha = 0.0f;
     it->from_scale = it->scale; it->to_scale = 0.5f;
     ts_tween_start(&it->fade_tw, fade_s > 0.0f ? fade_s : 0.25f, 0.0f, TS_EASE_IN_CUBIC);
@@ -929,6 +953,20 @@ void ts_dice_advance(TsDice* d, float dt) {
     if (!d) return;
     for (size_t i = 0; i < d->count;) {
         DiceInst* it = &d->items[i];
+
+        /* Reposition-only slide: tween pos → rest_pos (easeInOut), hold the rest
+         * orientation, no throw physics. A removal clears `sliding` so this is
+         * skipped and the normal fade path runs. */
+        if (it->sliding && !it->removing) {
+            ts_tween_advance(&it->slide_tw, dt);
+            ts_tween_vec3(&it->slide_tw, it->slide_from, it->rest_pos, it->pos);
+            glm_quat_copy(it->rest_rot, it->rot);
+            it->alpha = 1.0f; it->scale = 1.0f;
+            if (ts_tween_done(&it->slide_tw)) { it->sliding = false; it->resting = true; }
+            ++i;
+            continue;
+        }
+
         ts_tween_advance(&it->throw_tw, dt);
         ts_tween_advance(&it->fade_tw, dt);
 
@@ -1062,6 +1100,16 @@ static bool dice_placement_same(const TesseraDicePlacement* a,
            a->position[2] == b->position[2];
 }
 
+/* True when two placements are identical except (possibly) their position — same
+ * die, same number/face, same throw. When this holds but the position differs,
+ * the die is simply slid to the new spot instead of being re-thrown. */
+static bool dice_placement_same_except_pos(const TesseraDicePlacement* a,
+                                           const TesseraDicePlacement* b) {
+    if (!a || !b) return false;
+    return a->def == b->def && a->face == b->face && a->seed == b->seed &&
+           a->throw_s == b->throw_s;
+}
+
 void ts_dice_on_promote(TesseraEngine* e, const TsSnapshot* prev,
                         const TsSnapshot* next, float remove_s) {
     if (!e) return;
@@ -1079,8 +1127,14 @@ void ts_dice_on_promote(TesseraEngine* e, const TsSnapshot* prev,
         const TesseraDicePlacement* p = &next->dice[i];
         if (p->id == 0) continue;
         const TesseraDicePlacement* pp = find_dice_placement(prev, p->id);
-        bool live = dice_find(d, p->id) != NULL;
+        DiceInst* inst = dice_find(d, p->id);
+        bool live = inst != NULL;
         if (live && pp && dice_placement_same(pp, p)) continue;  /* unchanged */
+        /* Only the position moved (same number/throw): slide there, don't re-throw. */
+        if (live && pp && dice_placement_same_except_pos(pp, p)) {
+            dice_slide_to(inst, p->position, p->throw_s);
+            continue;
+        }
         TsDiceThrow t = { .id = p->id, .def = p->def, .face = p->face,
                           .seed = p->seed, .throw_s = p->throw_s };
         t.position[0] = p->position[0];
@@ -1104,6 +1158,7 @@ bool ts_dice_all_idle(const TsDice* d) {
         const DiceInst* it = &d->items[i];
         if (!it->alive) continue;
         if (it->removing) return false;
+        if (it->sliding) return false;
         if (!ts_tween_done(&it->throw_tw)) return false;
         if (!ts_tween_done(&it->fade_tw)) return false;
     }

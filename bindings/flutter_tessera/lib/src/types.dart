@@ -260,7 +260,10 @@ class TesseraHand {
 
 /// A die placed in the world. A die that newly appears (by [id]) is thrown and
 /// settles with [face] up at [position]; one that vanishes fades out. Changing
-/// def/face/seed/position re-throws it.
+/// its def/face/seed/throwS re-throws it. Changing *only* the [position] (same
+/// id/def/face/seed/throwS) instead slides the die from where it is to the new
+/// spot with an easeInOut curve — no re-throw — so a settled die can be moved
+/// without tumbling it again.
 class TesseraDie {
   const TesseraDie({
     required this.id,

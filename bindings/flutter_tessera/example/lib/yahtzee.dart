@@ -4,6 +4,10 @@
 // state, a pure reducer `yUpdate`, and a `render` projecting the five dice into
 // a scene. Rolling gives the un-held dice new faces + new seeds, so the engine
 // re-throws exactly those (held dice keep their placement and sit still).
+//
+// Holding/un-holding a die (YToggleKeep) changes ONLY that die's z position —
+// its id/def/face/seed/throwS are untouched — so the engine slides it forward to
+// the hold row (or back) with an easeInOut curve instead of re-throwing it.
 
 import 'dart:math' as math;
 

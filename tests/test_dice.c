@@ -127,6 +127,26 @@ int main(void) {
         CHECK(f == want[i]);
     }
 
+    /* reposition-only update: move die 1 to a new spot, leaving id/def/face/seed/
+     * throw_s untouched. It must slide there (re-animate) rather than re-throw:
+     * the instance is reused (count unchanged) and the landed face is preserved. */
+    dice[0].position[0] += 3.0f;
+    dice[0].position[2] += 2.0f;
+    st.dice = dice; st.dice_count = ND;
+    tessera_set_state(e, &st);
+    CHECK(tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf));
+    CHECK(tessera_dice_count(e) == ND);        /* no new instance thrown */
+    CHECK(!tessera_dice_all_idle(e));          /* the slide is animating   */
+    { uint32_t f = 999; CHECK(tessera_dice_face(e, 1, &f) && f == want[0]); }
+    steps = 0;
+    while (!tessera_dice_all_idle(e) && steps < 600) {
+        CHECK(tessera_render_rgba(e, 1.0 / 60.0, 64, 64, buf, sizeof buf));
+        steps++;
+    }
+    CHECK(tessera_dice_all_idle(e));
+    CHECK(tessera_dice_count(e) == ND);
+    { uint32_t f = 999; CHECK(tessera_dice_face(e, 1, &f) && f == want[0]); }
+
     /* remove one: drop it from the state — it fades then culls */
     TesseraDicePlacement fewer[ND - 1];
     int w = 0;
