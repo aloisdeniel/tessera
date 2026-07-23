@@ -173,14 +173,39 @@ const char* tessera_entity_def_anim_name(TesseraEngine* e, TesseraDefId def, uin
 }
 
 /* ---- state / timing / quality / light ---- */
-void tessera_set_state(TesseraEngine* e, const TesseraState* state) {
-    if (!e || !state || !e->state) return;
+TesseraOpId tessera_set_state(TesseraEngine* e, const TesseraState* state) {
+    if (!e || !state || !e->state) return 0;
     /* Deep-copy off-lock, then publish under the mutex (short critical section). */
     TsSnapshot* snap = ts_snapshot_copy(state);
-    if (!snap) { ts_engine_set_error(e, "set_state: snapshot copy failed"); return; }
+    if (!snap) { ts_engine_set_error(e, "set_state: snapshot copy failed"); return 0; }
     SDL_LockMutex(e->state_mutex);
+    TesseraOpId id = ++e->op_next;   /* monotonic, nonzero; first id is 1 */
+    snap->op_id = id;
     ts_state_publish_pending(e->state, snap);
     SDL_UnlockMutex(e->state_mutex);
+    return id;
+}
+
+bool tessera_operation_completed(TesseraEngine* e, TesseraOpId op) {
+    if (!e || op == 0) return true;
+    SDL_LockMutex(e->state_mutex);
+    bool done = op <= e->op_completed;
+    SDL_UnlockMutex(e->state_mutex);
+    return done;
+}
+
+TesseraOpId tessera_last_completed_operation(TesseraEngine* e) {
+    if (!e) return 0;
+    SDL_LockMutex(e->state_mutex);
+    TesseraOpId c = e->op_completed;
+    SDL_UnlockMutex(e->state_mutex);
+    return c;
+}
+
+void tessera_set_operation_callback(TesseraEngine* e, TesseraOpCompletedFn fn, void* user) {
+    if (!e) return;
+    e->op_cb = fn;
+    e->op_cb_user = user;
 }
 
 /* set_timing/set_quality/set_light write small POD structs the tick reads live

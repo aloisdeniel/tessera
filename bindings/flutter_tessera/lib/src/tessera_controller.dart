@@ -14,6 +14,7 @@
 // quality, timing, first scene) → start() → (runtime: setScene via FFI, pick
 // via channel) → dispose.
 
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io' show Platform;
 
@@ -37,12 +38,41 @@ DynamicLibrary _defaultLibrary() {
 class TesseraController {
   TesseraController._(this._channel, this._engine) {
     _channel.setMethodCallHandler(_handleNativeCall);
+    _installOperationCallback();
   }
 
   final MethodChannel _channel;
   final t.Tessera _engine;
   bool _started = false;
   bool _disposed = false;
+
+  // Operation completion plumbing. `set_state` returns a monotonic op id; the
+  // engine fires [_onOperationCompleted] (on its tick thread, marshalled to this
+  // isolate by NativeCallable.listener) as each op's transition settles. We turn
+  // that event stream into per-scene Futures instead of polling isIdle.
+  NativeCallable<t.TesseraOpCompletedNative>? _opCallback;
+  int _lastCompletedOp = 0;
+  final _opWaiters = <int, List<Completer<void>>>{};
+
+  void _installOperationCallback() {
+    final cb = NativeCallable<t.TesseraOpCompletedNative>.listener(
+      _onOperationCompleted,
+    );
+    _opCallback = cb;
+    _engine.setOperationCallback(cb.nativeFunction, nullptr);
+  }
+
+  void _onOperationCompleted(int op, Pointer<Void> user) {
+    if (op > _lastCompletedOp) _lastCompletedOp = op;
+    // Complete every waiter whose op the engine has now reached (ids monotonic).
+    _opWaiters.removeWhere((waited, completers) {
+      if (waited > _lastCompletedOp) return false;
+      for (final c in completers) {
+        if (!c.isCompleted) c.complete();
+      }
+      return true;
+    });
+  }
 
   /// Called when the view's logical (point) size changes — on first layout and
   /// on every resize / orientation change. The engine has already been resized,
@@ -280,9 +310,20 @@ class TesseraController {
 
   // ---- runtime ----
 
-  /// Push a scene snapshot. Thread-safe (deep-copied under the engine mutex);
-  /// the engine diffs it against the current scene and animates the transition.
-  void setScene(TesseraScene scene) {
+  /// Push a scene snapshot and return a Future that completes once the
+  /// transition it triggers has fully played out — every entity/card/dice/
+  /// effect/camera animation settled and the engine reports [isIdle] again.
+  ///
+  /// Thread-safe (deep-copied under the engine mutex); the engine diffs it
+  /// against the current scene and animates the difference. `set_state` marks
+  /// the snapshot pending immediately, so the engine reports *not* idle
+  /// synchronously after this call — the Future can never resolve before the
+  /// transition has started.
+  ///
+  /// Awaiting lets callers sequence dependent beats — e.g. throw a die, await
+  /// it settling, *then* move a piece — instead of pushing both at once.
+  /// Ignoring the Future keeps the old fire-and-forget behaviour.
+  Future<void> setScene(TesseraScene scene) {
     final tiles = calloc<t.TesseraTilePlacement>(
         scene.tiles.isEmpty ? 1 : scene.tiles.length);
     final ents = calloc<t.TesseraEntityPlacement>(
@@ -432,7 +473,9 @@ class TesseraController {
       ..x = scene.camera.focusX
       ..y = scene.camera.focusY;
 
-    _engine.setState(st); // deep-copies; safe to free immediately after
+    // deep-copies; safe to free immediately after. Returns the operation id
+    // whose completion resolves the Future below.
+    final op = _engine.setState(st);
     calloc.free(st);
     calloc.free(tiles);
     calloc.free(ents);
@@ -443,6 +486,22 @@ class TesseraController {
     for (final p in pathPtrs) {
       calloc.free(p);
     }
+    return _awaitOperation(op);
+  }
+
+  /// A Future that completes when operation [op]'s transition has fully settled,
+  /// driven by the engine's completion event (no polling). Resolves synchronously
+  /// if the operation is already done (or the controller is disposed).
+  Future<void> _awaitOperation(int op) {
+    if (op == 0 ||
+        _disposed ||
+        op <= _lastCompletedOp ||
+        _engine.operationCompleted(op)) {
+      return Future.value();
+    }
+    final completer = Completer<void>();
+    (_opWaiters[op] ??= <Completer<void>>[]).add(completer);
+    return completer.future;
   }
 
   /// True when no transitions are active (any-thread).
@@ -474,6 +533,17 @@ class TesseraController {
     _disposed = true;
     onResize = null;
     _channel.setMethodCallHandler(null);
+    // Detach the native callback before it can fire into a torn-down isolate,
+    // then release any Futures still waiting on an operation.
+    _engine.setOperationCallback(nullptr, nullptr);
+    _opCallback?.close();
+    _opCallback = null;
+    for (final completers in _opWaiters.values) {
+      for (final c in completers) {
+        if (!c.isCompleted) c.complete();
+      }
+    }
+    _opWaiters.clear();
     _engine.dispose(); // no-op for a fromHandle wrapper (host owns lifecycle)
   }
 

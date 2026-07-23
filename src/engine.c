@@ -319,6 +319,8 @@ void ts_engine_tick(TesseraEngine* e, double dt) {
     ts_engine_render(e);
 }
 
+static void ts_engine_settle_operation(TesseraEngine* e);
+
 void ts_engine_advance(TesseraEngine* e, double dt) {
     if (dt < 0) dt = 0;
     e->clock += dt;
@@ -339,6 +341,12 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
             ts_fx_on_promote(e, prev, next);
             ts_dice_on_promote(e, prev, next, e->timing.remove_s);
             apply_camera(e, &next->camera);
+            /* This snapshot's op is now in flight; it completes when the
+             * transition it set up next goes idle (below). A promote that
+             * supersedes an earlier in-flight op just adopts the newer id —
+             * monotonicity means completing it also completes the older. */
+            e->op_inflight = next->op_id;
+            e->op_has_inflight = true;
         }
     }
 
@@ -347,4 +355,25 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
     if (e->fx) ts_fx_advance(e, (float)dt * mult);
     if (e->dice) ts_dice_advance(e->dice, (float)dt * mult);
     advance_camera(e, (float)dt * mult);
+
+    ts_engine_settle_operation(e);
+}
+
+/* A promoted transition completes the tick it first has no animation left. Fire
+ * at most one completion per tick; the callback runs outside the state mutex so
+ * it may re-enter the engine's read paths (but not set_state). */
+static void ts_engine_settle_operation(TesseraEngine* e) {
+    if (!e->op_has_inflight) return;
+    bool idle = !e->cam_active
+             && (!e->fx   || ts_fx_is_idle(e->fx))
+             && (!e->dice || ts_dice_all_idle(e->dice))
+             && (!e->orch || ts_orch_is_idle(e->orch));
+    if (!idle) return;
+
+    TesseraOpId done = e->op_inflight;
+    e->op_has_inflight = false;
+    SDL_LockMutex(e->state_mutex);
+    if (done > e->op_completed) e->op_completed = done;
+    SDL_UnlockMutex(e->state_mutex);
+    if (e->op_cb) e->op_cb(done, e->op_cb_user);
 }

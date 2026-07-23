@@ -523,8 +523,20 @@ typedef _DiceFaceD = bool Function(Pointer<TesseraEngine>, int, Pointer<Uint32>)
 typedef _DiceAllIdleC = Bool Function(Pointer<TesseraEngine>);
 typedef _DiceAllIdleD = bool Function(Pointer<TesseraEngine>);
 
-typedef _SetStateC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
-typedef _SetStateD = void Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
+typedef _SetStateC = Uint64 Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
+typedef _SetStateD = int Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
+typedef _OpCompletedC = Bool Function(Pointer<TesseraEngine>, Uint64);
+typedef _OpCompletedD = bool Function(Pointer<TesseraEngine>, int);
+typedef _LastOpC = Uint64 Function(Pointer<TesseraEngine>);
+typedef _LastOpD = int Function(Pointer<TesseraEngine>);
+/// Native signature of the operation-completed callback: `void(uint64 op,
+/// void* user)`. Wrap a Dart closure of this shape in a `NativeCallable` and
+/// pass its `nativeFunction` to [Tessera.setOperationCallback].
+typedef TesseraOpCompletedNative = Void Function(Uint64, Pointer<Void>);
+typedef _SetOpCallbackC = Void Function(
+    Pointer<TesseraEngine>, Pointer<NativeFunction<TesseraOpCompletedNative>>, Pointer<Void>);
+typedef _SetOpCallbackD = void Function(
+    Pointer<TesseraEngine>, Pointer<NativeFunction<TesseraOpCompletedNative>>, Pointer<Void>);
 typedef _PickC = Bool Function(Pointer<TesseraEngine>, Float, Float, Pointer<TesseraPick>);
 typedef _PickD = bool Function(Pointer<TesseraEngine>, double, double, Pointer<TesseraPick>);
 typedef _WorldToScreenC =
@@ -637,6 +649,12 @@ class Tessera {
 
   late final _SetStateD _setState =
       _lib.lookupFunction<_SetStateC, _SetStateD>('tessera_set_state');
+  late final _OpCompletedD _operationCompleted = _lib
+      .lookupFunction<_OpCompletedC, _OpCompletedD>('tessera_operation_completed');
+  late final _LastOpD _lastCompletedOperation = _lib
+      .lookupFunction<_LastOpC, _LastOpD>('tessera_last_completed_operation');
+  late final _SetOpCallbackD _setOperationCallback = _lib
+      .lookupFunction<_SetOpCallbackC, _SetOpCallbackD>('tessera_set_operation_callback');
   late final _PickD _pick = _lib.lookupFunction<_PickC, _PickD>('tessera_pick');
   late final _WorldToScreenD _worldToScreen =
       _lib.lookupFunction<_WorldToScreenC, _WorldToScreenD>('tessera_world_to_screen');
@@ -697,8 +715,9 @@ class Tessera {
   /// a native platform-view plugin that owns the GPU/render thread and hands the
   /// handle to Dart. This wrapper will NOT destroy the engine on [dispose].
   ///
-  /// Only the any-thread calls (`setState`, `isIdle`, `lastError`) are safe to
-  /// use from Dart's UI isolate while the host ticks; GPU/render-thread calls
+  /// Only the any-thread calls (`setState`, `operationCompleted`,
+  /// `lastCompletedOperation`, `isIdle`, `lastError`) are safe to use from
+  /// Dart's UI isolate while the host ticks; GPU/render-thread calls
   /// (tick, resize, register*, pick, set light/quality/timing, capture, render)
   /// must be routed to the host's render thread — see docs/platforms.md.
   ///
@@ -768,7 +787,26 @@ class Tessera {
   bool get diceAllIdle => _diceAllIdle(_engine);
 
   // ---- state / timing / quality / light ----
-  void setState(Pointer<TesseraState> s) => _setState(_engine, s);
+  /// Push a scene snapshot and return its *operation id* (monotonic, nonzero).
+  /// The transition it triggers is complete once [operationCompleted] is true /
+  /// [lastCompletedOperation] reaches it / the operation callback fires with it.
+  int setState(Pointer<TesseraState> s) => _setState(_engine, s);
+
+  /// True once operation [op] has fully animated. `op == 0` is always true.
+  bool operationCompleted(int op) => _operationCompleted(_engine, op);
+
+  /// Highest operation id whose transition has settled (0 if none yet).
+  int get lastCompletedOperation => _lastCompletedOperation(_engine);
+
+  /// Register a native callback fired once per operation as it completes (with
+  /// the completed id). Fires on the engine tick thread; wrap it with a
+  /// `NativeCallable.listener` when the listener lives on another isolate/thread.
+  /// Pass nullptr to clear.
+  void setOperationCallback(
+    Pointer<NativeFunction<TesseraOpCompletedNative>> fn,
+    Pointer<Void> user,
+  ) =>
+      _setOperationCallback(_engine, fn, user);
 
   /// Ray-pick the tile/entity under a logical window pixel (SDL input space).
   bool pick(double screenX, double screenY, Pointer<TesseraPick> out) =>

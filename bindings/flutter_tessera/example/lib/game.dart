@@ -97,6 +97,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   bool _autoplay = false;
   bool _ready = false;
   bool _busy = true;
+  bool _playing = false; // a queued scene is mid-flight (awaiting setScene)
 
   GameController<S, A> get game => widget.game;
 
@@ -138,31 +139,55 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   }
 
   bool get _animating =>
-      _controller == null || !_controller!.isIdle || _queue.isNotEmpty;
+      _controller == null ||
+      _playing ||
+      !_controller!.isIdle ||
+      _queue.isNotEmpty;
 
-  /// Drive one step: play the next queued scene, or (idle + empty) auto-advance.
+  /// Drive one step. A queued scene is played through
+  /// [TesseraController.setScene], whose Future resolves only once the
+  /// transition it triggers has fully animated — so a multi-scene render (e.g.
+  /// throw the die, *then* move the hero) plays one beat at a time, each
+  /// awaiting the previous. When the queue drains and the renderer is idle, an
+  /// intrinsic/auto step may enqueue the next batch.
   void _pump() {
     final c = _controller;
-    if (c == null) return;
-    var changed = false;
+    if (c == null || _playing) return;
+    if (_queue.isNotEmpty) {
+      _playNext(c);
+      return;
+    }
     if (c.isIdle) {
-      if (_queue.isNotEmpty) {
-        c.setScene(_queue.removeAt(0));
-        changed = true;
-      } else {
-        // Intrinsic steps always run; AI decisions only while auto-play is on.
-        var a = game.autoAdvance(_state);
-        a ??= _autoplay ? game.autoAction(_state, _rng) : null;
-        if (a != null) {
-          _state = game.update(_state, a);
-          _queue.addAll(game.render(_state));
-          if (_queue.isNotEmpty) c.setScene(_queue.removeAt(0));
-          changed = true;
+      // Intrinsic steps always run; AI decisions only while auto-play is on.
+      var a = game.autoAdvance(_state);
+      a ??= _autoplay ? game.autoAction(_state, _rng) : null;
+      if (a != null) {
+        _state = game.update(_state, a);
+        _queue.addAll(game.render(_state));
+        if (mounted) setState(() {}); // refresh status/buttons for the new state
+        if (_queue.isNotEmpty) {
+          _playNext(c);
+          return;
         }
       }
     }
+    _syncBusy();
+  }
+
+  /// Push the next queued scene and await its animation before pumping again.
+  Future<void> _playNext(TesseraController c) async {
+    _playing = true;
+    _syncBusy();
+    await c.setScene(_queue.removeAt(0)); // resolves when the transition is idle
+    if (!mounted) return;
+    _playing = false;
+    _syncBusy();
+    _pump();
+  }
+
+  void _syncBusy() {
     final busy = _animating;
-    if (changed || busy != _busy) {
+    if (busy != _busy) {
       _busy = busy;
       if (mounted) setState(() {});
     }

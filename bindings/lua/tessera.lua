@@ -70,6 +70,7 @@ typedef uint64_t TesseraDiceId;
 typedef uint64_t TesseraCardId;
 typedef uint64_t TesseraCardDrawId;
 typedef uint64_t TesseraHandId;
+typedef uint64_t TesseraOpId;
 typedef struct { TesseraBytes sprite; } TesseraDiceFace;
 typedef struct {
     const TesseraDiceFace* faces; size_t face_count;
@@ -164,7 +165,11 @@ uint32_t     tessera_dice_count(TesseraEngine*);
 bool         tessera_dice_face(TesseraEngine*, TesseraDiceId, uint32_t* out_face);
 bool         tessera_dice_all_idle(TesseraEngine*);
 
-void tessera_set_state(TesseraEngine*, const TesseraState*);
+TesseraOpId tessera_set_state(TesseraEngine*, const TesseraState*);
+bool        tessera_operation_completed(TesseraEngine*, TesseraOpId op);
+TesseraOpId tessera_last_completed_operation(TesseraEngine*);
+typedef void (*TesseraOpCompletedFn)(TesseraOpId op, void* user);
+void        tessera_set_operation_callback(TesseraEngine*, TesseraOpCompletedFn fn, void* user);
 bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* out);
 bool tessera_world_to_screen(TesseraEngine*, const float world[3], TesseraScreenPos* out);
 bool tessera_entity_screen_position(TesseraEngine*, TesseraEntityId id, TesseraScreenPos* out);

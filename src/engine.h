@@ -50,6 +50,18 @@ struct TesseraEngine {
     /* thread-safety for set_state handoff */
     SDL_Mutex*    state_mutex;
     TsStateStore* state;    /* current / target / pending snapshots (M3) */
+
+    /* operation tracking: each set_state gets a monotonic id; an operation
+     * completes when its promoted transition next goes idle. `op_next`/
+     * `op_completed` are guarded by state_mutex (read any-thread); the rest are
+     * touched only on the tick thread. See tessera_set_state / _operation_*. */
+    TesseraOpId          op_next;        /* last id handed out (0 = none)        */
+    TesseraOpId          op_completed;   /* highest id whose transition settled  */
+    TesseraOpId          op_inflight;    /* id of the promoted, not-yet-idle op  */
+    bool                 op_has_inflight;
+    TesseraOpCompletedFn op_cb;
+    void*                op_cb_user;
+
     TsOrch*       orch;     /* diff + tween instances (M4)               */
     TsFx*         fx;       /* particle systems (M6)                     */
     TsDice*       dice;     /* imperatively-thrown dice (outside state)  */

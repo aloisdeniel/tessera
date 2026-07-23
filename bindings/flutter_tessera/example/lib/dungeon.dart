@@ -474,7 +474,9 @@ class DungeonController extends GameController<DgState, DgAction> {
     return _stone;
   }
 
-  TesseraScene _scene(DgState s) {
+  // [moveHero] false renders the movement beat's *first* frame: the die is on
+  // the table but the hero has not yet stepped off its tile (see [render]).
+  TesseraScene _scene(DgState s, {bool moveHero = true}) {
     final c = s.c;
     final tiles = <TesseraTile>[];
     // a dark stone floor under the whole play area for context (wide enough to
@@ -499,7 +501,7 @@ class DungeonController extends GameController<DgState, DgAction> {
       // hops the hero along them in one move, one tile at a time.
       var heroIdx = c.heroPos;
       var heroPath = const <(int, int)>[];
-      if (s is DgMoving && s.target > c.heroPos) {
+      if (moveHero && s is DgMoving && s.target > c.heroPos) {
         heroIdx = s.target;
         heroPath = [
           for (var i = c.heroPos + 1; i <= s.target; i++) (kPath[i].x, kPath[i].z),
@@ -608,7 +610,16 @@ class DungeonController extends GameController<DgState, DgAction> {
   }
 
   @override
-  List<TesseraScene> render(DgState s) => [_scene(s)];
+  List<TesseraScene> render(DgState s) {
+    // A movement roll plays in two beats so the die is read *before* the hero
+    // commits: first throw the die with the hero still on its tile, then — once
+    // the host has awaited that scene settling (TesseraController.setScene's
+    // Future) — walk the hero to the destination. Every other state is one scene.
+    if (s is DgMoving && s.target > s.c.heroPos) {
+      return [_scene(s, moveHero: false), _scene(s, moveHero: true)];
+    }
+    return [_scene(s)];
+  }
 
   @override
   List<TesseraScene>? onResize(TesseraController c, DgState state, double w, double h) {

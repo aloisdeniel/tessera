@@ -21,6 +21,7 @@ typedef struct TsSnapshot {
     TesseraDicePlacement*     dice;       size_t dice_count;
     TesseraCamera camera;
     uint64_t      epoch;
+    TesseraOpId   op_id;   /* set_state operation id that produced this snapshot */
     void*         block;   /* single backing allocation (may be NULL if empty) */
 } TsSnapshot;
 

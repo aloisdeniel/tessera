@@ -61,6 +61,7 @@ typedef uint64_t TesseraCardId;   /* live card instance id (0 = invalid)      */
 typedef uint64_t TesseraCardDrawId;/* live card-pile instance id (0 = invalid) */
 typedef uint64_t TesseraHandId;   /* live hand instance id (0 = none/invalid)  */
 typedef uint64_t TesseraDiceId;   /* live die instance id (0 = invalid)        */
+typedef uint64_t TesseraOpId;     /* set_state operation id (0 = none/complete) */
 
 typedef enum {
     TESSERA_LOG_TRACE = 0,
@@ -307,8 +308,38 @@ typedef struct {
 } TesseraState;
 
 /* Deep-copies the snapshot; diffs against current; animates transitions.
- * Thread-safe. Caller may free its arrays immediately after return. */
-TESSERA_API void tessera_set_state(TesseraEngine* e, const TesseraState* state);
+ * Thread-safe. Caller may free its arrays immediately after return.
+ *
+ * Returns a monotonically increasing, nonzero *operation id*. The transition
+ * this state triggers is "complete" once the engine has promoted it and every
+ * resulting animation (entities, cards, dice, effects, camera) has settled.
+ * Track completion three ways (all any-thread):
+ *   - tessera_operation_completed(e, id) — poll a specific id;
+ *   - tessera_last_completed_operation(e) — the highest id done so far;
+ *   - tessera_set_operation_callback(...)  — an event fired per completion.
+ * Because ids are monotonic, an operation is complete iff id <= the last
+ * completed id; a superseded operation (a newer set_state replaced one that had
+ * not promoted yet) completes no later than the operation that superseded it. */
+TESSERA_API TesseraOpId tessera_set_state(TesseraEngine* e, const TesseraState* state);
+
+/* True once operation `op` has completed (its transition fully animated). Ids
+ * are monotonic, so this is `op <= tessera_last_completed_operation(e)`. op == 0
+ * always returns true (nothing to wait for). Any-thread. */
+TESSERA_API bool tessera_operation_completed(TesseraEngine* e, TesseraOpId op);
+
+/* The highest operation id whose transition has fully settled (0 if none yet).
+ * Any-thread. */
+TESSERA_API TesseraOpId tessera_last_completed_operation(TesseraEngine* e);
+
+/* Callback invoked once per operation as its transition completes, with the
+ * completed id. Fired on the tick thread (the thread that drives tessera_tick /
+ * the engine-driven render loop), from inside the tick after the transition has
+ * gone idle. Do NOT call back into tessera_set_state or other mutating tessera_*
+ * from it. Register before starting the render loop. Pass fn = NULL to clear;
+ * `user` is handed back verbatim. */
+typedef void (*TesseraOpCompletedFn)(TesseraOpId op, void* user);
+TESSERA_API void tessera_set_operation_callback(TesseraEngine* e,
+                                                TesseraOpCompletedFn fn, void* user);
 
 /* =======================================================================
  *  Picking / hit-testing (screen ray -> scene)

@@ -55,8 +55,27 @@ which is what makes reflow animate smoothly instead of shuffling everything.
 
 If a new state arrives mid-animation, the engine re-diffs from the *current
 interpolated transforms* (not the last target), so motion blends smoothly with
-no snapping. Poll `tessera_is_idle()` to know when all transitions have settled
-(useful for gating turn input).
+no snapping. `tessera_is_idle()` reports when *all* transitions have settled.
+
+## Operation ids & completion events
+
+`tessera_set_state` returns a monotonic, nonzero **operation id**. That id's
+transition is "complete" once the engine has promoted the snapshot and every
+resulting animation (entities, cards, dice, effects, camera) has settled — which
+is more precise than `is_idle` when you need to wait on *one specific* push.
+Track completion without polling:
+
+- `tessera_operation_completed(e, id)` — has this id settled? (ids are monotonic,
+  so it's just `id <= tessera_last_completed_operation(e)`; `id == 0` ⇒ true);
+- `tessera_last_completed_operation(e)` — the highest id done so far;
+- `tessera_set_operation_callback(e, fn, user)` — `fn(id, user)` fires once per
+  operation as it completes, on the tick thread.
+
+A superseded operation (a newer `set_state` replaced one that hadn't promoted
+yet) completes no later than the operation that superseded it. The Dart/Flutter
+binding turns this into an awaitable: `TesseraController.setScene` returns a
+`Future<void>` that the completion callback resolves — letting a caller throw a
+die, `await`, then move a piece, instead of pushing both at once.
 
 ## Timing
 
