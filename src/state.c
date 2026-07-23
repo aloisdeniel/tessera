@@ -27,6 +27,17 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t nh  = src->hands      ? src->hand_count      : 0;
     size_t ndi = src->dice       ? src->dice_count      : 0;
 
+    /* Entity/card multi-step move paths are caller-owned pointer+count fields;
+     * they must be deep-copied into the snapshot block too. Sum their sizes. */
+    size_t bytes_ep = 0;   /* entity paths: TesseraCoord[] */
+    for (size_t i = 0; i < ne; ++i)
+        if (src->entities[i].path && src->entities[i].path_count)
+            bytes_ep += (size_t)src->entities[i].path_count * sizeof(TesseraCoord);
+    size_t bytes_cp = 0;   /* card paths: float[] (3 per step) */
+    for (size_t i = 0; i < nc; ++i)
+        if (src->cards[i].path && src->cards[i].path_count)
+            bytes_cp += (size_t)src->cards[i].path_count * 3 * sizeof(float);
+
     size_t bytes_t  = nt  * sizeof(TesseraTilePlacement);
     size_t bytes_e  = ne  * sizeof(TesseraEntityPlacement);
     size_t bytes_f  = nf  * sizeof(TesseraEffectPlacement);
@@ -36,7 +47,7 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t bytes_di = ndi * sizeof(TesseraDicePlacement);
 
     /* Pack every array into a single allocation, each segment aligned for its
-     * element type. */
+     * element type. Path storage trails the placement arrays. */
     size_t off_t  = 0;
     size_t off_e  = ts_align_up(off_t  + bytes_t,  _Alignof(TesseraEntityPlacement));
     size_t off_f  = ts_align_up(off_e  + bytes_e,  _Alignof(TesseraEffectPlacement));
@@ -44,7 +55,9 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t off_cd = ts_align_up(off_c  + bytes_c,  _Alignof(TesseraCardDrawPlacement));
     size_t off_h  = ts_align_up(off_cd + bytes_cd, _Alignof(TesseraHandPlacement));
     size_t off_di = ts_align_up(off_h  + bytes_h,  _Alignof(TesseraDicePlacement));
-    size_t total  = off_di + bytes_di;
+    size_t off_ep = ts_align_up(off_di + bytes_di, _Alignof(TesseraCoord));
+    size_t off_cp = ts_align_up(off_ep + bytes_ep, _Alignof(float));
+    size_t total  = off_cp + bytes_cp;
 
     if (total > 0) {
         s->block = malloc(total);
@@ -63,6 +76,19 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
             s->entities = (TesseraEntityPlacement*)(base + off_e);
             memcpy(s->entities, src->entities, bytes_e);
             s->entity_count = ne;
+            /* deep-copy each entity's move path and repoint into the block */
+            uint8_t* pw = base + off_ep;
+            for (size_t i = 0; i < ne; ++i) {
+                if (src->entities[i].path && src->entities[i].path_count) {
+                    size_t b = (size_t)src->entities[i].path_count * sizeof(TesseraCoord);
+                    memcpy(pw, src->entities[i].path, b);
+                    s->entities[i].path = (const TesseraCoord*)pw;
+                    pw += b;
+                } else {
+                    s->entities[i].path = NULL;
+                    s->entities[i].path_count = 0;
+                }
+            }
         }
         if (nf) {
             s->effects = (TesseraEffectPlacement*)(base + off_f);
@@ -73,6 +99,19 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
             s->cards = (TesseraCardPlacement*)(base + off_c);
             memcpy(s->cards, src->cards, bytes_c);
             s->card_count = nc;
+            /* deep-copy each card's move path and repoint into the block */
+            uint8_t* pw = base + off_cp;
+            for (size_t i = 0; i < nc; ++i) {
+                if (src->cards[i].path && src->cards[i].path_count) {
+                    size_t b = (size_t)src->cards[i].path_count * 3 * sizeof(float);
+                    memcpy(pw, src->cards[i].path, b);
+                    s->cards[i].path = (const float*)pw;
+                    pw += b;
+                } else {
+                    s->cards[i].path = NULL;
+                    s->cards[i].path_count = 0;
+                }
+            }
         }
         if (ncd) {
             s->card_draws = (TesseraCardDrawPlacement*)(base + off_cd);

@@ -211,6 +211,8 @@ static void entity_snap(TsEntityInst* inst, const TesseraEntityPlacement* ep,
     inst->arc = false;
     inst->removing = false;
     inst->alive = true;
+    inst->seg_count = 1;
+    inst->seg_index = 0;
     glm_vec3_copy((float*)t->pos, inst->pos);
     glm_quat_copy((float*)t->rot, inst->rot);
     inst->scale = t->scale;
@@ -235,11 +237,42 @@ static void entity_spawn(TsEntityInst* inst, const TesseraEntityPlacement* ep,
     inst->arc = false;
     inst->removing = false;
     inst->alive = true;
+    inst->seg_count = 1;
+    inst->seg_index = 0;
     glm_vec3_copy((float*)t->pos, inst->pos);
     glm_quat_copy((float*)t->rot, inst->rot);
     inst->scale = 0.0f;
     inst->alpha = 0.0f;
     ts_tween_start(&inst->tween, add_s, 0.0f, TS_EASE_OUT_BACK);
+}
+
+/* Set up an entity's positional journey toward its target. When `use_path` and
+ * the placement supplies >1 waypoints, the entity walks *through* them: the
+ * intermediate waypoints are tile centres and the final endpoint is the layout
+ * target `t`. The whole move takes `total_s`, split evenly across the segments
+ * (so each hop runs faster than a single-tile move). Starts the first segment's
+ * tween from the current interpolated position. */
+static void entity_set_journey(TsEntityInst* inst, const TesseraEntityPlacement* ep,
+                               const TsTarget* t, float total_s, bool arc,
+                               bool use_path) {
+    uint32_t pc = (use_path && ep->path) ? ep->path_count : 0;
+    uint32_t segs = pc > 1 ? pc : 1;
+    if (segs > TS_MAX_STEPS) segs = TS_MAX_STEPS;
+
+    for (uint32_t k = 0; k < segs; ++k) {
+        if (k == segs - 1) {
+            glm_vec3_copy((float*)t->pos, inst->seg_pts[k]);  /* final = layout target */
+        } else {
+            ts_grid_to_world(ep->path[k].x, ep->path[k].y, inst->seg_pts[k]);
+        }
+    }
+    inst->seg_count = segs;
+    inst->seg_index = 0;
+    inst->seg_dur = total_s / (float)segs;
+    inst->arc = arc;
+    glm_vec3_copy(inst->pos, inst->from_pos);
+    glm_vec3_copy(inst->seg_pts[0], inst->to_pos);
+    ts_tween_start(&inst->tween, inst->seg_dur, 0.0f, TS_EASE_OUT_CUBIC);
 }
 
 static void entity_retarget(TsEntityInst* inst, const TesseraEntityPlacement* ep,
@@ -248,21 +281,24 @@ static void entity_retarget(TsEntityInst* inst, const TesseraEntityPlacement* ep
     inst->def = ep->def;
     inst->facing = ep->facing;
     inst->anim = ep->anim;
-    /* from = current interpolated transform */
-    glm_vec3_copy(inst->pos, inst->from_pos);
+    /* rotation/scale/alpha retarget from the current transform; they converge
+     * over the first segment (from == to on every later segment). */
     glm_quat_copy(inst->rot, inst->from_rot);
     inst->from_scale = inst->scale;
     inst->from_alpha = inst->alpha;
-    /* to = target */
-    glm_vec3_copy((float*)t->pos, inst->to_pos);
     glm_quat_copy((float*)t->rot, inst->to_rot);
     inst->to_scale = t->scale;
     inst->to_alpha = 1.0f;
-    inst->arc = changed;
     inst->removing = false;
     inst->alive = true;
-    ts_tween_start(&inst->tween, changed ? timing->move_s : timing->reflow_s,
-                   0.0f, TS_EASE_OUT_CUBIC);
+    /* Position: a changed coord animates (arced, walking any supplied path); an
+     * unchanged coord just reflows straight to the (possibly re-slotted) target.
+     * A real multi-step walk takes twice a single move so each hop stays legible
+     * (a single-tile move keeps its normal move_s). */
+    bool multi = changed && ep->path && ep->path_count > 1;
+    float total = changed ? (multi ? 2.0f * timing->move_s : timing->move_s)
+                          : timing->reflow_s;
+    entity_set_journey(inst, ep, t, total, changed, changed);
 }
 
 static void entity_remove(TsEntityInst* inst, float remove_s) {
@@ -276,6 +312,8 @@ static void entity_remove(TsEntityInst* inst, float remove_s) {
     inst->to_alpha = 0.0f;
     inst->arc = false;
     inst->removing = true;
+    inst->seg_count = 1;   /* drop any in-flight multi-step path */
+    inst->seg_index = 0;
     ts_tween_start(&inst->tween, remove_s, 0.0f, TS_EASE_IN_CUBIC);
 }
 
@@ -413,6 +451,7 @@ static void card_snap(TsCardInst* c, uint64_t id, TesseraDefId def, bool is_draw
     c->from_thick = c->to_thick = thick;
     c->count = count;
     c->removing = false; c->alive = true;
+    c->seg_count = 1; c->seg_index = 0;
     glm_vec3_copy((float*)pos, c->pos); glm_quat_copy((float*)rot, c->rot);
     c->scale = 1.0f; c->alpha = 1.0f; c->mix = c->to_mix; c->thick = thick;
     ts_tween_start(&c->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
@@ -481,17 +520,46 @@ static void card_spawn_from(TsCardInst* c, uint64_t id, TesseraDefId def,
     }
 }
 
-/* Retarget a live card toward a new target, tweening from the current pose. */
+/* Set up a card's positional journey toward `final_pos`. With >1 waypoints the
+ * card tweens *through* them (each 3 floats: x,y,z), the last coinciding with
+ * `final_pos`. The whole move takes `total_s`, split evenly across the steps.
+ * Starts the first segment from the current pose. */
+static void card_set_journey(TsCardInst* c, const float* path, uint32_t path_count,
+                             const vec3 final_pos, float total_s) {
+    uint32_t segs = (path && path_count > 1) ? path_count : 1;
+    if (segs > TS_MAX_STEPS) segs = TS_MAX_STEPS;
+    for (uint32_t k = 0; k < segs; ++k) {
+        if (k == segs - 1) {
+            glm_vec3_copy((float*)final_pos, c->seg_pts[k]);
+        } else {
+            c->seg_pts[k][0] = path[k * 3 + 0];
+            c->seg_pts[k][1] = path[k * 3 + 1];
+            c->seg_pts[k][2] = path[k * 3 + 2];
+        }
+    }
+    c->seg_count = segs;
+    c->seg_index = 0;
+    c->seg_dur = total_s / (float)segs;
+    glm_vec3_copy(c->pos, c->from_pos);
+    glm_vec3_copy(c->seg_pts[0], c->to_pos);
+    ts_tween_start(&c->tween, c->seg_dur, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+/* Retarget a live card toward a new target, tweening from the current pose.
+ * `path`/`path_count` (free cards only) walk it through intermediate waypoints. */
 static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
                           const versor rot, bool hidden, float thick, uint32_t count,
+                          const float* path, uint32_t path_count,
                           const TesseraTiming* timing) {
     c->def = def;
-    glm_vec3_copy(c->pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
     glm_quat_copy(c->rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
     c->from_scale = c->scale; c->to_scale = 1.0f;
     c->from_alpha = c->alpha; c->to_alpha = 1.0f;
     c->removing = false; c->alive = true;
-    ts_tween_start(&c->tween, timing->move_s, 0.0f, TS_EASE_OUT_CUBIC);
+    /* A real multi-step move takes twice a single move (matches entities). */
+    bool multi = path && path_count > 1;
+    card_set_journey(c, path, path_count, pos, multi ? 2.0f * timing->move_s
+                                                     : timing->move_s);
 
     /* Only (re)start the flip crossfade when the target state actually changed;
      * otherwise leave any in-flight flip running so it completes (restarting a
@@ -518,6 +586,7 @@ static void card_remove(TsCardInst* c, float remove_s) {
     c->from_mix = c->to_mix = c->mix;
     c->from_thick = c->to_thick = c->thick;
     c->removing = true;
+    c->seg_count = 1; c->seg_index = 0;   /* drop any in-flight multi-step path */
     ts_tween_start(&c->tween, remove_s, 0.0f, TS_EASE_IN_CUBIC);
     ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
     ts_tween_start(&c->thick_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
@@ -543,7 +612,13 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
             continue;
         }
         TsCardInst* c = orch_find_card(o, cp->id, false);
-        if (c) { card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, timing); continue; }
+        if (c) {
+            /* A hand card is placed by the fan, so its path (if any) is ignored. */
+            const float* cpath = (cp->hand == 0) ? cp->path : NULL;
+            uint32_t cpc = (cp->hand == 0) ? cp->path_count : 0;
+            card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, cpath, cpc, timing);
+            continue;
+        }
         /* New card: deal it from its source pile if that pile is present. */
         vec3 src_pos; versor src_rot; bool src_hidden;
         if (cp->source_draw != 0 &&
@@ -568,7 +643,7 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
             continue;
         }
         TsCardInst* c = orch_find_card(o, dp->id, true);
-        if (c) card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, timing);
+        if (c) card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, NULL, 0, timing);
         else   card_spawn(orch_add_card(o), dp->id, dp->def, true, pos, rot,
                           dp->top_hidden, thick, dp->count, timing->add_s);
     }
@@ -757,6 +832,19 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
     for (size_t i = 0; i < o->entity_count;) {
         TsEntityInst* inst = &o->entities[i];
         ts_tween_advance(&inst->tween, dt);
+        /* Multi-step: when a segment finishes and more remain, hand the leftover
+         * time to the next segment so the walk stays smooth and exactly on time. */
+        while (ts_tween_done(&inst->tween) && inst->seg_index + 1 < inst->seg_count) {
+            float over = inst->tween.elapsed - (inst->tween.delay + inst->tween.duration);
+            inst->seg_index++;
+            glm_vec3_copy(inst->to_pos, inst->from_pos);
+            glm_vec3_copy(inst->seg_pts[inst->seg_index], inst->to_pos);
+            glm_quat_copy(inst->to_rot, inst->from_rot);   /* rot already converged */
+            inst->from_scale = inst->to_scale;
+            inst->from_alpha = inst->to_alpha;
+            ts_tween_start(&inst->tween, inst->seg_dur, 0.0f, TS_EASE_OUT_CUBIC);
+            if (over > 0.0f) ts_tween_advance(&inst->tween, over);
+        }
         float p = ts_tween_value01(&inst->tween);
 
         glm_vec3_lerp(inst->from_pos, inst->to_pos, p, inst->pos);
@@ -765,9 +853,11 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
         inst->scale = ts_lerpf(inst->from_scale, inst->to_scale, p);
         inst->alpha = ts_lerpf(inst->from_alpha, inst->to_alpha, p);
 
-        /* clear the "moving" flag when the positional tween completes so the
-         * clip crossfades back from walk to idle. */
-        if (inst->anim_moving && ts_tween_done(&inst->tween)) inst->anim_moving = false;
+        /* clear the "moving" flag when the whole (possibly multi-step) move
+         * completes so the clip crossfades back from walk to idle. */
+        if (inst->anim_moving && ts_tween_done(&inst->tween) &&
+            inst->seg_index + 1 >= inst->seg_count)
+            inst->anim_moving = false;
         advance_anim(inst, dt);
 
         if (inst->removing && ts_tween_done(&inst->tween)) {
@@ -796,6 +886,18 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
         ts_tween_advance(&c->tween, dt);
         ts_tween_advance(&c->mix_tween, dt);
         ts_tween_advance(&c->thick_tween, dt);
+        /* Multi-step: roll leftover time into the next segment (see entities). */
+        while (ts_tween_done(&c->tween) && c->seg_index + 1 < c->seg_count) {
+            float over = c->tween.elapsed - (c->tween.delay + c->tween.duration);
+            c->seg_index++;
+            glm_vec3_copy(c->to_pos, c->from_pos);
+            glm_vec3_copy(c->seg_pts[c->seg_index], c->to_pos);
+            glm_quat_copy(c->to_rot, c->from_rot);
+            c->from_scale = c->to_scale;
+            c->from_alpha = c->to_alpha;
+            ts_tween_start(&c->tween, c->seg_dur, 0.0f, TS_EASE_OUT_CUBIC);
+            if (over > 0.0f) ts_tween_advance(&c->tween, over);
+        }
         float p = ts_tween_value01(&c->tween);
         glm_vec3_lerp(c->from_pos, c->to_pos, p, c->pos);
         glm_quat_slerp(c->from_rot, c->to_rot, p, c->rot);
@@ -817,7 +919,8 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
 bool ts_orch_is_idle(const struct TsOrch* o) {
     for (size_t i = 0; i < o->entity_count; ++i) {
         const TsEntityInst* inst = &o->entities[i];
-        if (inst->removing || !ts_tween_done(&inst->tween)) return false;
+        if (inst->removing || !ts_tween_done(&inst->tween) ||
+            inst->seg_index + 1 < inst->seg_count) return false;
     }
     for (size_t i = 0; i < o->tile_count; ++i) {
         const TsTileInst* t = &o->tiles[i];
@@ -826,7 +929,8 @@ bool ts_orch_is_idle(const struct TsOrch* o) {
     for (size_t i = 0; i < o->card_count; ++i) {
         const TsCardInst* c = &o->cards[i];
         if (c->removing || !ts_tween_done(&c->tween) ||
-            !ts_tween_done(&c->mix_tween) || !ts_tween_done(&c->thick_tween))
+            !ts_tween_done(&c->mix_tween) || !ts_tween_done(&c->thick_tween) ||
+            c->seg_index + 1 < c->seg_count)
             return false;
     }
     return true;

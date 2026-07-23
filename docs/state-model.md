@@ -23,7 +23,7 @@ Keys used for diffing:
 | tile coord appears | `TILE_ADD` — rise + fade in |
 | tile coord disappears | `TILE_REMOVE` — sink + fade out, then cull |
 | tile def / variant changes | `TILE_UPDATE` — swap with a small pop |
-| entity id in both, different coord | `ENTITY_MOVE` — hop/arc between tiles |
+| entity id in both, different coord | `ENTITY_MOVE` — hop/arc between tiles (walks a `path`, if given, one tile at a time) |
 | entity id in both, same coord, tile occupancy changed | `ENTITY_REFLOW` — slide to new slot/scale |
 | entity id in target only | `ENTITY_ADD` — scale/fade in |
 | entity id in current only | `ENTITY_REMOVE` — scale/fade out, then cull |
@@ -32,6 +32,16 @@ Keys used for diffing:
 
 A move also reflows both the source tile (n−1 occupants) and the destination
 tile (n+1), for the entities that stayed.
+
+**Multi-step moves.** A `TesseraEntityPlacement` may carry a `path` (a list of
+`TesseraCoord` waypoints) with `path_count > 1`: the entity then *walks through*
+those tiles in order — **arcing (hopping) from one to the next** — instead of
+gliding straight to `coord`. The last waypoint must equal `coord` (still the
+resting tile used by the layout solver and picking). The whole walk takes
+**`2 × move_s`** (twice a single-tile move, so the individual hops stay legible),
+split evenly across the steps. A `NULL` path or a count of `0`/`1` is a plain
+single move at the normal `move_s`. `TesseraCardPlacement` has the same
+`path`/`path_count` for free cards (see `definitions.md`).
 
 ## Multi-entity tiles & the layout solver
 

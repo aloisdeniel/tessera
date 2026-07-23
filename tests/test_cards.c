@@ -208,6 +208,32 @@ int main(void) {
 
     st.cards = cards; st.card_count = 3;         /* restore for teardown */
 
+    /* ---- multi-step move: the free card walks a path in one move_s ---- */
+    settle(e, buf);                              /* start from rest at (-3,0,0) */
+    c1 = find_inst(e, 1, false);
+    CHECK(c1 && fabsf(c1->pos[0] + 3.0f) < 0.01f);
+    float cpath[9] = { -1, 0, 0,  1, 0, 0,  3, 0, 0 };  /* 3 waypoints, last=target */
+    cards[0].position[0] = 3.0f; cards[0].position[1] = 0.0f; cards[0].position[2] = 0.0f;
+    cards[0].path = cpath; cards[0].path_count = 3;
+    st.epoch++;
+    tessera_set_state(e, &st);
+    advance(e, buf, 1);                          /* promote: splits into 3 segments */
+    c1 = find_inst(e, 1, false);
+    CHECK(c1 && c1->seg_count == 3);
+    /* sample mid-walk: x climbs through the waypoints without overshoot */
+    bool card_mid = false;
+    for (int i = 0; i < 400 && !tessera_is_idle(e); ++i) {
+        advance(e, buf, 1);
+        c1 = find_inst(e, 1, false);
+        if (!c1) break;
+        CHECK(c1->pos[0] <= 3.0f + 0.02f);
+        if (c1->pos[0] > -0.6f && c1->pos[0] < 2.4f) card_mid = true;
+    }
+    CHECK(card_mid);
+    c1 = find_inst(e, 1, false);
+    CHECK(c1 && fabsf(c1->pos[0] - 3.0f) < 0.01f);   /* landed on the target */
+    cards[0].path = NULL; cards[0].path_count = 0;   /* restore for teardown */
+
     /* ---- remove everything: all card instances cull ---- */
     st.cards = NULL; st.card_count = 0;
     st.card_draws = NULL; st.card_draw_count = 0;

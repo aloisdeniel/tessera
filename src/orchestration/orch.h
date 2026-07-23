@@ -21,6 +21,9 @@
 typedef struct TesseraEngine TesseraEngine;
 struct TsDrawItem;   /* defined in engine.h */
 
+/* Max waypoints in a single multi-step move (excess steps are clamped). */
+#define TS_MAX_STEPS 24
+
 /* Live per-entity instance. */
 typedef struct {
     TesseraEntityId id;
@@ -36,6 +39,12 @@ typedef struct {
     bool    arc;        /* hop during a move */
     bool    removing;   /* fading out; cull when tween completes */
     bool    alive;
+    /* multi-step move: `tween`/`from_pos`/`to_pos` drive one segment at a time;
+     * seg_pts holds every segment endpoint (last = the layout target). */
+    vec3     seg_pts[TS_MAX_STEPS];
+    uint32_t seg_count;   /* number of segments (>=1; 1 = plain single move) */
+    uint32_t seg_index;   /* segment currently animating toward seg_pts[idx]  */
+    float    seg_dur;     /* per-segment duration                             */
     /* current interpolated (recomputed each advance) */
     vec3    pos; versor rot; float scale; float alpha;
 
@@ -87,6 +96,11 @@ typedef struct {
     uint32_t count;
     bool    hidden;          /* last target hidden / top_hidden */
     bool    removing, alive;
+    /* multi-step move (free cards only): segment endpoints, last = target */
+    vec3     seg_pts[TS_MAX_STEPS];
+    uint32_t seg_count;      /* number of segments (>=1) */
+    uint32_t seg_index;      /* segment currently animating */
+    float    seg_dur;        /* per-segment duration */
     /* current interpolated */
     vec3    pos; versor rot; float scale, alpha, mix, thick;
 } TsCardInst;

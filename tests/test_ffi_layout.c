@@ -127,12 +127,14 @@ OFF_IS(TesseraTilePlacement, tile_def, 8);
 OFF_IS(TesseraTilePlacement, variant, 12);
 OFF_IS(TesseraTilePlacement, id, 16);
 
-SIZE_IS(TesseraEntityPlacement, 32);
+SIZE_IS(TesseraEntityPlacement, 48);
 OFF_IS(TesseraEntityPlacement, id, 0);
 OFF_IS(TesseraEntityPlacement, def, 8);
 OFF_IS(TesseraEntityPlacement, coord, 12);
 OFF_IS(TesseraEntityPlacement, facing, 20);
 OFF_IS(TesseraEntityPlacement, anim, 24);
+OFF_IS(TesseraEntityPlacement, path, 32);
+OFF_IS(TesseraEntityPlacement, path_count, 40);
 
 SIZE_IS(TesseraEffectPlacement, 32);
 OFF_IS(TesseraEffectPlacement, id, 0);
@@ -148,7 +150,7 @@ OFF_IS(TesseraDicePlacement, position, 16);
 OFF_IS(TesseraDicePlacement, seed, 28);
 OFF_IS(TesseraDicePlacement, throw_s, 32);
 
-SIZE_IS(TesseraCardPlacement, 72);
+SIZE_IS(TesseraCardPlacement, 88);
 OFF_IS(TesseraCardPlacement, id, 0);
 OFF_IS(TesseraCardPlacement, def, 8);
 OFF_IS(TesseraCardPlacement, position, 12);
@@ -157,6 +159,8 @@ OFF_IS(TesseraCardPlacement, hidden, 40);
 OFF_IS(TesseraCardPlacement, hand, 48);
 OFF_IS(TesseraCardPlacement, hand_slot, 56);
 OFF_IS(TesseraCardPlacement, source_draw, 64);
+OFF_IS(TesseraCardPlacement, path, 72);
+OFF_IS(TesseraCardPlacement, path_count, 80);
 
 SIZE_IS(TesseraCardDrawPlacement, 48);
 OFF_IS(TesseraCardDrawPlacement, id, 0);

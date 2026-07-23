@@ -240,6 +240,7 @@ typedef struct {
     TesseraHandId hand;                      /* 0 => free; else fanned      */
     uint32_t hand_slot;                      /* order within the hand fan   */
     TesseraCardDrawId source_draw;           /* 0 => none; deal-from-pile   */
+    const float* path; uint32_t path_count;  /* multi-step move (free card) */
 } TesseraCardPlacement;
 
 typedef struct {
@@ -276,6 +277,13 @@ Behaviour, all driven by the state diff:
   of that pile and slides (and flips, if the pile top and the card differ) to its
   target instead of fading in from nowhere. Ignored on later frames and when the
   named pile is absent.
+- **Multi-step move (`path` / `path_count`)** — for a **free** card (ignored
+  while `hand != 0`), a `path` of more than one position (each 3 floats) makes
+  the card tween *through* those points in order instead of straight to
+  `position`; the last entry must equal `position`. The whole move takes
+  `2 × move_s` (twice a single move), split evenly across the steps. `NULL`/count
+  `0`/`1` = a plain single move at the normal `move_s`. The array is copied by
+  `tessera_set_state`.
 
 `tessera_is_idle` returns `false` while any card is moving, flipping or a pile is
 resizing. See `examples/cards` for a full showcase (flat cards, a flip, a moving
