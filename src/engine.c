@@ -6,6 +6,7 @@
 #include "fx/fx.h"
 #include "dice/dice.h"
 #include "card/card.h"
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -467,6 +468,7 @@ static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
         e->cam_to = G;
         e->cam_have = true;
         e->cam_active = false;
+        e->cam_follow_y_have = false;   /* re-seat the height filter */
         return;
     }
     if (same) {
@@ -476,12 +478,44 @@ static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
         e->cam_to = G;
         return;
     }
-    /* Tween from the current live pose to the new goal over timing.camera_s. */
+    /* Tween from the current live pose to the new goal over timing.camera_s. A
+     * genuinely new goal re-seats the follow-height filter (below). */
     e->cam_from = e->cam_cur;
     e->cam_to = G;
+    e->cam_follow_y_have = false;
     float dur = e->timing.camera_s > 0.0f ? e->timing.camera_s : 0.5f;
     ts_tween_start(&e->cam_tween, dur, 0.0f, TS_EASE_IN_OUT_CUBIC);
     e->cam_active = true;
+}
+
+/* Modes that frame a live *moving* point via the orbit rig — their goal height
+ * bounces as the tracked object hops/tumbles, so its Y is worth low-passing. */
+static bool cam_mode_tracks_position(uint32_t mode) {
+    return mode == TESSERA_CAMERA_FOCUS_ENTITY ||
+           mode == TESSERA_CAMERA_FOCUS_DICE   ||
+           mode == TESSERA_CAMERA_FOCUS_DRAW   ||
+           mode == TESSERA_CAMERA_FOCUS_TILE;
+}
+
+/* Replace the goal's height with a low-passed one so the follow cam glides
+ * between the run's start and end heights instead of jumping with each hop.
+ * eye and target share the same vertical offset (see ts_orbit_eye), so shifting
+ * both by the same delta keeps the framing and only re-seats the rig height. */
+static void cam_smooth_follow_y(TesseraEngine* e, TsCamPose* G, float dt) {
+    float raw = G->target[1];
+    if (!e->cam_follow_y_have) {
+        e->cam_follow_y = raw;
+        e->cam_follow_y_have = true;
+    } else {
+        /* Exponential low-pass; tau > a single hop so per-step bounces average
+         * out while a real change in floor height is still tracked promptly. */
+        const float tau = 0.45f;
+        float a = dt > 0.0f ? 1.0f - expf(-dt / tau) : 0.0f;
+        e->cam_follow_y += (raw - e->cam_follow_y) * a;
+    }
+    float dy = e->cam_follow_y - raw;
+    G->eye[1]    += dy;
+    G->target[1] += dy;
 }
 
 static void advance_camera(TesseraEngine* e, float dt) {
@@ -490,6 +524,8 @@ static void advance_camera(TesseraEngine* e, float dt) {
     float aspect = current_aspect(e);
     TsCamPose G;
     bool resolved = resolve_camera_goal(e, &e->cam_spec, aspect, &G);
+    if (resolved && cam_mode_tracks_position(e->cam_spec.mode))
+        cam_smooth_follow_y(e, &G, dt);
 
     if (e->cam_active) {
         ts_tween_advance(&e->cam_tween, dt);

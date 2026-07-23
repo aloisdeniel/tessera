@@ -45,6 +45,8 @@ struct TesseraEngine {
     bool          cam_have;     /* a pose has been set once                    */
     TesseraCamera cam_spec;     /* last promoted camera spec (resolved/tick)   */
     bool          cam_spec_have;/* cam_spec holds a promoted spec              */
+    float         cam_follow_y; /* low-passed framed-point height (follow modes)*/
+    bool          cam_follow_y_have;/* cam_follow_y seeded for the current follow*/
 
     TesseraTiming timing;
     TesseraLight  light;
