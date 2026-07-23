@@ -212,6 +212,12 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
             "hitEntity": out.hit_entity != 0,
             "entity": Int(bitPattern: UInt(out.entity)),
             "entityDistance": Double(out.entity_distance),
+            "hitDice": out.hit_dice != 0,
+            "dice": Int(bitPattern: UInt(out.dice)),
+            "diceDistance": Double(out.dice_distance),
+            "hitCard": out.hit_card != 0,
+            "card": Int(bitPattern: UInt(out.card)),
+            "cardDistance": Double(out.card_distance),
         ]
     }
 

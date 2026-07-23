@@ -86,6 +86,12 @@ bool ftessera_pick(FTessera* f, float x, float y, FTesseraPick* out) {
     out->hit_entity = pk.hit_entity ? 1 : 0;
     out->entity = pk.entity;
     out->entity_distance = pk.entity_distance;
+    out->hit_dice = pk.hit_dice ? 1 : 0;
+    out->dice = pk.dice;
+    out->dice_distance = pk.dice_distance;
+    out->hit_card = pk.hit_card ? 1 : 0;
+    out->card = pk.card;
+    out->card_distance = pk.card_distance;
     return hit;
 }
 

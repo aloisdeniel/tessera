@@ -131,6 +131,8 @@ bool ts_engine_pick(TesseraEngine* e, float screen_x, float screen_y, TesseraPic
 bool ts_engine_world_to_screen(TesseraEngine* e, const vec3 world, TesseraScreenPos* out);
 bool ts_engine_entity_screen_position(TesseraEngine* e, TesseraEntityId id, TesseraScreenPos* out);
 bool ts_engine_tile_screen_position(TesseraEngine* e, TesseraTileId id, TesseraScreenPos* out);
+bool ts_engine_dice_screen_position(TesseraEngine* e, TesseraDiceId id, TesseraScreenPos* out);
+bool ts_engine_card_screen_position(TesseraEngine* e, TesseraCardId id, TesseraScreenPos* out);
 
 /* Smallest orbit distance at which every listed tile + entity fits the viewport
  * (scene/pick.c). Writes *out_distance; returns false if nothing resolves. */

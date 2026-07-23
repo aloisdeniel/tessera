@@ -39,6 +39,12 @@ typedef struct {
     int32_t  hit_entity;     /* 0/1 */
     uint64_t entity;
     float    entity_distance;
+    int32_t  hit_dice;       /* 0/1 */
+    uint64_t dice;
+    float    dice_distance;
+    int32_t  hit_card;       /* 0/1 */
+    uint64_t card;
+    float    card_distance;
 } FTesseraPick;
 
 /* Create the engine bound to a hidden SDL window at (w,h) pixels, pixel density
@@ -78,7 +84,7 @@ int64_t ftessera_metal_view_tag(FTessera* f);
 void ftessera_resize(FTessera* f, int32_t w, int32_t h, float density);
 
 /* Ray-pick under a logical view pixel (top-left origin). Fills *out; returns
- * true if a tile or entity was hit. */
+ * true if a tile, entity, die, or card was hit. */
 bool ftessera_pick(FTessera* f, float x, float y, FTesseraPick* out);
 
 /* Last engine error string (never NULL; "" when none). Valid until the next

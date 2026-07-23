@@ -128,6 +128,8 @@ typedef struct {
     bool            hit_tile;    TesseraCoord tile;   float tile_distance;
     bool            hit_entity;  TesseraEntityId entity; float entity_distance;
     float           ray_origin[3]; float ray_dir[3]; float point[3];
+    bool            hit_dice;    TesseraDiceId dice;  float dice_distance;
+    bool            hit_card;    TesseraCardId card;  float card_distance;
 } TesseraPick;
 
 typedef struct {
@@ -174,6 +176,8 @@ bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* o
 bool tessera_world_to_screen(TesseraEngine*, const float world[3], TesseraScreenPos* out);
 bool tessera_entity_screen_position(TesseraEngine*, TesseraEntityId id, TesseraScreenPos* out);
 bool tessera_tile_screen_position(TesseraEngine*, TesseraTileId id, TesseraScreenPos* out);
+bool tessera_dice_screen_position(TesseraEngine*, TesseraDiceId id, TesseraScreenPos* out);
+bool tessera_card_screen_position(TesseraEngine*, TesseraCardId id, TesseraScreenPos* out);
 bool tessera_camera_fit_distance(TesseraEngine*, const TesseraTileId* tiles, size_t tile_count, const TesseraEntityId* entities, size_t entity_count, float padding, float* out_distance);
 void tessera_set_timing(TesseraEngine*, const TesseraTiming*);
 bool tessera_is_idle(TesseraEngine*);

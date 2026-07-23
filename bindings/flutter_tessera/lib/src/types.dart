@@ -377,7 +377,10 @@ class TesseraTimingData {
   final double speedMultiplier;
 }
 
-/// The result of a screen-space [TesseraController.pick].
+/// The result of a screen-space [TesseraController.pick]. A ray is cast from the
+/// camera through the tapped pixel and tested against the live scene; the nearest
+/// tile, entity, die, and card are reported independently, so a caller can prefer
+/// whichever is closest or use each kind for a different gesture.
 class TesseraPickResult {
   const TesseraPickResult({
     required this.hitTile,
@@ -387,6 +390,12 @@ class TesseraPickResult {
     required this.hitEntity,
     required this.entity,
     required this.entityDistance,
+    required this.hitDice,
+    required this.dice,
+    required this.diceDistance,
+    required this.hitCard,
+    required this.card,
+    required this.cardDistance,
   });
 
   final bool hitTile;
@@ -397,6 +406,20 @@ class TesseraPickResult {
   final int entity;
   final double entityDistance;
 
+  /// The nearest live die under the ray (see [dice] for its id).
+  final bool hitDice;
+
+  /// Id of the nearest hit die (0 when [hitDice] is false).
+  final int dice;
+  final double diceDistance;
+
+  /// The nearest live single card under the ray (piles/draws are not picked).
+  final bool hitCard;
+
+  /// Id of the nearest hit card (0 when [hitCard] is false).
+  final int card;
+  final double cardDistance;
+
   factory TesseraPickResult.fromMap(Map<Object?, Object?> m) => TesseraPickResult(
         hitTile: (m['hitTile'] as bool?) ?? false,
         tileX: (m['tileX'] as num?)?.toInt() ?? 0,
@@ -405,5 +428,11 @@ class TesseraPickResult {
         hitEntity: (m['hitEntity'] as bool?) ?? false,
         entity: (m['entity'] as num?)?.toInt() ?? 0,
         entityDistance: (m['entityDistance'] as num?)?.toDouble() ?? 0,
+        hitDice: (m['hitDice'] as bool?) ?? false,
+        dice: (m['dice'] as num?)?.toInt() ?? 0,
+        diceDistance: (m['diceDistance'] as num?)?.toDouble() ?? 0,
+        hitCard: (m['hitCard'] as bool?) ?? false,
+        card: (m['card'] as num?)?.toInt() ?? 0,
+        cardDistance: (m['cardDistance'] as num?)?.toDouble() ?? 0,
       );
 }

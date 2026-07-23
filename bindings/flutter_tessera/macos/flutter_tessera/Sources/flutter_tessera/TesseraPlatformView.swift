@@ -9,7 +9,8 @@
 //   • handle → Int   the engine pointer for Dart FFI (Tessera.fromHandle)
 //   • start          begin the render loop (after Dart finishes setup)
 //   • pick {x,y} → { hitTile, tileX, tileY, tileDistance, hitEntity, entity,
-//                    entityDistance }
+//                    entityDistance, hitDice, dice, diceDistance, hitCard, card,
+//                    cardDistance }
 //
 // NOTE: reference implementation for the macOS build; not compiled in this
 // environment (no Flutter macOS toolchain here). The Dart side and the C bridge
@@ -166,6 +167,12 @@ final class TesseraPlatformView: NSView {
             "hitEntity": out.hit_entity != 0,
             "entity": Int(bitPattern: UInt(out.entity)),
             "entityDistance": Double(out.entity_distance),
+            "hitDice": out.hit_dice != 0,
+            "dice": Int(bitPattern: UInt(out.dice)),
+            "diceDistance": Double(out.dice_distance),
+            "hitCard": out.hit_card != 0,
+            "card": Int(bitPattern: UInt(out.card)),
+            "cardDistance": Double(out.card_distance),
         ]
     }
 

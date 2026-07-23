@@ -5,6 +5,8 @@
  * reporting the nearest hit of each. See tessera_pick() in the public header. */
 #include "engine.h"
 #include "orchestration/orch.h"
+#include "registry.h"
+#include "dice/dice.h"
 #include "scene/scene.h"
 #include <math.h>
 #include <stdlib.h>
@@ -37,6 +39,21 @@ static bool ray_aabb(const vec3 o, const vec3 d, const vec3 mn, const vec3 mx, f
     }
     *t_out = tmin;
     return true;
+}
+
+/* Ray vs oriented box: box centred at `center`, rotated by `rot`, with per-axis
+ * half-extents `half`. Transform the ray into the box's local frame (rotation
+ * preserves the direction's length, so the returned t stays in world units) and
+ * reuse the AABB slab test. Nearest t>=0 in *t_out. */
+static bool ray_obb(const vec3 o, const vec3 d, const vec3 center, const versor rot,
+                    const vec3 half, float* t_out) {
+    versor inv; glm_quat_inv((float*)rot, inv);
+    vec3 rel; glm_vec3_sub((float*)o, (float*)center, rel);
+    vec3 lo; glm_quat_rotatev(inv, rel, lo);        /* ray origin in box space */
+    vec3 ld; glm_quat_rotatev(inv, (float*)d, ld);  /* ray dir  in box space   */
+    vec3 mn = { -half[0], -half[1], -half[2] };
+    vec3 mx = {  half[0],  half[1],  half[2] };
+    return ray_aabb(lo, ld, mn, mx, t_out);
 }
 
 /* Ray (o + t*d, d normalized) vs sphere (centre c, radius r). Nearest t>=0. */
@@ -150,10 +167,45 @@ bool ts_engine_pick(TesseraEngine* e, float sx, float sy, TesseraPick* out) {
         }
     }
 
+    /* nearest live die via its bounding sphere (owned by the dice module) */
+    if (e->dice) {
+        TesseraDiceId did = 0; float dd = 0.0f;
+        if (ts_dice_raycast(e->dice, e, o, dir, &did, &dd)) {
+            out->hit_dice = true;
+            out->dice = did;
+            out->dice_distance = dd;
+        }
+    }
+
+    /* nearest single card via its oriented bounding box (piles/draws skipped) */
+    float best_card = 1e30f;
+    for (size_t i = 0; i < orch->card_count; ++i) {
+        const TsCardInst* c = &orch->cards[i];
+        if (!c->alive || c->removing || c->is_draw) continue;
+        TsDef* cdef = ts_registry_get(&e->registry, c->def, TS_DEF_CARD);
+        if (!cdef || !cdef->as.card.valid) continue;
+        const TsCardModel* m = &cdef->as.card;
+        /* Identity orientation lays the card flat, front at +Y: width→x,
+         * thickness→y, height→z. Scale by the card's current uniform scale. */
+        vec3 half = { 0.5f * m->width     * c->scale,
+                      0.5f * m->thickness * c->scale,
+                      0.5f * m->height    * c->scale };
+        float cd;
+        if (ray_obb(o, dir, c->pos, c->rot, half, &cd) && cd < best_card) {
+            best_card = cd;
+            out->hit_card = true;
+            out->card = c->id;
+            out->card_distance = cd;
+        }
+    }
+
     /* world point of the nearest hit overall */
-    if (out->hit_tile || out->hit_entity) {
-        float nearest = out->hit_tile ? out->tile_distance : 1e30f;
+    if (out->hit_tile || out->hit_entity || out->hit_dice || out->hit_card) {
+        float nearest = 1e30f;
+        if (out->hit_tile   && out->tile_distance   < nearest) nearest = out->tile_distance;
         if (out->hit_entity && out->entity_distance < nearest) nearest = out->entity_distance;
+        if (out->hit_dice   && out->dice_distance   < nearest) nearest = out->dice_distance;
+        if (out->hit_card   && out->card_distance   < nearest) nearest = out->card_distance;
         out->point[0] = o[0] + dir[0] * nearest;
         out->point[1] = o[1] + dir[1] * nearest;
         out->point[2] = o[2] + dir[2] * nearest;
@@ -210,6 +262,24 @@ bool ts_engine_tile_screen_position(TesseraEngine* e, TesseraTileId id,
     if (!e || !e->orch) return false;
     vec3 p;
     if (!ts_orch_tile_pos(e->orch, id, p)) return false;
+    return ts_engine_world_to_screen(e, p, out);
+}
+
+bool ts_engine_dice_screen_position(TesseraEngine* e, TesseraDiceId id,
+                                    TesseraScreenPos* out) {
+    memset(out, 0, sizeof *out);
+    if (!e || !e->dice) return false;
+    vec3 p;
+    if (!ts_dice_pos(e->dice, id, p)) return false;
+    return ts_engine_world_to_screen(e, p, out);
+}
+
+bool ts_engine_card_screen_position(TesseraEngine* e, TesseraCardId id,
+                                    TesseraScreenPos* out) {
+    memset(out, 0, sizeof *out);
+    if (!e || !e->orch) return false;
+    vec3 p;
+    if (!ts_orch_card_pos(e->orch, id, p)) return false;
     return ts_engine_world_to_screen(e, p, out);
 }
 

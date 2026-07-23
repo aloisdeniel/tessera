@@ -1167,6 +1167,54 @@ bool ts_dice_all_idle(const TsDice* d) {
 
 uint32_t ts_dice_count(const TsDice* d) { return d ? (uint32_t)d->count : 0; }
 
+/* Ray (o + t*dir, dir normalized) vs sphere (centre c, radius r). Nearest t>=0.
+ * Mirrors the ray_sphere in pick.c; kept local so dice stays self-contained. */
+static bool dice_ray_sphere(const float o[3], const float dir[3],
+                            const float c[3], float r, float* t_out) {
+    vec3 m; glm_vec3_sub((float*)o, (float*)c, m);
+    float b = glm_vec3_dot(m, (float*)dir);
+    float cc = glm_vec3_dot(m, m) - r * r;
+    if (cc > 0.0f && b > 0.0f) return false;   /* outside and pointing away */
+    float disc = b * b - cc;
+    if (disc < 0.0f) return false;
+    float t = -b - sqrtf(disc);
+    if (t < 0.0f) t = 0.0f;                     /* origin inside the sphere */
+    *t_out = t;
+    return true;
+}
+
+bool ts_dice_raycast(const TsDice* d, TesseraEngine* e, const float o[3],
+                     const float dir[3], TesseraDiceId* out_id, float* out_dist) {
+    if (!d || !e) return false;
+    float best = 1e30f; bool hit = false; TesseraDiceId best_id = 0;
+    for (size_t i = 0; i < d->count; ++i) {
+        const DiceInst* it = &d->items[i];
+        if (!it->alive || it->removing) continue;   /* despawning: not selectable */
+        TsDef* def = ts_registry_get(&e->registry, it->def, TS_DEF_DICE);
+        if (!def || !def->as.dice.valid) continue;
+        float r = 0.5f * def->as.dice.size * it->scale;
+        if (r <= 0.0f) continue;
+        float t;
+        if (dice_ray_sphere(o, dir, it->pos, r, &t) && t < best) {
+            best = t; best_id = it->id; hit = true;
+        }
+    }
+    if (hit) { if (out_id) *out_id = best_id; if (out_dist) *out_dist = best; }
+    return hit;
+}
+
+bool ts_dice_pos(const TsDice* d, TesseraDiceId id, float out[3]) {
+    if (!d) return false;
+    for (size_t i = 0; i < d->count; ++i) {
+        const DiceInst* it = &d->items[i];
+        if (it->id == id && it->alive && !it->removing) {
+            out[0] = it->pos[0]; out[1] = it->pos[1]; out[2] = it->pos[2];
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ts_dice_face(const TsDice* d, TesseraDiceId id, uint32_t* out_face) {
     if (!d) return false;
     for (size_t i = 0; i < d->count; ++i)

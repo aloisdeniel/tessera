@@ -85,6 +85,16 @@ bool     ts_dice_all_idle(const TsDice* d);
 uint32_t ts_dice_count(const TsDice* d);
 bool     ts_dice_face(const TsDice* d, TesseraDiceId id, uint32_t* out_face);
 
+/* Ray-test the live dice (one bounding sphere per die, radius from its model
+ * size and current scale). On a hit fills *out_id / *out_dist with the nearest
+ * die and returns true; returns false on a miss. `o`/`dir` are world-space with
+ * `dir` normalized. Reads dice models from the engine registry. */
+bool ts_dice_raycast(const TsDice* d, TesseraEngine* e, const float o[3],
+                     const float dir[3], TesseraDiceId* out_id, float* out_dist);
+/* Current world-space centre of a live die by id (tracks the animating pose).
+ * Returns false for an unknown/removing die. Used to project a die to screen. */
+bool ts_dice_pos(const TsDice* d, TesseraDiceId id, float out[3]);
+
 /* Draw items the live dice will emit this frame (upper bound). */
 size_t ts_dice_drawitem_count(const TsDice* d);
 /* Fill `dst` (>= ts_dice_drawitem_count entries) with the dice draw items.

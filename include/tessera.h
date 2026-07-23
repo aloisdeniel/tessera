@@ -348,10 +348,12 @@ TESSERA_API void tessera_set_operation_callback(TesseraEngine* e,
 /* Result of a screen-space pick. A ray is cast from the camera through the
  * given pixel and tested against the live (currently animating) scene: each
  * tile against its axis-aligned bounding box (the default tile box — full tile
- * footprint, standard thickness, top at y=0) and each entity against one fixed
- * bounding sphere (identical radius for every entity). The nearest tile and the
- * nearest entity are reported independently, so a caller can prefer whichever is
- * closer, or use the tile for movement and the entity for selection. */
+ * footprint, standard thickness, top at y=0), each entity against one fixed
+ * bounding sphere (identical radius for every entity), each live die against a
+ * bounding sphere sized to its model, and each single card against its oriented
+ * bounding box (the flat slab). Piles/draws are not picked. The nearest hit of
+ * each kind is reported independently, so a caller can prefer whichever is
+ * closer, or use the tile for movement and the entity/die/card for selection. */
 typedef struct {
     bool            hit_tile;
     TesseraCoord    tile;            /* grid coord of the nearest hit tile        */
@@ -364,6 +366,14 @@ typedef struct {
     float           ray_origin[3];   /* world-space ray origin (camera)           */
     float           ray_dir[3];      /* normalized world-space ray direction      */
     float           point[3];        /* world-space point of the nearest hit      */
+
+    bool            hit_dice;
+    TesseraDiceId   dice;            /* id of the nearest hit die                 */
+    float           dice_distance;   /* ray distance to that die (world units)    */
+
+    bool            hit_card;
+    TesseraCardId   card;            /* id of the nearest hit (single) card       */
+    float           card_distance;   /* ray distance to that card (world units)   */
 } TesseraPick;
 
 /* Cast a ray from the camera through (screen_x, screen_y) — logical window
@@ -412,6 +422,18 @@ TESSERA_API bool tessera_entity_screen_position(TesseraEngine* e, TesseraEntityI
  * on its TesseraTilePlacement. Requires the tile to carry a non-zero id.
  * Returns false for id 0 or when no live tile has that id. */
 TESSERA_API bool tessera_tile_screen_position(TesseraEngine* e, TesseraTileId id,
+                                              TesseraScreenPos* out);
+
+/* Screen position of a live die's centre, looked up by its TesseraDicePlacement
+ * id. Tracks the die's current animating position (throw, slide, or at rest), so
+ * it stays glued as the die moves. Returns false if no live die has that id. */
+TESSERA_API bool tessera_dice_screen_position(TesseraEngine* e, TesseraDiceId id,
+                                              TesseraScreenPos* out);
+
+/* Screen position of a live (single) card's centre, looked up by its
+ * TesseraCardPlacement id. Tracks the card's current animating transform.
+ * Returns false for id 0, a pile/draw id, or when no live card has that id. */
+TESSERA_API bool tessera_card_screen_position(TesseraEngine* e, TesseraCardId id,
                                               TesseraScreenPos* out);
 
 /* Compute the orbit-camera `distance` (zoom) at which every listed tile and

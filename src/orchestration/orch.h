@@ -142,6 +142,11 @@ bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out);
  * unknown id. Used to project a tile back to screen (inverse of picking). */
 bool ts_orch_tile_pos(const struct TsOrch* o, TesseraTileId id, vec3 out);
 
+/* Current interpolated world centre of a live *single* card (not a pile/draw)
+ * by id. Returns false for id 0, a pile id, or an unknown id. Used to project a
+ * card back to screen (inverse of picking). */
+bool ts_orch_card_pos(const struct TsOrch* o, TesseraCardId id, vec3 out);
+
 /* Build the frame draw list from live instances into `arena`. Returns count. */
 size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
                               TsArena* arena, struct TsDrawItem** out);

@@ -268,6 +268,16 @@ bool tessera_tile_screen_position(TesseraEngine* e, TesseraTileId id, TesseraScr
     return ts_engine_tile_screen_position(e, id, out);
 }
 
+bool tessera_dice_screen_position(TesseraEngine* e, TesseraDiceId id, TesseraScreenPos* out) {
+    if (!e || !out) return false;
+    return ts_engine_dice_screen_position(e, id, out);
+}
+
+bool tessera_card_screen_position(TesseraEngine* e, TesseraCardId id, TesseraScreenPos* out) {
+    if (!e || !out) return false;
+    return ts_engine_card_screen_position(e, id, out);
+}
+
 bool tessera_camera_fit_distance(TesseraEngine* e,
                                  const TesseraTileId* tiles, size_t tile_count,
                                  const TesseraEntityId* entities, size_t entity_count,

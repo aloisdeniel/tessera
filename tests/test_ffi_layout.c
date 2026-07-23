@@ -206,7 +206,7 @@ OFF_IS(TesseraState, dice_count, 136);
 /* ======================================================================= *
  *  Picking
  * ======================================================================= */
-SIZE_IS(TesseraPick, 72);
+SIZE_IS(TesseraPick, 112);
 OFF_IS(TesseraPick, hit_tile, 0);
 OFF_IS(TesseraPick, tile, 4);
 OFF_IS(TesseraPick, tile_distance, 12);
@@ -216,6 +216,12 @@ OFF_IS(TesseraPick, entity_distance, 32);
 OFF_IS(TesseraPick, ray_origin, 36);
 OFF_IS(TesseraPick, ray_dir, 48);
 OFF_IS(TesseraPick, point, 60);
+OFF_IS(TesseraPick, hit_dice, 72);
+OFF_IS(TesseraPick, dice, 80);
+OFF_IS(TesseraPick, dice_distance, 88);
+OFF_IS(TesseraPick, hit_card, 92);
+OFF_IS(TesseraPick, card, 96);
+OFF_IS(TesseraPick, card_distance, 104);
 
 SIZE_IS(TesseraScreenPos, 28);
 OFF_IS(TesseraScreenPos, onscreen, 0);

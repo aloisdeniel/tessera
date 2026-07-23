@@ -157,6 +157,49 @@ int main(void) {
     CHECK(tessera_camera_fit_distance(NULL, corners, 4, NULL, 0, 0, &fit_d) == false);
     CHECK(tessera_camera_fit_distance(e, corners, 4, NULL, 0, 0, NULL) == false);
 
+    /* ---- dice picking + reverse pick ---- */
+    /* Register a plain 6-face die (blank sprites decode to a grey cube — geometry
+     * is all the pick needs) and drop it on the camera focus (world origin). */
+    {
+        TesseraDiceFace dfaces[6];
+        memset(dfaces, 0, sizeof dfaces);
+        TesseraDiceDef ddef = { .faces = dfaces, .face_count = 6, .size = 1.2f };
+        TesseraDefId die = tessera_register_dice_def(e, &ddef);
+        CHECK(die != 0);
+
+        TesseraDicePlacement dp = { .id = 7, .def = die, .face = 0,
+                                    .position = {0, 0.6f, 0}, .seed = 1, .throw_s = 0.3f };
+        TesseraState sd = s;                 /* original board + camera (distance 10) */
+        sd.dice = &dp; sd.dice_count = 1; sd.epoch = 3;
+        tessera_set_state(e, &sd);
+        settle(e, 1.5);                      /* let the throw settle to the rest pose */
+        CHECK(tessera_dice_all_idle(e));
+
+        /* centre pixel passes through the focus, so it hits the die sitting there */
+        TesseraPick dpick;
+        CHECK(tessera_pick(e, W / 2.0f, H / 2.0f, &dpick));
+        CHECK(dpick.hit_dice);
+        CHECK(dpick.dice == 7);
+        CHECK(dpick.dice_distance > 0.0f);
+
+        /* reverse pick: the die sits on the focus column, so it projects onto the
+         * centre in x; its centre is raised (y=0.6) so y sits a little above the
+         * mid-line — the exact-position invariant is the round-trip just below. */
+        TesseraScreenPos dsp;
+        CHECK(tessera_dice_screen_position(e, 7, &dsp));
+        CHECK(dsp.onscreen);
+        CHECK(fabsf(dsp.x - W / 2.0f) < 4.0f);
+        CHECK(dsp.y >= 0.0f && dsp.y <= H);
+
+        /* full round-trip: a pick at the projected pixel returns the same die */
+        TesseraPick drt;
+        CHECK(tessera_pick(e, dsp.x, dsp.y, &drt) && drt.hit_dice && drt.dice == 7);
+
+        /* unknown die id reports not-found */
+        CHECK(tessera_dice_screen_position(e, 999, &dsp) == false);
+        CHECK(tessera_card_screen_position(e, 999, &dsp) == false);
+    }
+
     tessera_destroy(e);
     if (g_fail == 0) { printf("all pick tests passed\n"); return 0; }
     printf("%d pick checks failed\n", g_fail);

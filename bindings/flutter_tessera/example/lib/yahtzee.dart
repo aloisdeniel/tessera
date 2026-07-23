@@ -222,7 +222,7 @@ class YahtzeeController extends GameController<YState, YAction> {
   @override
   String get title => 'Yahtzee';
   @override
-  String get subtitle => 'Dice · roll, hold, and fill the scorecard';
+  String get subtitle => 'Dice · roll, tap a die to hold, fill the scorecard';
   @override
   IconData get icon => Icons.casino;
 
@@ -301,6 +301,16 @@ class YahtzeeController extends GameController<YState, YAction> {
     return [_scene(state)];
   }
 
+  // Tap a die to hold/un-hold it. render() gives die i the id `i + 1`, so the
+  // picked die id maps straight back to its index. Only meaningful once rolled.
+  @override
+  YAction? onTap(YState state, TesseraPickResult? pick) {
+    if (state is! YRolled || pick == null || !pick.hitDice) return null;
+    final index = pick.dice - 1;
+    if (index < 0 || index >= 5) return null;
+    return YToggleKeep(index);
+  }
+
   @override
   YAction? autoAction(YState state, math.Random rng) {
     switch (state) {
@@ -361,13 +371,7 @@ class YahtzeeController extends GameController<YState, YAction> {
           out.add(GameButton('Roll (${state.rollsLeft})', const YRoll(),
               icon: Icons.casino, tone: GameButtonTone.primary));
         }
-        for (var i = 0; i < 5; i++) {
-          out.add(GameButton(
-            'die ${i + 1}: ${state.dice[i]}${state.kept[i] ? ' ✓' : ''}',
-            YToggleKeep(i),
-            tone: state.kept[i] ? GameButtonTone.primary : GameButtonTone.normal,
-          ));
-        }
+        // Dice are held by tapping them in the scene (see onTap), not via buttons.
         for (var cat = 0; cat < 13; cat++) {
           if (state.scorecard.containsKey(cat)) continue;
           out.add(GameButton(

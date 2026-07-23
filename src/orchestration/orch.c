@@ -1015,6 +1015,18 @@ bool ts_orch_tile_pos(const struct TsOrch* o, TesseraTileId id, vec3 out) {
     return false;
 }
 
+bool ts_orch_card_pos(const struct TsOrch* o, TesseraCardId id, vec3 out) {
+    if (!o || id == 0) return false;
+    for (size_t i = 0; i < o->card_count; ++i) {
+        const TsCardInst* c = &o->cards[i];
+        if (c->alive && !c->is_draw && c->id == id) {
+            glm_vec3_copy((float*)c->pos, out);
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ----------------------------------------------------------- drawlist */
 static bool tint_is_zero(const float t[4]) {
     return t[0] == 0.0f && t[1] == 0.0f && t[2] == 0.0f && t[3] == 0.0f;

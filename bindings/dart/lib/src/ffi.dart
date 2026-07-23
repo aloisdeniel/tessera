@@ -406,6 +406,18 @@ final class TesseraPick extends Struct {
   external Array<Float> rayDir;
   @Array(3)
   external Array<Float> point;
+  @Bool()
+  external bool hitDice;
+  @Uint64()
+  external int dice;
+  @Float()
+  external double diceDistance;
+  @Bool()
+  external bool hitCard;
+  @Uint64()
+  external int card;
+  @Float()
+  external double cardDistance;
 }
 
 /// Inverse of picking: where a scene point lands on screen.
@@ -662,6 +674,10 @@ class Tessera {
       .lookupFunction<_EntityScreenC, _EntityScreenD>('tessera_entity_screen_position');
   late final _TileScreenD _tileScreenPosition =
       _lib.lookupFunction<_TileScreenC, _TileScreenD>('tessera_tile_screen_position');
+  late final _EntityScreenD _diceScreenPosition = _lib
+      .lookupFunction<_EntityScreenC, _EntityScreenD>('tessera_dice_screen_position');
+  late final _EntityScreenD _cardScreenPosition = _lib
+      .lookupFunction<_EntityScreenC, _EntityScreenD>('tessera_card_screen_position');
   late final _FitDistanceD _cameraFitDistance =
       _lib.lookupFunction<_FitDistanceC, _FitDistanceD>('tessera_camera_fit_distance');
   late final _SetTimingD _setTiming =
@@ -824,6 +840,15 @@ class Tessera {
   /// Screen position of a live tile by its instance id (0 = unqueryable).
   bool tileScreenPosition(int id, Pointer<TesseraScreenPos> out) =>
       _tileScreenPosition(_engine, id, out);
+
+  /// Screen position of a live die by its placement id. False if not present.
+  bool diceScreenPosition(int id, Pointer<TesseraScreenPos> out) =>
+      _diceScreenPosition(_engine, id, out);
+
+  /// Screen position of a live (single) card by its placement id. False if not
+  /// present or the id names a pile/draw.
+  bool cardScreenPosition(int id, Pointer<TesseraScreenPos> out) =>
+      _cardScreenPosition(_engine, id, out);
 
   /// Orbit distance (zoom) that keeps every listed tile/entity id on screen with
   /// a fractional [padding] margin. Pure query; feed the result into your
