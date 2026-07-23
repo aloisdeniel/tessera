@@ -94,6 +94,8 @@ typedef struct {
     float   from_thick, to_thick;
     TsTween thick_tween;
     uint32_t count;
+    uint64_t hand;           /* hand this card belongs to (0 = free); tracks the
+                              * last-applied hand so a fresh entry can be detected */
     bool    hidden;          /* last target hidden / top_hidden */
     bool    removing, alive;
     /* multi-step move (free cards only): segment endpoints, last = target */

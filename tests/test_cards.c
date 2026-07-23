@@ -234,6 +234,41 @@ int main(void) {
     CHECK(c1 && fabsf(c1->pos[0] - 3.0f) < 0.01f);   /* landed on the target */
     cards[0].path = NULL; cards[0].path_count = 0;   /* restore for teardown */
 
+    /* ---- move the free card INTO the hand: two-step approach (rise, then drop).
+     * A card entering a hand must stage above/in front of the fan before
+     * settling into its slot, so it doesn't clip through the cards already
+     * there. Expect: 2 segments, a mid-flight point that rises above the hand
+     * anchor's y, then landing in the fan near the other hand cards. ---- */
+    settle(e, buf);
+    cards[0].hidden = false;
+    cards[0].hand = 100;                             /* was a free card, now hand 100 */
+    cards[0].hand_slot = 2;
+    st.epoch++;
+    tessera_set_state(e, &st);
+    advance(e, buf, 1);                              /* promote: builds the approach */
+    c1 = find_inst(e, 1, false);
+    CHECK(c1 && c1->seg_count == 2);                 /* staging point + fan slot */
+    float peak_y = c1 ? c1->pos[1] : 0.0f;
+    for (int i = 0; i < 400 && !tessera_is_idle(e); ++i) {
+        advance(e, buf, 1);
+        c1 = find_inst(e, 1, false);
+        if (!c1) break;
+        if (c1->pos[1] > peak_y) peak_y = c1->pos[1];
+    }
+    /* it climbed clearly above the hand anchor's height (1.0) on the way in */
+    CHECK(peak_y > hand.position[1] + 0.3f);
+    c1 = find_inst(e, 1, false);
+    if (c1) {
+        /* landed in the fan: near the hand anchor, level with the other cards */
+        float dx = c1->pos[0] - hand.position[0];
+        float dz = c1->pos[2] - hand.position[2];
+        CHECK(sqrtf(dx*dx + dz*dz) < 4.0f);
+        h0 = find_inst(e, 10, false);
+        CHECK(h0 && fabsf(c1->pos[1] - h0->pos[1]) < 0.2f);
+    }
+    cards[0].hand = 0; cards[0].hand_slot = 0;       /* restore for teardown */
+    cards[0].position[0] = -3.0f;
+
     /* ---- remove everything: all card instances cull ---- */
     st.cards = NULL; st.card_count = 0;
     st.card_draws = NULL; st.card_draw_count = 0;

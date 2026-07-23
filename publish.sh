@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+#
+# publish.sh — bundle the Tessera Dart packages into a single distributable zip
+# with the prebuilt native engine for every supported architecture.
+#
+# Tessera is a Metal-only engine, so "all architectures" means the Apple targets:
+#
+#   macOS          universal dynamic libs   arm64 + x86_64   (libtessera.dylib + libSDL3.dylib)
+#   iOS device     static slices            arm64            (libtessera.a + libtessera_thirdparty.a + libSDL3.a)
+#   iOS simulator  static slices            arm64 + x86_64   (same three archives)
+#
+# For iOS the static slices are also assembled into .xcframeworks (device + sim
+# in one bundle) — the canonical "all architectures" Apple artifact.
+#
+# SDL3 is built from the vendored third_party/SDL source (not Homebrew) so the
+# macOS dylib is universal and the headers match the linked binaries exactly.
+#
+# The produced zip contains:
+#
+#   tessera-dist-<version>/
+#     dart/                        the pure-Dart FFI package (source)
+#       native/macos/              universal libtessera.dylib + libSDL3.dylib
+#     flutter_tessera/             the Flutter plugin package (source)
+#       native/macos/              universal dylibs
+#       native/ios-device/         arm64 static slices
+#       native/ios-simulator/      arm64+x86_64 static slices
+#       native/xcframeworks/       libtessera / libtessera_thirdparty / libSDL3 .xcframework
+#     include/tessera.h            the single FFI header
+#     README.txt                   contents + how to wire the libs into a build
+#
+# Usage:
+#   ./publish.sh                       build everything, emit dist/tessera-dist-<ver>.zip
+#   ./publish.sh --targets macos       macOS only (skip iOS)
+#   ./publish.sh --targets ios         iOS only (skip macOS)
+#   ./publish.sh --out /tmp/x.zip      choose the output path
+#   ./publish.sh --jobs 8              parallelism for the native builds
+#   ./publish.sh --clean               wipe the dist build tree first
+#
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Config & argument parsing
+# ---------------------------------------------------------------------------
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIST_ROOT="$REPO_ROOT/dist"          # everything this script produces lives here
+BUILD_ROOT="$DIST_ROOT/build"        # per-target CMake build trees
+STAGE_ROOT="$DIST_ROOT/stage"        # the tree that gets zipped
+SDL_SRC="$REPO_ROOT/third_party/SDL"
+
+TARGETS="macos ios"
+OUT_ZIP=""
+JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+DO_CLEAN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --targets) TARGETS="$2"; shift 2 ;;
+    --out)     OUT_ZIP="$2"; shift 2 ;;
+    --jobs)    JOBS="$2";    shift 2 ;;
+    --clean)   DO_CLEAN=1;   shift ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
+    *) echo "publish.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
+  esac
+done
+
+want() { [[ " $TARGETS " == *" $1 "* ]]; }
+
+# Read the package version from the Dart pubspec so the artifact is labelled.
+VERSION="$(sed -n 's/^version:[[:space:]]*//p' "$REPO_ROOT/bindings/dart/pubspec.yaml" | head -1)"
+VERSION="${VERSION:-0.0.0}"
+DIST_NAME="tessera-dist-$VERSION"
+STAGE="$STAGE_ROOT/$DIST_NAME"
+[[ -n "$OUT_ZIP" ]] || OUT_ZIP="$DIST_ROOT/$DIST_NAME.zip"
+# Resolve to an absolute path: the zip step runs inside a `cd`, so a relative
+# --out would otherwise be created under the staging dir instead of the CWD.
+mkdir -p "$(dirname "$OUT_ZIP")"
+OUT_ZIP="$(cd "$(dirname "$OUT_ZIP")" && pwd)/$(basename "$OUT_ZIP")"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+step() { printf '\033[1;35m  ·\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31mpublish.sh: %s\033[0m\n' "$*" >&2; exit 1; }
+
+require() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not on PATH"; }
+
+require cmake
+require rsync
+if want ios; then
+  require xcodebuild
+  require lipo
+fi
+[[ "$(uname -s)" == "Darwin" ]] || die "must run on macOS (Metal/Apple toolchain required)"
+[[ -d "$SDL_SRC" ]] || die "vendored SDL source not found at $SDL_SRC"
+
+if [[ "$DO_CLEAN" == 1 ]]; then
+  log "Cleaning $DIST_ROOT"
+  rm -rf "$DIST_ROOT"
+fi
+mkdir -p "$BUILD_ROOT" "$STAGE"
+
+# Build SDL3 from vendored source. $1 build dir, remaining args extra CMake flags.
+build_sdl() {
+  local bdir="$1"; shift
+  cmake -S "$SDL_SRC" -B "$bdir" -DCMAKE_BUILD_TYPE=Release \
+        -DSDL_TEST_LIBRARY=OFF -DSDL_EXAMPLES=OFF "$@" >/dev/null
+  cmake --build "$bdir" --config Release -j "$JOBS" >/dev/null
+}
+
+# Build libtessera. $1 build dir, $2 SDL build dir (for SDL3Config.cmake), rest flags.
+build_tessera() {
+  local bdir="$1" sdldir="$2"; shift 2
+  cmake -S "$REPO_ROOT" -B "$bdir" -DCMAKE_BUILD_TYPE=Release \
+        -DTESSERA_BUILD_EXAMPLES=OFF -DTESSERA_BUILD_TESTS=OFF \
+        -DSDL3_DIR="$sdldir" "$@" >/dev/null
+  cmake --build "$bdir" --config Release -j "$JOBS" --target tessera >/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# macOS — universal (arm64 + x86_64) dynamic libraries
+# ---------------------------------------------------------------------------
+if want macos; then
+  log "Building macOS universal (arm64 + x86_64)"
+  MAC_ARCHS="arm64;x86_64"
+
+  step "SDL3 (shared)"
+  SDL_MAC="$BUILD_ROOT/sdl-macos"
+  build_sdl "$SDL_MAC" \
+    -DCMAKE_OSX_ARCHITECTURES="$MAC_ARCHS" \
+    -DSDL_SHARED=ON -DSDL_STATIC=OFF
+
+  step "libtessera (shared)"
+  TES_MAC="$BUILD_ROOT/tessera-macos"
+  build_tessera "$TES_MAC" "$SDL_MAC" \
+    -DCMAKE_OSX_ARCHITECTURES="$MAC_ARCHS" \
+    -DTESSERA_BUILD_SHARED=ON
+
+  step "Staging dylibs"
+  MAC_OUT="$STAGE/flutter_tessera/native/macos"
+  mkdir -p "$MAC_OUT"
+  # libtessera.dylib
+  cp -f "$TES_MAC/libtessera.dylib" "$MAC_OUT/"
+  # Resolve the real SDL dylib (the *.0.dylib target of the version symlink).
+  SDL_DYLIB="$(find "$SDL_MAC" -maxdepth 1 -name 'libSDL3.*.dylib' -type f | head -1)"
+  [[ -n "$SDL_DYLIB" ]] || SDL_DYLIB="$(find "$SDL_MAC" -maxdepth 1 -name 'libSDL3.dylib' | head -1)"
+  [[ -n "$SDL_DYLIB" ]] || die "SDL3 macOS dylib not found under $SDL_MAC"
+  cp -f "$SDL_DYLIB" "$MAC_OUT/libSDL3.dylib"
+
+  # Make the two dylibs load side-by-side: give libtessera an @loader_path rpath
+  # so it finds libSDL3.dylib sitting next to it, and normalise the SDL install
+  # name it records to a plain @rpath/libSDL3.dylib.
+  chmod u+w "$MAC_OUT/libtessera.dylib" "$MAC_OUT/libSDL3.dylib"
+  install_name_tool -id "@rpath/libSDL3.dylib" "$MAC_OUT/libSDL3.dylib" 2>/dev/null || true
+  SDL_REF="$(otool -L "$MAC_OUT/libtessera.dylib" | awk '/libSDL3/{print $1; exit}')"
+  if [[ -n "$SDL_REF" ]]; then
+    install_name_tool -change "$SDL_REF" "@rpath/libSDL3.dylib" "$MAC_OUT/libtessera.dylib" 2>/dev/null || true
+  fi
+  install_name_tool -add_rpath "@loader_path" "$MAC_OUT/libtessera.dylib" 2>/dev/null || true
+  # Strip any machine-specific rpaths the link baked in (e.g. the SDL build tree)
+  # so the shipped dylib carries no absolute local paths.
+  while IFS= read -r rp; do
+    [[ "$rp" == "$BUILD_ROOT"* ]] && install_name_tool -delete_rpath "$rp" "$MAC_OUT/libtessera.dylib" 2>/dev/null || true
+  done < <(otool -l "$MAC_OUT/libtessera.dylib" | awk '/LC_RPATH/{getline;getline;print $2}')
+
+  step "macOS: $(lipo -archs "$MAC_OUT/libtessera.dylib" 2>/dev/null || echo '?')"
+fi
+
+# ---------------------------------------------------------------------------
+# iOS — static slices for device (arm64) and simulator (arm64 + x86_64)
+# ---------------------------------------------------------------------------
+if want ios; then
+  log "Building iOS static slices (device + simulator)"
+
+  # $1 tag, $2 sysroot, $3 arches
+  build_ios_slice() {
+    local tag="$1" sysroot="$2" archs="$3"
+    step "$tag: SDL3 (static)"
+    local sdl_b="$BUILD_ROOT/sdl-$tag"
+    build_sdl "$sdl_b" -G Xcode \
+      -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$sysroot" \
+      -DCMAKE_OSX_ARCHITECTURES="$archs" \
+      -DSDL_SHARED=OFF -DSDL_STATIC=ON
+
+    step "$tag: libtessera (static)"
+    local tes_b="$BUILD_ROOT/tessera-$tag"
+    build_tessera "$tes_b" "$sdl_b" -G Xcode \
+      -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$sysroot" \
+      -DCMAKE_OSX_ARCHITECTURES="$archs" \
+      -DTESSERA_BUILD_SHARED=OFF
+
+    # Collect the three archives into a flat per-target dir.
+    local out="$STAGE/flutter_tessera/native/$tag"
+    mkdir -p "$out"
+    cp -f "$tes_b/Release-$sysroot/libtessera.a" "$out/"
+    cp -f "$tes_b/Release-$sysroot/libtessera_thirdparty.a" "$out/"
+    cp -f "$(find "$sdl_b" -name 'libSDL3.a' -path '*Release*' | head -1)" "$out/libSDL3.a"
+    step "$tag: $(lipo -archs "$out/libtessera.a")"
+  }
+
+  build_ios_slice "ios-device"    "iphoneos"        "arm64"
+  build_ios_slice "ios-simulator" "iphonesimulator" "arm64;x86_64"
+
+  step "Assembling xcframeworks"
+  XCF_OUT="$STAGE/flutter_tessera/native/xcframeworks"
+  mkdir -p "$XCF_OUT"
+  DEV="$STAGE/flutter_tessera/native/ios-device"
+  SIM="$STAGE/flutter_tessera/native/ios-simulator"
+  for lib in libtessera libtessera_thirdparty libSDL3; do
+    rm -rf "$XCF_OUT/$lib.xcframework"
+    args=(-create-xcframework
+          -library "$DEV/$lib.a"
+          -library "$SIM/$lib.a"
+          -output  "$XCF_OUT/$lib.xcframework")
+    # Attach the public headers to the engine framework for convenience.
+    if [[ "$lib" == "libtessera" ]]; then
+      args=(-create-xcframework
+            -library "$DEV/$lib.a" -headers "$REPO_ROOT/include"
+            -library "$SIM/$lib.a" -headers "$REPO_ROOT/include"
+            -output  "$XCF_OUT/$lib.xcframework")
+    fi
+    xcodebuild "${args[@]}" >/dev/null
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# Stage the Dart packages (source) + the shared header
+# ---------------------------------------------------------------------------
+log "Staging package sources"
+
+RSYNC_EXCLUDES=(
+  --exclude '.dart_tool/' --exclude 'build/' --exclude '.build/'
+  --exclude '.symlinks/'  --exclude 'ephemeral/' --exclude 'Pods/'
+  --exclude '.flutter-plugins-dependencies' --exclude 'pubspec.lock'
+  --exclude '*.iml' --exclude '.idea/' --exclude '.DS_Store'
+  --exclude '*.dylib' --exclude '*.so' --exclude '*.a'
+)
+
+step "dart/"
+rsync -a "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/bindings/dart/" "$STAGE/dart/"
+
+step "flutter_tessera/"
+rsync -a "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/bindings/flutter_tessera/" "$STAGE/flutter_tessera/"
+
+step "include/tessera.h"
+mkdir -p "$STAGE/include"
+cp -f "$REPO_ROOT/include/tessera.h" "$STAGE/include/"
+
+# The pure-Dart package loads a dylib from ./ or ./build/ — drop the universal
+# macOS dylibs where its loader (library.dart) will find them.
+if want macos; then
+  step "dart/native/macos (for FFI dylib loading)"
+  mkdir -p "$STAGE/dart/native/macos"
+  cp -f "$STAGE/flutter_tessera/native/macos/"*.dylib "$STAGE/dart/native/macos/"
+fi
+
+# ---------------------------------------------------------------------------
+# Manifest / README inside the bundle
+# ---------------------------------------------------------------------------
+cat > "$STAGE/README.txt" <<EOF
+Tessera distribution bundle — $DIST_NAME
+Generated by publish.sh. Tessera is a Metal-only engine; the prebuilt native
+libraries below cover every supported Apple architecture.
+
+Contents
+--------
+  include/tessera.h              The single FFI header (the whole engine surface).
+
+  dart/                          Pure-Dart FFI package 'tessera' (v$VERSION).
+    native/macos/                Universal libtessera.dylib + libSDL3.dylib
+                                 (arm64 + x86_64). The package's library loader
+                                 finds a dylib in ./, ./build/, or via the env
+                                 vars TESSERA_LIBRARY_PATH / TESSERA_LIBRARY_DIR.
+
+  flutter_tessera/               Flutter plugin package 'flutter_tessera'.
+    native/macos/                Universal dynamic libs (arm64 + x86_64).
+    native/ios-device/           arm64 static slices    (libtessera.a,
+    native/ios-simulator/        arm64 + x86_64 static    libtessera_thirdparty.a,
+                                 slices                    libSDL3.a).
+    native/xcframeworks/         libtessera / libtessera_thirdparty / libSDL3
+                                 .xcframework (device + simulator combined).
+
+Wiring the native libs into a build
+-----------------------------------
+  Pure Dart (desktop): run from a dir where the loader sees the dylibs, e.g.
+      TESSERA_LIBRARY_DIR=<bundle>/dart/native/macos dart run ...
+
+  Flutter macOS (SwiftPM / CocoaPods): point the manifest env vars at the
+  staged dirs before building the app:
+      TESSERA_LIB_DIR=<bundle>/flutter_tessera/native/macos
+      SDL3_LIB_DIR=<bundle>/flutter_tessera/native/macos
+
+  Flutter iOS (SwiftPM / CocoaPods): point at the simulator or device slices:
+      TESSERA_IOS_LIB_DIR=<bundle>/flutter_tessera/native/ios-simulator
+      SDL3_IOS_LIB_DIR=<bundle>/flutter_tessera/native/ios-simulator
+  or link the .xcframeworks under native/xcframeworks/ directly.
+
+See the per-package README / Package.swift / podspec for the full integration.
+EOF
+
+# ---------------------------------------------------------------------------
+# Zip it
+# ---------------------------------------------------------------------------
+log "Creating $OUT_ZIP"
+mkdir -p "$(dirname "$OUT_ZIP")"
+rm -f "$OUT_ZIP"
+( cd "$STAGE_ROOT" && zip -qr -X "$OUT_ZIP" "$DIST_NAME" )
+
+log "Done."
+printf '    %s (%s)\n' "$OUT_ZIP" "$(du -h "$OUT_ZIP" | cut -f1)"

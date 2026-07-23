@@ -228,43 +228,64 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
           ),
         ],
       ),
-      body: Column(
+      // The Tessera view fills the whole body; the status/buttons panel is
+      // stacked on top of it (bottom-aligned). Keeping the view a fixed size —
+      // rather than an Expanded sibling above a variable-height panel — means it
+      // never resizes as buttons/status appear or grow, so the renderer isn't
+      // churning through onResize/camera re-fits on every state change.
+      body: Stack(
         children: [
-          Expanded(
+          Positioned.fill(
             child: GestureDetector(
               onTapDown: _onTapDown,
               child: TesseraView(onCreated: _onCreated),
             ),
           ),
-          Container(
-            width: double.infinity,
-            color: Colors.black.withValues(alpha: 0.35),
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _ready ? game.status(_state) : 'starting…',
-                  style: const TextStyle(fontSize: 13),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              width: double.infinity,
+              // A soft top-to-bottom scrim keeps the overlaid text/buttons
+              // legible against whatever the board renders behind them.
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.0),
+                    Colors.black.withValues(alpha: 0.55),
+                  ],
                 ),
-                if (buttons.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 168),
-                    child: SingleChildScrollView(
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final b in buttons.cast<GameButton<A>>())
-                            _buildButton(b, interactive),
-                        ],
+              ),
+              padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _ready ? game.status(_state) : 'starting…',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  if (buttons.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 168),
+                      child: SingleChildScrollView(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final b in buttons.cast<GameButton<A>>())
+                              _buildButton(b, interactive),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ],

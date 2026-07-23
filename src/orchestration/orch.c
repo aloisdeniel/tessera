@@ -33,6 +33,11 @@
 #define TS_HAND_SPREAD   0.5f     /* total fan angle (radians)                 */
 #define TS_HAND_SPACING  0.62f    /* lateral spacing between cards (world)     */
 #define TS_HAND_RADIUS   3.0f     /* arc dip radius (world)                    */
+/* When a card enters a hand it first flies to a staging point above its slot
+ * and a bit toward the viewer, then drops in — so it clears the cards already
+ * fanned out instead of slicing through them. */
+#define TS_HAND_APPROACH_RISE  1.2f  /* world-up lift of the staging point      */
+#define TS_HAND_APPROACH_FRONT 0.7f  /* forward offset (hand-local +Z) of same  */
 
 /* ------------------------------------------------------------ lifecycle */
 struct TsOrch* ts_orch_create(void) {
@@ -404,6 +409,20 @@ static void hand_fan_target(const TesseraHandPlacement* h, uint32_t r, uint32_t 
     glm_quat_normalize(out_rot);
 }
 
+/* Staging waypoint for a card entering a hand: above its final fan slot
+ * (`final_pos`) and a bit toward the viewer (the hand's local +Z front). Flying
+ * through it lets the card arrive over the fan and drop into place rather than
+ * clipping through the cards already there. */
+static void hand_approach_target(const TesseraHandPlacement* h, const vec3 final_pos,
+                                 vec3 out) {
+    versor hrot; placement_quat(h->orientation, hrot);
+    vec3 front = { 0.0f, 0.0f, 1.0f };
+    glm_quat_rotatev(hrot, front, front);
+    out[0] = final_pos[0] + front[0] * TS_HAND_APPROACH_FRONT;
+    out[1] = final_pos[1] + front[1] * TS_HAND_APPROACH_FRONT + TS_HAND_APPROACH_RISE;
+    out[2] = final_pos[2] + front[2] * TS_HAND_APPROACH_FRONT;
+}
+
 /* Target transform for card index `i` in `next` (free placement or hand fan). */
 static void card_target(const TsSnapshot* next, size_t i, vec3 out_pos, versor out_rot) {
     const TesseraCardPlacement* cp = &next->cards[i];
@@ -436,6 +455,9 @@ static float draw_thickness(TesseraEngine* e, TesseraDefId def, uint32_t count) 
     float t = base + extra;
     return t > TS_CARD_MAX_THICK ? TS_CARD_MAX_THICK : t;
 }
+
+static void card_set_journey(TsCardInst* c, const float* path, uint32_t path_count,
+                             const vec3 final_pos, float total_s);
 
 /* Snap a card instance to its target (tweens complete). */
 static void card_snap(TsCardInst* c, uint64_t id, TesseraDefId def, bool is_draw,
@@ -502,21 +524,32 @@ static bool draw_top_pose(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* 
 
 /* Spawn a card resting on a source pile and slide/flip it to its target. Full
  * size + opacity throughout (it's lifted off the deck, not popped from nowhere).
- * Crossfades the front if the pile top and the target differ (a draw reveal). */
+ * Crossfades the front if the pile top and the target differ (a draw reveal).
+ * When `approach` is non-NULL (dealing into a hand) the card flies through that
+ * staging point first, taking twice as long, so it drops into the fan cleanly. */
 static void card_spawn_from(TsCardInst* c, uint64_t id, TesseraDefId def,
                             const vec3 pos, const versor rot, bool hidden,
                             float thick, const vec3 src_pos, const versor src_rot,
-                            bool src_hidden, float move_s) {
+                            bool src_hidden, const float* approach, float move_s) {
     card_snap(c, id, def, false, pos, rot, hidden, thick, 1);
-    glm_vec3_copy((float*)src_pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
-    glm_quat_copy((float*)src_rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
+    /* current pose = the pile top; rotation converges toward `rot` over seg 0 */
     glm_vec3_copy((float*)src_pos, c->pos); glm_quat_copy((float*)src_rot, c->rot);
-    ts_tween_start(&c->tween, move_s, 0.0f, TS_EASE_OUT_CUBIC);
+    glm_quat_copy((float*)src_rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
+    float flight = move_s;
+    if (approach) {                             /* fly up over the hand, then drop */
+        float path2[6] = { approach[0], approach[1], approach[2],
+                           pos[0], pos[1], pos[2] };
+        card_set_journey(c, path2, 2, pos, 2.0f * move_s);
+        flight = 2.0f * move_s;
+    } else {
+        glm_vec3_copy((float*)src_pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
+        ts_tween_start(&c->tween, move_s, 0.0f, TS_EASE_OUT_CUBIC);
+    }
     if (src_hidden != hidden) {                 /* reveal: crossfade during flight */
         c->from_mix = src_hidden ? 1.0f : 0.0f;
         c->to_mix   = hidden ? 1.0f : 0.0f;
         c->mix      = c->from_mix;
-        ts_tween_start(&c->mix_tween, move_s, 0.0f, TS_EASE_IN_OUT_CUBIC);
+        ts_tween_start(&c->mix_tween, flight, 0.0f, TS_EASE_IN_OUT_CUBIC);
     }
 }
 
@@ -606,28 +639,46 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
         if (cp->id == 0) continue;
         vec3 pos; versor rot; card_target(next, i, pos, rot);
         float thick = draw_thickness(e, cp->def, 1);
+        const TesseraHandPlacement* nh = find_hand(next, cp->hand);
         if (seed) {
-            card_snap(orch_add_card(o), cp->id, cp->def, false, pos, rot,
-                      cp->hidden, thick, 1);
+            TsCardInst* ni = orch_add_card(o);
+            card_snap(ni, cp->id, cp->def, false, pos, rot, cp->hidden, thick, 1);
+            ni->hand = cp->hand;
             continue;
         }
         TsCardInst* c = orch_find_card(o, cp->id, false);
         if (c) {
-            /* A hand card is placed by the fan, so its path (if any) is ignored. */
-            const float* cpath = (cp->hand == 0) ? cp->path : NULL;
-            uint32_t cpc = (cp->hand == 0) ? cp->path_count : 0;
-            card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, cpath, cpc, timing);
+            if (nh && c->hand != cp->hand) {
+                /* Entering a hand: fly up in front of it, then settle into the
+                 * slot, so the card doesn't slice through the ones already
+                 * fanned out. Two waypoints: staging point, then the fan slot. */
+                vec3 wp; hand_approach_target(nh, pos, wp);
+                float path2[6] = { wp[0], wp[1], wp[2], pos[0], pos[1], pos[2] };
+                card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, path2, 2, timing);
+            } else {
+                /* A hand card is placed by the fan, so its path (if any) is ignored. */
+                const float* cpath = (cp->hand == 0) ? cp->path : NULL;
+                uint32_t cpc = (cp->hand == 0) ? cp->path_count : 0;
+                card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, cpath, cpc, timing);
+            }
+            c->hand = cp->hand;
             continue;
         }
         /* New card: deal it from its source pile if that pile is present. */
+        TsCardInst* ni = orch_add_card(o);
         vec3 src_pos; versor src_rot; bool src_hidden;
         if (cp->source_draw != 0 &&
-            draw_top_pose(o, e, next, cp->source_draw, src_pos, src_rot, &src_hidden))
-            card_spawn_from(orch_add_card(o), cp->id, cp->def, pos, rot, cp->hidden,
-                            thick, src_pos, src_rot, src_hidden, timing->move_s);
-        else
-            card_spawn(orch_add_card(o), cp->id, cp->def, false, pos, rot,
+            draw_top_pose(o, e, next, cp->source_draw, src_pos, src_rot, &src_hidden)) {
+            /* Dealing straight into a hand: stage above the fan before dropping. */
+            vec3 wp; const float* wpp = NULL;
+            if (nh) { hand_approach_target(nh, pos, wp); wpp = wp; }
+            card_spawn_from(ni, cp->id, cp->def, pos, rot, cp->hidden,
+                            thick, src_pos, src_rot, src_hidden, wpp, timing->move_s);
+        } else {
+            card_spawn(ni, cp->id, cp->def, false, pos, rot,
                        cp->hidden, thick, 1, timing->add_s);
+        }
+        ni->hand = cp->hand;
     }
 
     /* card piles (draws) */
