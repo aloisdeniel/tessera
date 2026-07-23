@@ -304,8 +304,8 @@ static const TesseraHandPlacement* find_target_hand(TesseraEngine* e, TesseraHan
  * fills the frame with `k`/`aspect` margin. */
 static void frame_card(const vec3 C, versor Q, float w, float h,
                        float k, float aspect, TsCamPose* out) {
-    vec3 n; quat_axis(Q, (vec3){0.0f, 1.0f, 0.0f}, n);  /* front normal (local +Y) */
-    vec3 u; quat_axis(Q, (vec3){0.0f, 0.0f, 1.0f}, u);  /* card up     (local +Z) */
+    vec3 n; quat_axis(Q, (vec3){0.0f, 1.0f,  0.0f}, n); /* front normal (local +Y) */
+    vec3 u; quat_axis(Q, (vec3){0.0f, 0.0f, -1.0f}, u); /* card up = art top (local -Z) */
     float d = fmaxf((h * 0.5f) / k, (w * 0.5f) / (k * aspect));
     if (d < 0.2f) d = 0.2f;
     vec3 off; glm_vec3_scale(n, d, off);
