@@ -345,16 +345,50 @@ final class TesseraHandPlacement extends Struct {
   external double cardSpacing;
 }
 
+/// enum TesseraCameraMode: how the camera is positioned. 0 = ORBIT (default,
+/// reproduces the classic board camera when the whole struct is left zeroed).
+abstract final class TesseraCameraMode {
+  static const int orbit = 0;
+  static const int manual = 1;
+  static const int target = 2;
+  static const int focusTile = 3;
+  static const int focusEntity = 4;
+  static const int focusDice = 5;
+  static const int focusDraw = 6;
+  static const int focusCard = 7;
+  static const int focusHand = 8;
+}
+
+/// Tagged camera. [mode] (TesseraCameraMode) selects which fields matter; the
+/// engine tweens the camera pose from its current pose to the resolved goal as
+/// state evolves. ORBIT uses focus/distance/yaw/pitch; MANUAL uses position/
+/// orientation; TARGET uses position/target; the FOCUS_* modes follow a live
+/// object by [targetId]. [fov] (vertical radians; <=0 => keep current) applies
+/// to every mode.
 final class TesseraCamera extends Struct {
-  external TesseraCoordF focus;
+  @Uint32()
+  external int mode; // TesseraCameraMode
+  external TesseraCoordF focus; // ORBIT grid focus
   @Float()
-  external double distance;
+  external double distance; // ORBIT + FOCUS_* : dst from the framed point
   @Float()
-  external double yaw; // radians
+  external double yaw; // ORBIT + FOCUS_* : orbit angle, radians
   @Float()
-  external double pitch; // radians
+  external double pitch; // ORBIT + FOCUS_* : orbit angle, radians
   @Float()
-  external double fov; // vertical fov, radians
+  external double fov; // all modes; vertical fov radians (<=0 => keep)
+  @Array(3)
+  external Array<Float> position; // MANUAL/TARGET eye
+  @Array(4)
+  external Array<Float> orientation; // MANUAL quaternion xyzw (all-zero => identity)
+  @Array(3)
+  external Array<Float> target; // TARGET look-at point
+  @Uint64()
+  external int targetId; // FOCUS_* object id (tile/entity/dice/draw/card/hand)
+  @Uint64()
+  external int focusCardId; // FOCUS_HAND: optional card to bring fullscreen (0=none)
+  @Float()
+  external double fitPadding; // FOCUS_CARD/FOCUS_HAND: frame margin (<=0 => 0.08)
 }
 
 final class TesseraState extends Struct {

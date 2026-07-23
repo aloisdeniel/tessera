@@ -464,14 +464,84 @@ class TesseraController {
       ..handCount = scene.hands.length
       ..dice = dice
       ..diceCount = scene.dice.length;
-    st.ref.camera
-      ..distance = scene.camera.distance
-      ..yaw = scene.camera.yaw
-      ..pitch = scene.camera.pitch
-      ..fov = scene.camera.fov;
-    st.ref.camera.focus
-      ..x = scene.camera.focusX
-      ..y = scene.camera.focusY;
+    // `calloc` zeroed the whole TesseraState, so any camera field a case does
+    // not touch stays 0 (mode 0 = ORBIT, ids/target/orientation all zero).
+    final cam = st.ref.camera;
+    switch (scene.camera) {
+      case TesseraCameraPose c:
+        cam
+          ..mode = 0
+          ..distance = c.distance
+          ..yaw = c.yaw
+          ..pitch = c.pitch
+          ..fov = c.fov;
+        cam.focus
+          ..x = c.focusX
+          ..y = c.focusY;
+      case TesseraCameraManual c:
+        cam
+          ..mode = 1
+          ..fov = c.fov;
+        for (var k = 0; k < 3; ++k) {
+          cam.position[k] = c.position[k];
+        }
+        for (var k = 0; k < 4; ++k) {
+          cam.orientation[k] = c.orientation[k];
+        }
+      case TesseraCameraTarget c:
+        cam
+          ..mode = 2
+          ..fov = c.fov;
+        for (var k = 0; k < 3; ++k) {
+          cam.position[k] = c.source[k];
+          cam.target[k] = c.target[k];
+        }
+      case TesseraCameraFocusTile c:
+        cam
+          ..mode = 3
+          ..targetId = c.tileId
+          ..distance = c.distance
+          ..yaw = c.yaw
+          ..pitch = c.pitch
+          ..fov = c.fov;
+      case TesseraCameraFocusEntity c:
+        cam
+          ..mode = 4
+          ..targetId = c.entityId
+          ..distance = c.distance
+          ..yaw = c.yaw
+          ..pitch = c.pitch
+          ..fov = c.fov;
+      case TesseraCameraFocusDice c:
+        cam
+          ..mode = 5
+          ..targetId = c.diceId
+          ..distance = c.distance
+          ..yaw = c.yaw
+          ..pitch = c.pitch
+          ..fov = c.fov;
+      case TesseraCameraFocusDraw c:
+        cam
+          ..mode = 6
+          ..targetId = c.drawId
+          ..distance = c.distance
+          ..yaw = c.yaw
+          ..pitch = c.pitch
+          ..fov = c.fov;
+      case TesseraCameraFocusCard c:
+        cam
+          ..mode = 7
+          ..targetId = c.cardId
+          ..fitPadding = c.padding
+          ..fov = c.fov;
+      case TesseraCameraFocusHand c:
+        cam
+          ..mode = 8
+          ..targetId = c.handId
+          ..focusCardId = c.cardId ?? 0
+          ..fitPadding = c.padding
+          ..fov = c.fov;
+    }
 
     // deep-copies; safe to free immediately after. Returns the operation id
     // whose completion resolves the Future below.

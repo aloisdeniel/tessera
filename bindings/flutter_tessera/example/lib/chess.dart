@@ -287,7 +287,8 @@ class ChessController extends GameController<ChessState, ChessAction> {
   }
 
   @override
-  ChessAction? onTap(ChessState state, TesseraPickResult? pick) {
+  ChessAction? onTap(ChessState state, TesseraPickResult? pick,
+      {Offset? local, Size? view}) {
     if (state is! ChessPlaying || pick == null || !pick.hitTile) return null;
     final sq = coordToSquare(pick.tileX, pick.tileY);
     return sq < 0 ? null : ChessTap(sq);

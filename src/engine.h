@@ -36,11 +36,15 @@ struct TesseraEngine {
     TsRegistry    registry;
     TsCamera      camera;
 
-    /* camera transition (M7): glide between poses on state.camera change */
-    TsCamera      cam_from, cam_to;
+    /* camera transition (M7): tween the camera pose from its current pose to the
+     * goal pose resolved from state.camera against the live scene each tick. */
+    TsCamPose     cam_from, cam_to;  /* tween endpoints (world poses)          */
+    TsCamPose     cam_cur;           /* last pose written to the live camera   */
     TsTween       cam_tween;
-    bool          cam_active;   /* a glide is in progress   */
-    bool          cam_have;     /* a pose has been set once  */
+    bool          cam_active;   /* a glide is in progress                      */
+    bool          cam_have;     /* a pose has been set once                    */
+    TesseraCamera cam_spec;     /* last promoted camera spec (resolved/tick)   */
+    bool          cam_spec_have;/* cam_spec holds a promoted spec              */
 
     TesseraTiming timing;
     TesseraLight  light;

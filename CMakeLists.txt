@@ -33,6 +33,15 @@ if(TESSERA_BUILD_SHARED)
     target_compile_definitions(tessera PRIVATE TESSERA_BUILD_SHARED)
 else()
     add_library(tessera STATIC ${TESSERA_SOURCES})
+    # The static library exists to be EMBEDDED (force-loaded) into a host app
+    # that reaches the public API through FFI dlsym — the iOS/Android bindings do
+    # exactly this. With C_VISIBILITY_PRESET hidden (below), the public tessera_*
+    # symbols would be compiled hidden and never make it into the host's dynamic
+    # symbol table, so dlsym(RTLD_DEFAULT, "tessera_*") fails at runtime. Defining
+    # TESSERA_BUILD_SHARED makes TESSERA_API expand to visibility("default") (see
+    # include/tessera.h), which overrides the hidden preset for the public API and
+    # keeps those symbols exported (and alive past -dead_strip).
+    target_compile_definitions(tessera PRIVATE TESSERA_BUILD_SHARED)
 endif()
 
 target_include_directories(tessera

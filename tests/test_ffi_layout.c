@@ -178,14 +178,21 @@ OFF_IS(TesseraHandPlacement, spread_deg, 36);
 OFF_IS(TesseraHandPlacement, radius, 40);
 OFF_IS(TesseraHandPlacement, card_spacing, 44);
 
-SIZE_IS(TesseraCamera, 24);
-OFF_IS(TesseraCamera, focus, 0);
-OFF_IS(TesseraCamera, distance, 8);
-OFF_IS(TesseraCamera, yaw, 12);
-OFF_IS(TesseraCamera, pitch, 16);
-OFF_IS(TesseraCamera, fov, 20);
+SIZE_IS(TesseraCamera, 96);
+OFF_IS(TesseraCamera, mode, 0);
+OFF_IS(TesseraCamera, focus, 4);
+OFF_IS(TesseraCamera, distance, 12);
+OFF_IS(TesseraCamera, yaw, 16);
+OFF_IS(TesseraCamera, pitch, 20);
+OFF_IS(TesseraCamera, fov, 24);
+OFF_IS(TesseraCamera, position, 28);
+OFF_IS(TesseraCamera, orientation, 40);
+OFF_IS(TesseraCamera, target, 56);
+OFF_IS(TesseraCamera, target_id, 72);
+OFF_IS(TesseraCamera, focus_card_id, 80);
+OFF_IS(TesseraCamera, fit_padding, 88);
 
-SIZE_IS(TesseraState, 144);
+SIZE_IS(TesseraState, 216);
 OFF_IS(TesseraState, tiles, 0);
 OFF_IS(TesseraState, tile_count, 8);
 OFF_IS(TesseraState, entities, 16);
@@ -193,15 +200,15 @@ OFF_IS(TesseraState, entity_count, 24);
 OFF_IS(TesseraState, effects, 32);
 OFF_IS(TesseraState, effect_count, 40);
 OFF_IS(TesseraState, camera, 48);
-OFF_IS(TesseraState, epoch, 72);
-OFF_IS(TesseraState, cards, 80);
-OFF_IS(TesseraState, card_count, 88);
-OFF_IS(TesseraState, card_draws, 96);
-OFF_IS(TesseraState, card_draw_count, 104);
-OFF_IS(TesseraState, hands, 112);
-OFF_IS(TesseraState, hand_count, 120);
-OFF_IS(TesseraState, dice, 128);
-OFF_IS(TesseraState, dice_count, 136);
+OFF_IS(TesseraState, epoch, 144);
+OFF_IS(TesseraState, cards, 152);
+OFF_IS(TesseraState, card_count, 160);
+OFF_IS(TesseraState, card_draws, 168);
+OFF_IS(TesseraState, card_draw_count, 176);
+OFF_IS(TesseraState, hands, 184);
+OFF_IS(TesseraState, hand_count, 192);
+OFF_IS(TesseraState, dice, 200);
+OFF_IS(TesseraState, dice_count, 208);
 
 /* ======================================================================= *
  *  Picking

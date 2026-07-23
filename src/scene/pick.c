@@ -293,6 +293,7 @@ static bool fit_ok(const TsCamera* base, float d, float aspect,
                    const vec3* ctr, const float* rad, size_t n, float pad) {
     TsCamera c = *base;
     c.distance = d;
+    c.has_look = false;   /* this is an orbit query: recompute eye from d */
     c.dirty = true;
     ts_camera_update(&c, aspect);
 

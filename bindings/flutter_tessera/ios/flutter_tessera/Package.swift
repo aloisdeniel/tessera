@@ -15,32 +15,35 @@
 // of `libtessera` and `SDL3` (force-loaded so every archive member survives),
 // together with the system frameworks SDL3's static build requires.
 //
-// The archive/header locations are environment-specific and CANNOT be resolved
-// portably at package-parse time, so they come from environment variables with
-// the same defaults as the podspec (iOS *simulator* arm64 slices under the repo):
+// The static slices come from publish.sh, which builds the device + simulator
+// archives (libtessera.a / libtessera_thirdparty.a / libSDL3.a) and installs them
+// into the plugin's native/ios-device and native/ios-simulator dirs (and assembles
+// xcframeworks under native/xcframeworks). Run `./publish.sh --targets ios` to
+// (re)build them. The default below is the *simulator* slice; point the env vars
+// at native/ios-device for a device build. SDL3 headers come from the vendored
+// source publish.sh built against, so they match the linked archives exactly.
 //
 //   TESSERA_INCLUDE_DIR   engine headers (default: <repo>/include)
 //   SDL3_INCLUDE_DIR      SDL3 headers   (default: <repo>/third_party/SDL/include)
 //   TESSERA_IOS_LIB_DIR   dir with libtessera.a / libtessera_thirdparty.a
-//                         (default: <repo>/build-ios/Release-iphonesimulator)
+//                         (default: <plugin>/native/ios-simulator)
 //   SDL3_IOS_LIB_DIR      dir with libSDL3.a
-//                         (default: <repo>/build-sdl-iossim/Release-iphonesimulator)
+//                         (default: <plugin>/native/ios-simulator)
 //
-// Build those static slices first (see ios/flutter_tessera.podspec for the exact
-// cmake invocations, or the repo README). For a device build, produce device
-// slices and point the *_IOS_LIB_DIR vars at them. This is a reference
-// configuration; on-device linking/signing is the integration step that must be
-// completed in an Xcode/Flutter build and is NOT verified here.
+// This is a reference configuration; on-device linking/signing is the integration
+// step that must be completed in an Xcode/Flutter build and is NOT verified here.
 import PackageDescription
 import Foundation
 
 let env = ProcessInfo.processInfo.environment
 // ios/flutter_tessera -> ios -> flutter_tessera -> bindings -> <repo>
 let repoRoot = "../../../.."
+// ios/flutter_tessera -> ios -> flutter_tessera (plugin root) -> native/ios-simulator
+let nativeIos = "../../native/ios-simulator"
 let tesseraInclude = env["TESSERA_INCLUDE_DIR"] ?? "\(repoRoot)/include"
 let sdlInclude = env["SDL3_INCLUDE_DIR"] ?? "\(repoRoot)/third_party/SDL/include"
-let tesseraLibDir = env["TESSERA_IOS_LIB_DIR"] ?? "\(repoRoot)/build-ios/Release-iphonesimulator"
-let sdlLibDir = env["SDL3_IOS_LIB_DIR"] ?? "\(repoRoot)/build-sdl-iossim/Release-iphonesimulator"
+let tesseraLibDir = env["TESSERA_IOS_LIB_DIR"] ?? nativeIos
+let sdlLibDir = env["SDL3_IOS_LIB_DIR"] ?? nativeIos
 
 let package = Package(
     name: "flutter_tessera",
@@ -69,10 +72,18 @@ let package = Package(
                     "-Wl,-force_load,\(tesseraLibDir)/libtessera.a",
                     "-Wl,-force_load,\(tesseraLibDir)/libtessera_thirdparty.a",
                     "-Wl,-force_load,\(sdlLibDir)/libSDL3.a",
+                    // Weak-link frameworks whose symbols SDL references only
+                    // under an @available runtime guard: CoreHaptics, and
+                    // GameController (its GCEventInteraction class is iOS 14+).
+                    // Strong-linking GameController makes dyld bind that classref
+                    // at load and ABORT ("Symbol not found:
+                    // _OBJC_CLASS_$_GCEventInteraction") on a simulator/OS runtime
+                    // that predates it, before SDL's @available check can run.
                     "-weak_framework", "CoreHaptics",
+                    "-weak_framework", "GameController",
                 ]),
                 // Frameworks required by SDL3's static iOS build (from its CMake
-                // link interface). CoreHaptics is weak-linked above.
+                // link interface). CoreHaptics + GameController are weak-linked above.
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("CoreVideo"),
                 .linkedFramework("CoreAudio"),
@@ -82,7 +93,6 @@ let package = Package(
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("CoreMotion"),
                 .linkedFramework("Foundation"),
-                .linkedFramework("GameController"),
                 .linkedFramework("Metal"),
                 .linkedFramework("OpenGLES"),
                 .linkedFramework("QuartzCore"),

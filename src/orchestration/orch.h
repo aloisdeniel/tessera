@@ -147,6 +147,27 @@ bool ts_orch_tile_pos(const struct TsOrch* o, TesseraTileId id, vec3 out);
  * card back to screen (inverse of picking). */
 bool ts_orch_card_pos(const struct TsOrch* o, TesseraCardId id, vec3 out);
 
+/* Live world position of a card *pile/draw* (is_draw==true) by id. Returns
+ * false for id 0 or an unknown id. */
+bool ts_orch_draw_pos(const struct TsOrch* o, TesseraCardDrawId id, vec3 out);
+
+/* Live transform + slab dims of a single card by id. Returns false for id 0,
+ * a pile id, or unknown. out_w/out_h are the card model's world width/height
+ * (TsCardModel.width/height × the inst's current scale). Reads the card model
+ * dims from `e->registry`. */
+bool ts_orch_card_transform(struct TsOrch* o, TesseraEngine* e, TesseraCardId id,
+                            vec3 out_pos, versor out_rot, float* out_w, float* out_h);
+
+/* Hand id a live single card is assigned to (0 if none/unknown). */
+TesseraHandId ts_orch_card_hand(const struct TsOrch* o, TesseraCardId id);
+
+/* Extent of a hand's live cards in the (right,up) plane about centre H:
+ * half_w/half_h are max |proj onto r/u| over card centres, plus half a card
+ * (w/2,h/2) from each card's def. Returns false if 0 live cards in the hand. */
+bool ts_orch_hand_extent(struct TsOrch* o, TesseraEngine* e, TesseraHandId hand,
+                         const vec3 right, const vec3 up, const vec3 H,
+                         float* out_half_w, float* out_half_h);
+
 /* Build the frame draw list from live instances into `arena`. Returns count. */
 size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
                               TsArena* arena, struct TsDrawItem** out);

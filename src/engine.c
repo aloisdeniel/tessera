@@ -260,58 +260,226 @@ void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
     ts_fx_record(e, cmd, pass, &fu);
 }
 
-/* Apply a state camera (grid focus) onto the live orbit camera. The first pose
- * snaps; subsequent changes glide over timing.camera_s (M7). */
+/* Apply a state camera onto the live camera. The camera is described by a
+ * tagged mode (orbit / manual / target / focus-a-live-object); each tick the
+ * engine resolves that spec into a goal pose against the LIVE scene and tweens
+ * the camera pose toward it, so follow modes track a moving object (M7+). */
 
 /* Return v if finite, else the fallback — guards against NaN/Inf reaching the
- * camera math from malformed FFI state (see advance_camera). */
+ * camera math from malformed FFI state (see resolve_camera_goal). */
 static float finite_or(float v, float fallback) {
     return isfinite(v) ? v : fallback;
 }
 
-static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
-    float cyaw   = finite_or(c->yaw, e->camera.yaw);
-    float cpitch = finite_or(c->pitch, e->camera.pitch);
-    vec3 focus; ts_grid_to_world_f(c->focus.x, c->focus.y, focus);
-    float fov  = (isfinite(c->fov) && c->fov > 0.0f) ? c->fov : e->camera.fov;
-    float dist = (isfinite(c->distance) && c->distance > 0.1f) ? c->distance : e->camera.distance;
+/* Aspect ratio the render path uses (drawable w/h), falling back to 16:9. */
+static float current_aspect(const TesseraEngine* e) {
+    return (e->gpu.height > 0) ? (float)e->gpu.width / (float)e->gpu.height
+                               : 16.0f / 9.0f;
+}
 
+/* Rotate a local axis by an (already-valid) quaternion into world space. */
+static void quat_axis(versor q, const vec3 local, vec3 out) {
+    glm_quat_rotatev(q, (float*)local, out);
+}
+
+/* Normalize an orientation quaternion (xyzw); identity when all-zero/degenerate. */
+static void norm_orientation(const float src[4], versor out) {
+    versor q = { finite_or(src[0], 0.0f), finite_or(src[1], 0.0f),
+                 finite_or(src[2], 0.0f), finite_or(src[3], 0.0f) };
+    float n = glm_quat_norm(q);
+    if (n < 1e-6f) { glm_quat_identity(out); return; }
+    glm_vec4_scale(q, 1.0f / n, out);
+}
+
+/* Find a hand placement by id in the last-promoted target snapshot. */
+static const TesseraHandPlacement* find_target_hand(TesseraEngine* e, TesseraHandId id) {
+    if (!e->state || !e->state->target || id == 0) return NULL;
+    const TsSnapshot* t = e->state->target;
+    for (size_t i = 0; i < t->hand_count; ++i)
+        if (t->hands[i].id == id) return &t->hands[i];
+    return NULL;
+}
+
+/* FOCUS_CARD framing: place `out` in front of card (C,Q,w,h) at a distance that
+ * fills the frame with `k`/`aspect` margin. */
+static void frame_card(const vec3 C, versor Q, float w, float h,
+                       float k, float aspect, TsCamPose* out) {
+    vec3 n; quat_axis(Q, (vec3){0.0f, 1.0f, 0.0f}, n);  /* front normal (local +Y) */
+    vec3 u; quat_axis(Q, (vec3){0.0f, 0.0f, 1.0f}, u);  /* card up     (local +Z) */
+    float d = fmaxf((h * 0.5f) / k, (w * 0.5f) / (k * aspect));
+    if (d < 0.2f) d = 0.2f;
+    vec3 off; glm_vec3_scale(n, d, off);
+    glm_vec3_add((float*)C, off, out->eye);
+    glm_vec3_copy((float*)C, out->target);
+    glm_vec3_copy(u, out->up);
+}
+
+/* Resolve the goal pose for `cam` against the live scene. Returns false if the
+ * mode references an object that is not live yet (caller keeps current pose). */
+static bool resolve_camera_goal(TesseraEngine* e, const TesseraCamera* cam,
+                                float aspect, TsCamPose* out) {
+    if (aspect <= 0.0f) aspect = 16.0f / 9.0f;
+    float fov = (isfinite(cam->fov) && cam->fov > 0.0f) ? cam->fov : e->camera.fov;
+    out->fov = fov;
+    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, out->up);
+
+    float t   = tanf(fov * 0.5f);
+    float pad = ts_clampf(cam->fit_padding > 0.0f ? cam->fit_padding : 0.08f, 0.0f, 0.9f);
+    float k   = t * (1.0f - pad);
+    if (k < 1e-4f) k = 1e-4f;
+
+    switch (cam->mode) {
+    case TESSERA_CAMERA_MANUAL: {
+        versor q; norm_orientation(cam->orientation, q);
+        vec3 eye = { finite_or(cam->position[0], 0.0f), finite_or(cam->position[1], 0.0f),
+                     finite_or(cam->position[2], 0.0f) };
+        vec3 fwd; quat_axis(q, (vec3){0.0f, 0.0f, -1.0f}, fwd);
+        vec3 up;  quat_axis(q, (vec3){0.0f, 1.0f,  0.0f}, up);
+        glm_vec3_copy(eye, out->eye);
+        glm_vec3_add(eye, fwd, out->target);
+        glm_vec3_copy(up, out->up);
+        return true;
+    }
+    case TESSERA_CAMERA_TARGET: {
+        out->eye[0] = finite_or(cam->position[0], 0.0f);
+        out->eye[1] = finite_or(cam->position[1], 0.0f);
+        out->eye[2] = finite_or(cam->position[2], 0.0f);
+        out->target[0] = finite_or(cam->target[0], 0.0f);
+        out->target[1] = finite_or(cam->target[1], 0.0f);
+        out->target[2] = finite_or(cam->target[2], 0.0f);
+        return true;
+    }
+    case TESSERA_CAMERA_FOCUS_TILE:
+    case TESSERA_CAMERA_FOCUS_ENTITY:
+    case TESSERA_CAMERA_FOCUS_DICE:
+    case TESSERA_CAMERA_FOCUS_DRAW: {
+        vec3 P; bool ok = false;
+        switch (cam->mode) {
+        case TESSERA_CAMERA_FOCUS_TILE:   ok = e->orch && ts_orch_tile_pos(e->orch, cam->target_id, P); break;
+        case TESSERA_CAMERA_FOCUS_ENTITY: ok = e->orch && ts_orch_entity_pos(e->orch, cam->target_id, P); break;
+        case TESSERA_CAMERA_FOCUS_DICE:   ok = e->dice && ts_dice_pos(e->dice, cam->target_id, P); break;
+        case TESSERA_CAMERA_FOCUS_DRAW:   ok = e->orch && ts_orch_draw_pos(e->orch, cam->target_id, P); break;
+        default: break;
+        }
+        if (!ok) return false;
+        float dist  = (isfinite(cam->distance) && cam->distance > 0.1f) ? cam->distance : e->camera.distance;
+        float yaw   = finite_or(cam->yaw, e->camera.yaw);
+        float pitch = finite_or(cam->pitch, e->camera.pitch);
+        ts_orbit_eye(P, dist, yaw, pitch, out->eye);
+        glm_vec3_copy(P, out->target);
+        return true;
+    }
+    case TESSERA_CAMERA_FOCUS_CARD: {
+        vec3 C; versor Q; float w, h;
+        if (!e->orch || !ts_orch_card_transform(e->orch, e, cam->target_id, C, Q, &w, &h))
+            return false;
+        frame_card(C, Q, w, h, k, aspect, out);
+        return true;
+    }
+    case TESSERA_CAMERA_FOCUS_HAND: {
+        const TesseraHandPlacement* hp = find_target_hand(e, cam->target_id);
+        if (!hp) return false;
+        /* A specific card in this hand requested and live -> frame it fullscreen. */
+        if (cam->focus_card_id != 0 && e->orch &&
+            ts_orch_card_hand(e->orch, cam->focus_card_id) == cam->target_id) {
+            vec3 C; versor Q; float w, h;
+            if (ts_orch_card_transform(e->orch, e, cam->focus_card_id, C, Q, &w, &h)) {
+                frame_card(C, Q, w, h, k, aspect, out);
+                return true;
+            }
+        }
+        /* Frame the whole hand. */
+        vec3 H = { finite_or(hp->position[0], 0.0f), finite_or(hp->position[1], 0.0f),
+                   finite_or(hp->position[2], 0.0f) };
+        versor HQ; norm_orientation(hp->orientation, HQ);
+        vec3 n; quat_axis(HQ, (vec3){0.0f, 0.0f, 1.0f}, n);
+        vec3 u; quat_axis(HQ, (vec3){0.0f, 1.0f, 0.0f}, u);
+        vec3 r; quat_axis(HQ, (vec3){1.0f, 0.0f, 0.0f}, r);
+        float half_w, half_h;
+        if (!e->orch || !ts_orch_hand_extent(e->orch, e, cam->target_id, r, u, H, &half_w, &half_h))
+            return false;
+        float d = fmaxf(half_h / k, half_w / (k * aspect));
+        if (d < 0.4f) d = 0.4f;
+        vec3 off; glm_vec3_scale(n, d, off);
+        glm_vec3_add(H, off, out->eye);
+        glm_vec3_copy(H, out->target);
+        glm_vec3_copy(u, out->up);
+        return true;
+    }
+    case TESSERA_CAMERA_ORBIT:
+    default: {
+        vec3 P; ts_grid_to_world_f(finite_or(cam->focus.x, 0.0f), finite_or(cam->focus.y, 0.0f), P);
+        float dist  = (isfinite(cam->distance) && cam->distance > 0.1f) ? cam->distance : e->camera.distance;
+        float yaw   = finite_or(cam->yaw, e->camera.yaw);
+        float pitch = finite_or(cam->pitch, e->camera.pitch);
+        ts_orbit_eye(P, dist, yaw, pitch, out->eye);
+        glm_vec3_copy(P, out->target);
+        return true;
+    }
+    }
+}
+
+static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
+    /* Remember the promoted spec so advance_camera can re-resolve the goal each
+     * tick (follow modes track a moving object). */
+    e->cam_spec = *c;
+    e->cam_spec_have = true;
+
+    float aspect = current_aspect(e);
+    TsCamPose G;
+    if (!resolve_camera_goal(e, c, aspect, &G)) {
+        /* Target not live yet: keep whatever pose we already have (no jump). */
+        return;
+    }
     if (!e->cam_have) {
-        ts_camera_set(&e->camera, focus, dist, cyaw, cpitch, fov);
+        ts_camera_set_look(&e->camera, &G, aspect);
+        e->cam_cur = G;
+        e->cam_to = G;
         e->cam_have = true;
         e->cam_active = false;
         return;
     }
-    /* set up a glide from the current pose to the requested one */
-    e->cam_from = e->camera;
-    e->cam_to = e->camera;
-    glm_vec3_copy(focus, e->cam_to.focus);
-    e->cam_to.distance = dist;
-    e->cam_to.yaw = cyaw;
-    e->cam_to.pitch = ts_clampf(cpitch, -1.45f, 1.45f);
-    e->cam_to.fov = fov;
+    /* Tween from the current live pose to the new goal over timing.camera_s. */
+    e->cam_from = e->cam_cur;
+    e->cam_to = G;
     float dur = e->timing.camera_s > 0.0f ? e->timing.camera_s : 0.5f;
     ts_tween_start(&e->cam_tween, dur, 0.0f, TS_EASE_IN_OUT_CUBIC);
     e->cam_active = true;
 }
 
 static void advance_camera(TesseraEngine* e, float dt) {
-    if (!e->cam_active) return;
-    ts_tween_advance(&e->cam_tween, dt);
-    float t = ts_tween_value01(&e->cam_tween);
-    vec3 f;
-    glm_vec3_lerp(e->cam_from.focus, e->cam_to.focus, t, f);
-    /* shortest-arc yaw so a spin doesn't take the long way round. remainderf
-     * maps into [-pi,pi] in O(1) — an unbounded while-loop would hang on a
-     * non-finite delta (apply_camera also sanitizes, this is defense in depth). */
-    float dyaw = e->cam_to.yaw - e->cam_from.yaw;
-    dyaw = isfinite(dyaw) ? remainderf(dyaw, 2.0f * GLM_PIf) : 0.0f;
-    float yaw   = e->cam_from.yaw + dyaw * t;
-    float dist  = ts_lerpf(e->cam_from.distance, e->cam_to.distance, t);
-    float pitch = ts_lerpf(e->cam_from.pitch, e->cam_to.pitch, t);
-    float fov   = ts_lerpf(e->cam_from.fov, e->cam_to.fov, t);
-    ts_camera_set(&e->camera, f, dist, yaw, pitch, fov);
-    if (ts_tween_done(&e->cam_tween)) e->cam_active = false;
+    if (!e->cam_spec_have) return;
+
+    float aspect = current_aspect(e);
+    TsCamPose G;
+    bool resolved = resolve_camera_goal(e, &e->cam_spec, aspect, &G);
+
+    if (e->cam_active) {
+        ts_tween_advance(&e->cam_tween, dt);
+        float t = ts_tween_value01(&e->cam_tween);
+        if (resolved) {
+            /* Interpolate pose toward the LIVE goal (re-resolved each tick). */
+            TsCamPose p;
+            glm_vec3_lerp(e->cam_from.eye, G.eye, t, p.eye);
+            glm_vec3_lerp(e->cam_from.target, G.target, t, p.target);
+            vec3 up; glm_vec3_lerp(e->cam_from.up, G.up, t, up);
+            if (glm_vec3_norm(up) < 1e-6f) glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, up);
+            else glm_vec3_normalize(up);
+            glm_vec3_copy(up, p.up);
+            p.fov = ts_lerpf(e->cam_from.fov, G.fov, t);
+            ts_camera_set_look(&e->camera, &p, aspect);
+            e->cam_cur = p;
+        }
+        /* Unresolved: hold the last pose but keep advancing the clock so the
+         * tween can still complete. */
+        if (ts_tween_done(&e->cam_tween)) e->cam_active = false;
+    } else if (resolved) {
+        /* Idle-follow: lock the camera onto the live goal every tick — this is
+         * what makes follow modes track after the tween ends. */
+        ts_camera_set_look(&e->camera, &G, aspect);
+        e->cam_cur = G;
+    }
+    /* Idle + unresolved: hold the last pose (do nothing). */
 }
 
 void ts_engine_tick(TesseraEngine* e, double dt) {

@@ -53,7 +53,10 @@ abstract class GameController<S, A> {
   A? autoAction(S state, math.Random rng) => null;
 
   /// Map a board tap to an action, or null to ignore. [pick] is null on a miss.
-  A? onTap(S state, TesseraPickResult? pick) => null;
+  /// [local] is the tap's position in the view and [view] the view's size, for
+  /// games that care where the tap landed (e.g. left/right edge taps); games
+  /// that don't just ignore the extras.
+  A? onTap(S state, TesseraPickResult? pick, {Offset? local, Size? view}) => null;
 
   /// On-screen buttons offered for [state] (disabled while animating).
   List<GameButton<A>> buttons(S state) => const [];
@@ -98,6 +101,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   bool _ready = false;
   bool _busy = true;
   bool _playing = false; // a queued scene is mid-flight (awaiting setScene)
+  Size? _viewSize; // latest view size, for taps that care where they landed
 
   GameController<S, A> get game => widget.game;
 
@@ -204,7 +208,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
     final c = _controller;
     if (c == null || _animating) return;
     final pick = await c.pick(d.localPosition.dx, d.localPosition.dy);
-    final a = game.onTap(_state, pick);
+    final a = game.onTap(_state, pick, local: d.localPosition, view: _viewSize);
     if (a != null) _dispatch(a);
   }
 
@@ -236,9 +240,14 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: GestureDetector(
-              onTapDown: _onTapDown,
-              child: TesseraView(onCreated: _onCreated),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                _viewSize = constraints.biggest;
+                return GestureDetector(
+                  onTapDown: _onTapDown,
+                  child: TesseraView(onCreated: _onCreated),
+                );
+              },
             ),
           ),
           Positioned(

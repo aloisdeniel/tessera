@@ -1027,6 +1027,72 @@ bool ts_orch_card_pos(const struct TsOrch* o, TesseraCardId id, vec3 out) {
     return false;
 }
 
+bool ts_orch_draw_pos(const struct TsOrch* o, TesseraCardDrawId id, vec3 out) {
+    if (!o || id == 0) return false;
+    for (size_t i = 0; i < o->card_count; ++i) {
+        const TsCardInst* c = &o->cards[i];
+        if (c->alive && c->is_draw && c->id == id) {
+            glm_vec3_copy((float*)c->pos, out);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ts_orch_card_transform(struct TsOrch* o, TesseraEngine* e, TesseraCardId id,
+                            vec3 out_pos, versor out_rot, float* out_w, float* out_h) {
+    if (!o || id == 0) return false;
+    for (size_t i = 0; i < o->card_count; ++i) {
+        TsCardInst* c = &o->cards[i];
+        if (!c->alive || c->is_draw || c->id != id) continue;
+        TsDef* d = ts_registry_get(&e->registry, c->def, TS_DEF_CARD);
+        if (!d || !d->as.card.valid) return false;
+        const TsCardModel* m = &d->as.card;
+        glm_vec3_copy((float*)c->pos, out_pos);
+        glm_quat_copy((float*)c->rot, out_rot);
+        if (out_w) *out_w = m->width  * c->scale;
+        if (out_h) *out_h = m->height * c->scale;
+        return true;
+    }
+    return false;
+}
+
+TesseraHandId ts_orch_card_hand(const struct TsOrch* o, TesseraCardId id) {
+    if (!o || id == 0) return 0;
+    for (size_t i = 0; i < o->card_count; ++i) {
+        const TsCardInst* c = &o->cards[i];
+        if (c->alive && !c->is_draw && c->id == id) return c->hand;
+    }
+    return 0;
+}
+
+bool ts_orch_hand_extent(struct TsOrch* o, TesseraEngine* e, TesseraHandId hand,
+                         const vec3 right, const vec3 up, const vec3 H,
+                         float* out_half_w, float* out_half_h) {
+    if (!o || hand == 0) return false;
+    float hw = 0.0f, hh = 0.0f;
+    size_t found = 0;
+    for (size_t i = 0; i < o->card_count; ++i) {
+        const TsCardInst* c = &o->cards[i];
+        if (!c->alive || c->is_draw || c->hand != hand) continue;
+        TsDef* d = ts_registry_get(&e->registry, c->def, TS_DEF_CARD);
+        if (!d || !d->as.card.valid) continue;
+        const TsCardModel* m = &d->as.card;
+        vec3 rel; glm_vec3_sub((float*)c->pos, (float*)H, rel);
+        float pr = glm_vec3_dot(rel, (float*)right);
+        float pu = glm_vec3_dot(rel, (float*)up);
+        float ew = fabsf(pr) + 0.5f * m->width  * c->scale;
+        float eh = fabsf(pu) + 0.5f * m->height * c->scale;
+        if (ew > hw) hw = ew;
+        if (eh > hh) hh = eh;
+        ++found;
+    }
+    if (found == 0) return false;
+    if (out_half_w) *out_half_w = hw;
+    if (out_half_h) *out_half_h = hh;
+    return true;
+}
+
 /* ----------------------------------------------------------- drawlist */
 static bool tint_is_zero(const float t[4]) {
     return t[0] == 0.0f && t[1] == 0.0f && t[2] == 0.0f && t[3] == 0.0f;

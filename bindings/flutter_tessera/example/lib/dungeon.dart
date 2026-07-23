@@ -82,6 +82,9 @@ class ItemCard {
   final int kind; // itemSword / itemShield / itemPotion
 }
 
+/// Where the camera is looking: the whole board, or in close on the hand.
+enum CamFocus { board, hand }
+
 /// Everything shared by every phase. Phases wrap one of these plus extras.
 class Core {
   const Core({
@@ -94,6 +97,8 @@ class Core {
     required this.seed,
     required this.moveSeed,
     required this.moveValue,
+    required this.camFocus,
+    required this.focusSlot,
   });
 
   final int heroPos;
@@ -106,6 +111,11 @@ class Core {
   final int moveSeed; // last movement-die throw seed (0 = none thrown yet)
   final int moveValue; // last movement-die value (1..6)
 
+  // View-only camera focus, threaded through state because the harness routes
+  // every change through the reducer. Persists across phases; that's fine.
+  final CamFocus camFocus; // board (default) or in on the hand
+  final int focusSlot; // when focused on the hand, which card (index into hand)
+
   Core copy({
     int? heroPos,
     int? hp,
@@ -116,6 +126,8 @@ class Core {
     int? seed,
     int? moveSeed,
     int? moveValue,
+    CamFocus? camFocus,
+    int? focusSlot,
   }) =>
       Core(
         heroPos: heroPos ?? this.heroPos,
@@ -127,6 +139,8 @@ class Core {
         seed: seed ?? this.seed,
         moveSeed: moveSeed ?? this.moveSeed,
         moveValue: moveValue ?? this.moveValue,
+        camFocus: camFocus ?? this.camFocus,
+        focusSlot: focusSlot ?? this.focusSlot,
       );
 
   int handCount(int kind) => hand.where((c) => c.kind == kind).length;
@@ -147,6 +161,8 @@ class Core {
         seed: 0x51E5A7,
         moveSeed: 0,
         moveValue: 0,
+        camFocus: CamFocus.board,
+        focusSlot: 0,
       );
 }
 
@@ -183,6 +199,22 @@ class DgDrinkPotion extends DgAction {
 
 class DgReset extends DgAction {
   const DgReset();
+}
+
+/// View-only: pull the camera in on the hand (focused on its first card).
+class DgFocusHand extends DgAction {
+  const DgFocusHand();
+}
+
+/// View-only: while focused on the hand, step the focused card by [d] (±1).
+class DgFocusCardDelta extends DgAction {
+  const DgFocusCardDelta(this.d);
+  final int d;
+}
+
+/// View-only: return the camera to the whole-board framing.
+class DgUnfocus extends DgAction {
+  const DgUnfocus();
 }
 
 // ---- states --------------------------------------------------------------
@@ -256,8 +288,36 @@ DgState dgUpdate(DgState s, DgAction a) {
       return (s is DgCombat) ? _playSword(s) : s;
     case DgFight():
       return (s is DgCombat) ? _fight(s) : s;
+    // Camera-focus actions are view-only: they touch camFocus/focusSlot on the
+    // Core and keep the current phase, so they're valid from any state.
+    case DgFocusHand():
+      if (s.c.hand.isEmpty) return s;
+      return _reface(s, s.c.copy(camFocus: CamFocus.hand, focusSlot: 0));
+    case DgFocusCardDelta():
+      if (s.c.camFocus != CamFocus.hand || s.c.hand.isEmpty) return s;
+      final slot = (s.c.focusSlot + a.d).clamp(0, s.c.hand.length - 1);
+      return _reface(s, s.c.copy(focusSlot: slot));
+    case DgUnfocus():
+      return _reface(s, s.c.copy(camFocus: CamFocus.board));
   }
 }
+
+/// Rebuild [s] with a new [core], preserving its phase subclass + extras — used
+/// by the view-only camera-focus actions, which mutate only the Core.
+DgState _reface(DgState s, Core core) => switch (s) {
+      DgRoll() => DgRoll(core),
+      DgMoving() => DgMoving(core, s.target),
+      DgDrew() => DgDrew(core, s.card),
+      DgCombat() => DgCombat(core,
+          mon: s.mon,
+          heroSeed: s.heroSeed,
+          monSeed: s.monSeed,
+          heroDie: s.heroDie,
+          monDie: s.monDie,
+          bonus: s.bonus),
+      DgWon() => DgWon(core),
+      DgLost() => DgLost(core),
+    };
 
 DgState _roll(DgRoll s) {
   final seed = _lcg(s.c.seed);
@@ -466,6 +526,31 @@ class DungeonController extends GameController<DgState, DgAction> {
   @override
   DgState update(DgState state, DgAction action) => dgUpdate(state, action);
 
+  // Tap wiring for the camera-focus harness:
+  //  - board focus: tapping one of the hero's hand cards pulls the camera in on
+  //    the hand (focused on its first card);
+  //  - hand focus: tapping the left/right screen edge steps the focused card;
+  //    a tap anywhere else does nothing (the 'Back to board' button unfocuses).
+  @override
+  DgAction? onTap(DgState state, TesseraPickResult? pick,
+      {Offset? local, Size? view}) {
+    final c = state.c;
+    if (c.camFocus == CamFocus.hand) {
+      if (local != null && view != null) {
+        final dx = local.dx;
+        if (dx < view.width * 0.22) return const DgFocusCardDelta(-1);
+        if (dx > view.width * 0.78) return const DgFocusCardDelta(1);
+      }
+      return null;
+    }
+    if (pick != null &&
+        pick.hitCard &&
+        c.hand.any((card) => card.id == pick.card)) {
+      return const DgFocusHand();
+    }
+    return null;
+  }
+
   int _tileDef(int idx) {
     if (idx == 0) return _start;
     if (idx == kGoal) return _goalTile;
@@ -598,14 +683,28 @@ class DungeonController extends GameController<DgState, DgAction> {
       cards: cards,
       hands: hands,
       cardDraws: draws,
-      camera: TesseraCameraPose(
-        focusX: 0,
-        focusY: 0.4,
-        distance: _camDistance,
-        yaw: 0,
-        pitch: 0.92,
-        fov: 0.72,
-      ),
+      camera: _cameraFor(s),
+    );
+  }
+
+  // Whole-board orbit by default; when focused on the hand, frame the hand with
+  // the current card fullscreen-centre (its fan neighbours fall to the edges).
+  // The engine tweens between the two poses, so board<->hand and card<->card
+  // glide smoothly.
+  TesseraCamera _cameraFor(DgState s) {
+    final c = s.c;
+    if (c.camFocus == CamFocus.hand && c.hand.isNotEmpty) {
+      final slot = c.focusSlot.clamp(0, c.hand.length - 1);
+      return TesseraCameraFocusHand(_hand,
+          cardId: c.hand[slot].id, padding: 0.10);
+    }
+    return TesseraCameraPose(
+      focusX: 0,
+      focusY: 0.4,
+      distance: _camDistance,
+      yaw: 0,
+      pitch: 0.92,
+      fov: 0.72,
     );
   }
 
@@ -659,6 +758,18 @@ class DungeonController extends GameController<DgState, DgAction> {
 
   @override
   List<GameButton<DgAction>> buttons(DgState state) {
+    // While the camera is in on the hand, always offer a way back to the board.
+    if (state.c.camFocus == CamFocus.hand) {
+      return [
+        const GameButton('Back to board', DgUnfocus(),
+            icon: Icons.close, tone: GameButtonTone.primary),
+        ..._stateButtons(state),
+      ];
+    }
+    return _stateButtons(state);
+  }
+
+  List<GameButton<DgAction>> _stateButtons(DgState state) {
     switch (state) {
       case DgRoll():
         final out = <GameButton<DgAction>>[

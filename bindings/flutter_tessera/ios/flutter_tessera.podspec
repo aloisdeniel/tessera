@@ -50,27 +50,30 @@ Flutter platform-view embedding of the Tessera 3D board-game renderer (iOS/Metal
 
   tessera_root = ENV['TESSERA_ROOT'] ||
     File.expand_path('../../../..', File.realpath(__FILE__))
-  # Simulator static slices built by:
-  #   cmake -S third_party/SDL -B build-sdl-iossim -GXcode -DCMAKE_SYSTEM_NAME=iOS \
-  #     -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  #     -DSDL_SHARED=OFF -DSDL_STATIC=ON && cmake --build build-sdl-iossim --config Release
-  #   cmake -S . -B build-ios -GXcode -DCMAKE_SYSTEM_NAME=iOS \
-  #     -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  #     -DTESSERA_BUILD_SHARED=OFF -DTESSERA_BUILD_EXAMPLES=OFF -DTESSERA_BUILD_TESTS=OFF \
-  #     -DSDL3_DIR=$PWD/build-sdl-iossim && cmake --build build-ios --config Release
-  # For a device build, produce device slices and point these env vars at them
-  # (or build xcframeworks); the defaults below are the iOS *simulator* slices.
-  tessera_lib = ENV['TESSERA_IOS_LIB_DIR'] || "#{tessera_root}/build-ios/Release-iphonesimulator"
-  sdl_lib     = ENV['SDL3_IOS_LIB_DIR']    || "#{tessera_root}/build-sdl-iossim/Release-iphonesimulator"
+  # The static slices come from publish.sh, which builds the device + simulator
+  # archives (libtessera.a / libtessera_thirdparty.a / libSDL3.a) and installs
+  # them into the plugin's native/ios-device and native/ios-simulator dirs (and
+  # assembles xcframeworks under native/xcframeworks). Run `./publish.sh --targets
+  # ios` to (re)build them. The defaults below are the iOS *simulator* slices;
+  # point these env vars at native/ios-device (or link the xcframeworks) for a
+  # device build.
+  native_ios = "#{tessera_root}/bindings/flutter_tessera/native/ios-simulator"
+  tessera_lib = ENV['TESSERA_IOS_LIB_DIR'] || native_ios
+  sdl_lib     = ENV['SDL3_IOS_LIB_DIR']    || native_ios
   # Use the SDL source we built against so headers match the linked lib exactly.
   sdl_include = ENV['SDL3_INCLUDE_DIR'] || "#{tessera_root}/third_party/SDL/include"
 
   # Frameworks required by SDL3's static iOS build (from its CMake link interface).
+  # GameController + CoreHaptics are weak-linked: SDL references their symbols only
+  # under an @available guard (e.g. GameController's GCEventInteraction is iOS 14+),
+  # and strong-linking makes dyld abort at load ("Symbol not found:
+  # _OBJC_CLASS_$_GCEventInteraction") on a runtime that predates the class.
   sdl_frameworks = '-framework CoreMedia -framework CoreVideo -framework CoreAudio ' \
     '-framework AudioToolbox -framework AVFoundation -framework CoreBluetooth ' \
     '-framework CoreGraphics -framework CoreMotion -framework Foundation ' \
-    '-framework GameController -framework Metal -framework OpenGLES ' \
-    '-framework QuartzCore -framework UIKit -weak_framework CoreHaptics'
+    '-framework Metal -framework OpenGLES ' \
+    '-framework QuartzCore -framework UIKit ' \
+    '-weak_framework CoreHaptics -weak_framework GameController'
 
   # Flutter uses dynamic frameworks (`use_frameworks!`), so the pod's
   # flutter_tessera.framework is linked at its OWN build step and must resolve

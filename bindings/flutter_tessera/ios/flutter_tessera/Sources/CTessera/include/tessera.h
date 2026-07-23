@@ -288,10 +288,46 @@ typedef struct {
     float         card_spacing;
 } TesseraHandPlacement;
 
+typedef enum {
+    TESSERA_CAMERA_ORBIT        = 0, /* grid focus + distance/yaw/pitch (default) */
+    TESSERA_CAMERA_MANUAL       = 1, /* eye position + orientation quaternion      */
+    TESSERA_CAMERA_TARGET       = 2, /* eye position + look-at target              */
+    TESSERA_CAMERA_FOCUS_TILE   = 3, /* frame a live tile   (target_id)            */
+    TESSERA_CAMERA_FOCUS_ENTITY = 4, /* follow a live entity                       */
+    TESSERA_CAMERA_FOCUS_DICE   = 5, /* follow a live die                          */
+    TESSERA_CAMERA_FOCUS_DRAW   = 6, /* follow a live card pile                    */
+    TESSERA_CAMERA_FOCUS_CARD   = 7, /* frame a live card fullscreen (target_id)   */
+    TESSERA_CAMERA_FOCUS_HAND   = 8  /* frame a live hand (+ optional focus_card_id)*/
+} TesseraCameraMode;
+
 typedef struct {
-    TesseraCoordF focus;        /* continuous grid focus; may sit between tiles */
-    float distance, yaw, pitch; /* orbit params (radians for yaw/pitch) */
-    float fov;                  /* vertical fov in radians              */
+    uint32_t      mode;          /* TesseraCameraMode; 0 = ORBIT (default)         */
+
+    /* ORBIT + FOCUS_TILE/ENTITY/DICE/DRAW framing. ORBIT frames `focus` (a grid
+     * coord); the FOCUS_* modes frame the live object `target_id` from `distance`
+     * world units at orbit angles `yaw`/`pitch`. `fov` (vertical radians; <=0 =>
+     * keep current) applies to every mode. */
+    TesseraCoordF focus;         /* ORBIT grid focus                               */
+    float distance;              /* ORBIT + FOCUS_* : dst from the framed point    */
+    float yaw, pitch;            /* ORBIT + FOCUS_* : orbit angles (radians)       */
+    float fov;                   /* all modes; vertical fov radians (<=0 => keep)  */
+
+    /* MANUAL: eye at `position`, oriented by `orientation` (quaternion xyzw;
+     * fwd = q·-Z, up = q·+Y). TARGET: eye at `position`, looks at `target`. */
+    float position[3];
+    float orientation[4];        /* quaternion xyzw (all-zero => identity)         */
+    float target[3];
+
+    /* FOCUS_* object id, interpreted per mode: tile / entity / dice / draw /
+     * card / hand instance id. */
+    uint64_t target_id;
+
+    /* FOCUS_HAND: optional card in the hand to bring fullscreen-centre (0=none). */
+    uint64_t focus_card_id;
+
+    /* FOCUS_CARD / FOCUS_HAND: fraction of the frame kept clear around the fitted
+     * card(s) (<=0 => default 0.08). Clamp to [0, 0.9]. */
+    float fit_padding;
 } TesseraCamera;
 
 typedef struct {

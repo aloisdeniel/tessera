@@ -38,15 +38,24 @@ Flutter platform-view embedding of the Tessera 3D board-game renderer.
   # (macos/ -> flutter_tessera/ -> bindings/ -> <repo>). TESSERA_ROOT overrides.
   tessera_root = ENV['TESSERA_ROOT'] ||
     File.expand_path('../../../..', File.realpath(__FILE__))
+  # The prebuilt native libs come from publish.sh, which installs the universal
+  # macOS dylibs (libtessera.dylib + libSDL3.dylib, side by side) into the
+  # plugin's native/macos dir. Run `./publish.sh --targets macos` to (re)build
+  # them. SDL3 headers come from the vendored source publish.sh built against, so
+  # they match the linked binary exactly (no Homebrew SDL required). Override the
+  # lib dir with TESSERA_MACOS_LIB_DIR if you stage the libs elsewhere.
+  native_macos = ENV['TESSERA_MACOS_LIB_DIR'] ||
+    "#{tessera_root}/bindings/flutter_tessera/native/macos"
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'HEADER_SEARCH_PATHS' => "\"#{tessera_root}/include\" /opt/homebrew/include",
-    'LIBRARY_SEARCH_PATHS' => "\"#{tessera_root}/build\" /opt/homebrew/lib",
+    'HEADER_SEARCH_PATHS' =>
+      "\"#{tessera_root}/include\" \"#{tessera_root}/third_party/SDL/include\"",
+    'LIBRARY_SEARCH_PATHS' => "\"#{native_macos}\"",
     'OTHER_LDFLAGS' => '-ltessera -lSDL3',
-    # libtessera's install name is @rpath/libtessera.dylib, so the app needs an
-    # rpath to where it lives (the repo build/ dir during development). SDL3 has
-    # an absolute install name and resolves on its own.
+    # libtessera's install name is @rpath/libtessera.dylib and it records an
+    # @rpath/libSDL3.dylib reference (both resolved via native/macos, where the
+    # two dylibs sit together), so an rpath to that dir loads both.
     'LD_RUNPATH_SEARCH_PATHS' =>
-      "\"#{tessera_root}/build\" /opt/homebrew/lib @executable_path/../Frameworks",
+      "\"#{native_macos}\" @executable_path/../Frameworks",
   }
 end

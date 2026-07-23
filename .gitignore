@@ -2,6 +2,10 @@
 /build-*/
 /dist/
 /dist-fullrun.log
+
+# Prebuilt native libs installed by publish.sh (regenerated, never committed)
+/bindings/flutter_tessera/native/
+/bindings/dart/native/
 *.o
 *.a
 *.dylib

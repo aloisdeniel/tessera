@@ -282,9 +282,17 @@ class TesseraDie {
   final double throwS;
 }
 
-/// The orbit camera. [focusX]/[focusY] are continuous grid coordinates (may sit
-/// between tiles); [yaw]/[pitch]/[fov] are radians.
-class TesseraCameraPose {
+/// How the scene camera is positioned. Under the hood the engine tweens the
+/// camera pose from its current pose to the resolved goal as state evolves, so
+/// switching cases (or moving a followed object) glides rather than jumps.
+sealed class TesseraCamera {
+  const TesseraCamera();
+}
+
+/// The orbit camera (the classic board camera; the default). [focusX]/[focusY]
+/// are continuous grid coordinates (may sit between tiles); [yaw]/[pitch]/[fov]
+/// are radians.
+class TesseraCameraPose extends TesseraCamera {
   const TesseraCameraPose({
     this.focusX = 0,
     this.focusY = 0,
@@ -299,6 +307,133 @@ class TesseraCameraPose {
   final double distance;
   final double yaw;
   final double pitch;
+  final double fov;
+}
+
+/// Fully manual eye pose. [orientation] is a quaternion xyzw (fwd = q·-Z,
+/// up = q·+Y; all-zero => identity); [position] is the eye in world units.
+class TesseraCameraManual extends TesseraCamera {
+  const TesseraCameraManual({
+    required this.position,
+    required this.orientation,
+    this.fov = 0.7,
+  });
+
+  final List<double> position; // len 3
+  final List<double> orientation; // len 4 xyzw
+  final double fov;
+}
+
+/// Eye at [source] looking at [target] (up = +Y). Both are world units.
+class TesseraCameraTarget extends TesseraCamera {
+  const TesseraCameraTarget({
+    required this.source,
+    required this.target,
+    this.fov = 0.7,
+  });
+
+  final List<double> source; // len 3
+  final List<double> target; // len 3
+  final double fov;
+}
+
+/// Frame/follow a live tile from [distance] world units at [yaw]/[pitch].
+class TesseraCameraFocusTile extends TesseraCamera {
+  const TesseraCameraFocusTile(
+    this.tileId, {
+    this.distance = 12,
+    this.yaw = 0,
+    this.pitch = 0.9,
+    this.fov = 0.7,
+  });
+
+  final int tileId;
+  final double distance;
+  final double yaw;
+  final double pitch;
+  final double fov;
+}
+
+/// Frame/follow a live entity from [distance] world units at [yaw]/[pitch].
+class TesseraCameraFocusEntity extends TesseraCamera {
+  const TesseraCameraFocusEntity(
+    this.entityId, {
+    this.distance = 12,
+    this.yaw = 0,
+    this.pitch = 0.9,
+    this.fov = 0.7,
+  });
+
+  final int entityId;
+  final double distance;
+  final double yaw;
+  final double pitch;
+  final double fov;
+}
+
+/// Frame/follow a live die from [distance] world units at [yaw]/[pitch].
+class TesseraCameraFocusDice extends TesseraCamera {
+  const TesseraCameraFocusDice(
+    this.diceId, {
+    this.distance = 12,
+    this.yaw = 0,
+    this.pitch = 0.9,
+    this.fov = 0.7,
+  });
+
+  final int diceId;
+  final double distance;
+  final double yaw;
+  final double pitch;
+  final double fov;
+}
+
+/// Frame/follow a live card pile from [distance] world units at [yaw]/[pitch].
+class TesseraCameraFocusDraw extends TesseraCamera {
+  const TesseraCameraFocusDraw(
+    this.drawId, {
+    this.distance = 12,
+    this.yaw = 0,
+    this.pitch = 0.9,
+    this.fov = 0.7,
+  });
+
+  final int drawId;
+  final double distance;
+  final double yaw;
+  final double pitch;
+  final double fov;
+}
+
+/// Align in front of a live card (along its front normal) so it fills the frame
+/// with a [padding] margin (fraction of the frame kept clear).
+class TesseraCameraFocusCard extends TesseraCamera {
+  const TesseraCameraFocusCard(
+    this.cardId, {
+    this.padding = 0.08,
+    this.fov = 0.7,
+  });
+
+  final int cardId;
+  final double padding;
+  final double fov;
+}
+
+/// Frame a hand's cards so they all fit with a [padding] margin. When [cardId]
+/// is set (and lives in this hand), that card comes fullscreen-centre and its
+/// fan neighbours naturally fall to the screen edges (camera-only; cards are not
+/// re-laid-out).
+class TesseraCameraFocusHand extends TesseraCamera {
+  const TesseraCameraFocusHand(
+    this.handId, {
+    this.cardId,
+    this.padding = 0.08,
+    this.fov = 0.7,
+  });
+
+  final int handId;
+  final int? cardId;
+  final double padding;
   final double fov;
 }
 
@@ -323,7 +458,7 @@ class TesseraScene {
   final List<TesseraCardDraw> cardDraws;
   final List<TesseraHand> hands;
   final List<TesseraDie> dice;
-  final TesseraCameraPose camera;
+  final TesseraCamera camera;
   final int epoch;
 }
 

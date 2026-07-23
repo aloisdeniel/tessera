@@ -18,11 +18,24 @@ typedef struct {
     /* cached outputs */
     mat4  view, proj, view_proj;
     vec3  eye;         /* world-space eye position (recomputed on update) */
+    /* look-based pose (set via ts_camera_set_look): when `has_look`, the eye/
+     * focus/up below are authoritative and ts_camera_update rebuilds view from
+     * them instead of the orbit params (which are only mirrored for fit/DOF). */
+    vec3  look_up;     /* up vector of the current look pose */
+    bool  has_look;
     bool  dirty;
 } TsCamera;
 
+/* A free camera pose: eye looking at target with an up vector, plus fov. */
+typedef struct { vec3 eye, target, up; float fov; } TsCamPose;
+
 void ts_camera_init(TsCamera* c);
 void ts_camera_set(TsCamera* c, vec3 focus, float distance, float yaw, float pitch, float fov);
+/* Set the camera straight from a look pose: builds view = lookat(eye,target,up),
+ * proj from fov/ortho, caches eye; also mirrors distance=|eye-target| and
+ * focus=target (and back-solves yaw/pitch) so DOF/orbit-derived paths stay
+ * consistent. aspect = width/height. */
+void ts_camera_set_look(TsCamera* c, const TsCamPose* p, float aspect);
 /* Recompute view/proj if dirty. aspect = width/height. */
 void ts_camera_update(TsCamera* c, float aspect);
 void ts_camera_orbit(TsCamera* c, float dyaw, float dpitch, float dzoom);

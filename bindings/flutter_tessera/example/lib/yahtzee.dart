@@ -304,7 +304,8 @@ class YahtzeeController extends GameController<YState, YAction> {
   // Tap a die to hold/un-hold it. render() gives die i the id `i + 1`, so the
   // picked die id maps straight back to its index. Only meaningful once rolled.
   @override
-  YAction? onTap(YState state, TesseraPickResult? pick) {
+  YAction? onTap(YState state, TesseraPickResult? pick,
+      {Offset? local, Size? view}) {
     if (state is! YRolled || pick == null || !pick.hitDice) return null;
     final index = pick.dice - 1;
     if (index < 0 || index >= 5) return null;
