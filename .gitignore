@@ -1,5 +1,7 @@
 /build/
 /build-*/
+/dist/
+/dist-fullrun.log
 *.o
 *.a
 *.dylib
