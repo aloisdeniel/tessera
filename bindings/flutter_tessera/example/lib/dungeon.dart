@@ -693,6 +693,14 @@ class DungeonController extends GameController<DgState, DgAction> {
   // glide smoothly.
   TesseraCamera _cameraFor(DgState s) {
     final c = s.c;
+    // While the hero is walking the track, ride along with it (FOCUS_ENTITY
+    // tracks the piece's live position each tick). Every other state — including
+    // the tile it lands on — falls back to the board framing, so the camera
+    // glides back out to the global view after each move.
+    if (s is DgMoving) {
+      return const TesseraCameraFocusEntity(_heroId,
+          distance: 9.0, yaw: 0, pitch: 0.92, fov: 0.72);
+    }
     if (c.camFocus == CamFocus.hand && c.hand.isNotEmpty) {
       final slot = c.focusSlot.clamp(0, c.hand.length - 1);
       return TesseraCameraFocusHand(_hand,
