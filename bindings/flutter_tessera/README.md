@@ -91,11 +91,15 @@ GPU device / window).
   SDL3 for iOS. Build the engine static lib with `TESSERA_BUILD_SHARED` defined
   (so the public `tessera_*` symbols keep default visibility for Dart's FFI
   `dlsym`), and as a **universal arm64 + x86_64** slice for the Simulator. The
-  `ios/flutter_tessera.podspec` links `libtessera.a`, `libtessera_thirdparty.a`
-  and `libSDL3.a` via `-force_load` plus SDL's iOS system frameworks (override
-  paths with `TESSERA_IOS_LIB_DIR` / `SDL3_IOS_LIB_DIR` / `SDL3_INCLUDE_DIR`),
-  and bundles the MSL shaders as `tessera_assets.bundle/shaders/`. Same Metal
-  path as macOS.
+  Swift Package manifest (`ios/flutter_tessera/Package.swift`) is the primary
+  build path; it links `libtessera.a`, `libtessera_thirdparty.a` and `libSDL3.a`
+  via `-force_load` plus SDL's iOS system frameworks (override paths with
+  `TESSERA_IOS_LIB_DIR` / `SDL3_IOS_LIB_DIR` / `SDL3_INCLUDE_DIR` /
+  `TESSERA_INCLUDE_DIR`), and bundles the MSL shaders as SwiftPM resources
+  (`Bundle.module/shaders/`). The `ios/flutter_tessera.podspec` mirrors it for
+  CocoaPods projects (the example app still uses Pods), bundling the shaders as
+  `tessera_assets.bundle/shaders/`; both share one source tree under
+  `ios/flutter_tessera/Sources/`. Same Metal path as macOS.
 
   > **iOS Simulator caveat.** SDL_GPU's Metal backend requires
   > `MTLGPUFamilyApple3`, which the iOS Simulator does not advertise even on

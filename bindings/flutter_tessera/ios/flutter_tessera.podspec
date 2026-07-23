@@ -13,6 +13,11 @@
 # reference; on-device linking/signing must be completed in an Xcode build and
 # is NOT verified here.
 #
+# NOTE: the Swift Package Manager manifest (ios/flutter_tessera/Package.swift) is
+# now the primary, documented build path. This podspec mirrors it for CocoaPods
+# projects (and the example app, which still uses Pods); both share one source
+# tree under ios/flutter_tessera/Sources/.
+#
 Pod::Spec.new do |s|
   s.name             = 'flutter_tessera'
   s.version          = '0.1.0'
@@ -25,15 +30,19 @@ Flutter platform-view embedding of the Tessera 3D board-game renderer (iOS/Metal
   s.author           = { 'Aloïs Deniel' => 'alois.deniel@gmail.com' }
 
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*.swift', 'CTessera/**/*.{c,h}'
-  s.public_header_files = 'CTessera/include/tessera_bridge.h'
+  s.source_files = 'flutter_tessera/Sources/flutter_tessera/**/*.swift',
+                   'flutter_tessera/Sources/CTessera/**/*.{c,h}'
+  s.public_header_files = 'flutter_tessera/Sources/CTessera/include/tessera_bridge.h'
 
   # Bundle the engine's Metal shaders. Reference the `shaders` directory (not a
   # file glob) so CocoaPods preserves it as tessera_assets.bundle/shaders/, which
   # is where the engine looks (<asset_dir>/shaders/<name>.<stage>.msl). The files
-  # are copied into the pod (Assets/shaders) because CocoaPods can't reach assets
-  # outside the pod through Flutter's symlink farm.
-  s.resource_bundles = { 'tessera_assets' => ['Assets/shaders'] }
+  # live in the SPM target's resources (Sources/flutter_tessera/Resources/shaders)
+  # and are copied into the pod because CocoaPods can't reach assets outside the
+  # pod through Flutter's symlink farm.
+  s.resource_bundles = {
+    'tessera_assets' => ['flutter_tessera/Sources/flutter_tessera/Resources/shaders']
+  }
 
   s.dependency 'Flutter'
   s.platform = :ios, '13.0'

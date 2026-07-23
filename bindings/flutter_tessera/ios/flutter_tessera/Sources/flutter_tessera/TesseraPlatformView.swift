@@ -223,14 +223,20 @@ final class TesseraPlatformView: NSObject, FlutterPlatformView {
         return (Int((b.width * s).rounded()), Int((b.height * s).rounded()))
     }
 
-    /// The directory that contains the bundled `shaders/` folder. The podspec
+    /// The directory that contains the bundled `shaders/` folder. Swift Package
+    /// Manager copies `Resources/shaders` into the target's resource bundle
+    /// (`Bundle.module`), so `shaders/` sits at its root; CocoaPods instead
     /// bundles the engine assets as `tessera_assets.bundle`.
     private static func assetDir() -> String {
+        #if SWIFT_PACKAGE
+        return Bundle.module.bundlePath
+        #else
         let base = Bundle(for: TesseraPlatformView.self)
         if let url = base.url(forResource: "tessera_assets", withExtension: "bundle") {
             return url.path
         }
         return base.bundlePath
+        #endif
     }
 
     deinit {
