@@ -251,6 +251,24 @@ static void entity_spawn(TsEntityInst* inst, const TesseraEntityPlacement* ep,
     ts_tween_start(&inst->tween, add_s, 0.0f, TS_EASE_OUT_BACK);
 }
 
+/* True when the current interpolated transform already sits at the target
+ * (within a tight epsilon). A static re-emit of an unchanged instance hits this,
+ * letting the caller skip starting a real tween — which would otherwise report
+ * *not idle* for a full move_s/reflow_s while nothing visibly moves, padding
+ * every multi-beat sequence and needlessly holding the UI disabled. A mid-flight
+ * retarget (transform not yet settled) fails the test and still animates. */
+static bool pose_settled(const vec3 pos, const versor rot, float scale, float alpha,
+                         const vec3 tpos, const versor trot, float tscale) {
+    vec3 d;
+    glm_vec3_sub((float*)tpos, (float*)pos, d);
+    if (glm_vec3_norm2(d) > 1e-6f) return false;
+    if (fabsf(scale - tscale) > 1e-3f) return false;
+    if (fabsf(alpha - 1.0f) > 1e-3f) return false;
+    /* |dot| ~ 1 means the quaternions represent the same orientation. */
+    if (fabsf(glm_quat_dot((float*)rot, (float*)trot)) < 0.99999f) return false;
+    return true;
+}
+
 /* Set up an entity's positional journey toward its target. When `use_path` and
  * the placement supplies >1 waypoints, the entity walks *through* them: the
  * intermediate waypoints are tile centres and the final endpoint is the layout
@@ -303,6 +321,12 @@ static void entity_retarget(TsEntityInst* inst, const TesseraEntityPlacement* ep
     bool multi = changed && ep->path && ep->path_count > 1;
     float total = changed ? (multi ? 2.0f * timing->move_s : timing->move_s)
                           : timing->reflow_s;
+    /* Unchanged and already at rest at the target → snap (zero duration) rather
+     * than run a do-nothing reflow tween that keeps the engine "busy". */
+    if (!changed && pose_settled(inst->pos, inst->rot, inst->scale, inst->alpha,
+                                 t->pos, t->rot, t->scale)) {
+        total = 0.0f;
+    }
     entity_set_journey(inst, ep, t, total, changed, changed);
 }
 
@@ -591,8 +615,16 @@ static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
     c->removing = false; c->alive = true;
     /* A real multi-step move takes twice a single move (matches entities). */
     bool multi = path && path_count > 1;
-    card_set_journey(c, path, path_count, pos, multi ? 2.0f * timing->move_s
-                                                     : timing->move_s);
+    float total = multi ? 2.0f * timing->move_s : timing->move_s;
+    /* Static re-emit (already at rest at the target pose) → snap instead of
+     * starting a full move_s tween that reports not-idle while nothing moves.
+     * The flip/thickness crossfades below are guarded separately, so an
+     * in-flight reveal still completes. */
+    if (!multi && pose_settled(c->pos, c->rot, c->scale, c->alpha,
+                               pos, rot, 1.0f)) {
+        total = 0.0f;
+    }
+    card_set_journey(c, path, path_count, pos, total);
 
     /* Only (re)start the flip crossfade when the target state actually changed;
      * otherwise leave any in-flight flip running so it completes (restarting a

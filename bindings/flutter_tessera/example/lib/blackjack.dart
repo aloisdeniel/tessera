@@ -310,13 +310,16 @@ class BlackjackController extends GameController<BjState, BjAction> {
   /// over each additional dealer draw one at a time.
   List<TesseraScene> _revealSequence(BjRoundOver s) {
     final out = <TesseraScene>[];
-    // hole still hidden (the position the player last saw)
-    out.add(_scene(player: s.player, dealer: s.dealer.take(2).toList(), hideHole: true, deck: s.shoe.length));
+    // The player was already looking at the hole-hidden frame, so start straight
+    // on the flip — restating that frame first was a wasted beat. The deck slab
+    // is sized as of the pre-dealer-draw moment and thins by one as each extra
+    // dealer card is turned off it (no thickness jump at round-over).
+    int deckAt(int shown) => s.shoe.length + s.dealer.length - shown;
     // flip the hole up
-    out.add(_scene(player: s.player, dealer: s.dealer.take(2).toList(), hideHole: false, deck: s.shoe.length));
+    out.add(_scene(player: s.player, dealer: s.dealer.take(2).toList(), hideHole: false, deck: deckAt(2)));
     // reveal each extra dealer card
     for (var k = 3; k <= s.dealer.length; k++) {
-      out.add(_scene(player: s.player, dealer: s.dealer.take(k).toList(), hideHole: false, deck: s.shoe.length));
+      out.add(_scene(player: s.player, dealer: s.dealer.take(k).toList(), hideHole: false, deck: deckAt(k)));
     }
     return out;
   }

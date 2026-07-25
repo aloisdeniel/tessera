@@ -52,6 +52,14 @@ abstract class GameController<S, A> {
   /// auto-play is on (AI move, dealer strategy, auto new round). null = wait.
   A? autoAction(S state, math.Random rng) => null;
 
+  /// How long to *dwell* on [state] once its animation settles before firing an
+  /// intrinsic [autoAdvance] — a readable pause so the player can take in the
+  /// beat (a flipped pair in memory, a revealed card) before it resolves. The
+  /// host has no motion during this hold; it just delays the next auto step.
+  /// Defaults to no pause. Only applies to intrinsic auto-advance, never to a
+  /// human action or (auto-play) AI move.
+  Duration holdFor(S state) => Duration.zero;
+
   /// Map a board tap to an action, or null to ignore. [pick] is null on a miss.
   /// [local] is the tap's position in the view and [view] the view's size, for
   /// games that care where the tap landed (e.g. left/right edge taps); games
@@ -101,6 +109,8 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   bool _ready = false;
   bool _busy = true;
   bool _playing = false; // a queued scene is mid-flight (awaiting setScene)
+  Timer? _hold; // dwelling on a settled state before its intrinsic auto-advance
+  Object? _dwelled; // the state instance whose hold has already elapsed
   Size? _viewSize; // latest view size, for taps that care where they landed
 
   GameController<S, A> get game => widget.game;
@@ -114,6 +124,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   @override
   void dispose() {
     _loop?.cancel();
+    _hold?.cancel();
     _controller?.dispose();
     super.dispose();
   }
@@ -138,13 +149,14 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
     _queue.addAll(game.render(_state));
     _pump();
     await c.start();
-    _loop = Timer.periodic(const Duration(milliseconds: 90), (_) => _pump());
+    _loop = Timer.periodic(const Duration(milliseconds: 45), (_) => _pump());
     if (mounted) setState(() => _ready = true);
   }
 
   bool get _animating =>
       _controller == null ||
       _playing ||
+      _hold != null ||
       !_controller!.isIdle ||
       _queue.isNotEmpty;
 
@@ -164,13 +176,40 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
     if (c.isIdle) {
       // Intrinsic steps always run; AI decisions only while auto-play is on.
       var a = game.autoAdvance(_state);
+      final intrinsic = a != null;
       a ??= _autoplay ? game.autoAction(_state, _rng) : null;
       if (a != null) {
+        // Dwell on an intrinsic beat (a settled reveal) before resolving it, so
+        // the player can read it. Held once per state instance; the timer's
+        // firing marks this state dwelled and re-pumps to fall through below.
+        if (intrinsic && !identical(_dwelled, _state)) {
+          final hold = game.holdFor(_state);
+          if (hold > Duration.zero) {
+            if (_hold == null) {
+              _hold = Timer(hold, () {
+                _hold = null;
+                _dwelled = _state;
+                _pump();
+              });
+              _syncBusy();
+            }
+            return;
+          }
+        }
+        final before = _state;
         _state = game.update(_state, a);
         _queue.addAll(game.render(_state));
         if (mounted) setState(() {}); // refresh status/buttons for the new state
         if (_queue.isNotEmpty) {
           _playNext(c);
+          return;
+        }
+        // The step produced no scene to play (e.g. a purely logical advance):
+        // if it actually advanced the state, re-pump on the next microtask so
+        // the following beat isn't stalled up to a full poll interval. Guard on
+        // a real change so a no-op action can't spin the microtask queue.
+        if (!identical(before, _state)) {
+          scheduleMicrotask(_pump);
           return;
         }
       }
@@ -198,6 +237,8 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   }
 
   void _dispatch(A action) {
+    _hold?.cancel();
+    _hold = null;
     _state = game.update(_state, action);
     _queue.addAll(game.render(_state));
     if (mounted) setState(() {});

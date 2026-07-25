@@ -269,7 +269,9 @@ class YahtzeeController extends GameController<YState, YAction> {
           face: s.dice[i] - 1, // face index f shows value f + 1
           position: [(-3.2 + i * 1.6), 0.6, z],
           seed: s.dieSeed[i],
-          throwS: 0.95,
+          // Stagger the throw times a touch so the dice don't start and settle
+          // in perfect lockstep (real dice come to rest at scattered moments).
+          throwS: 0.85 + 0.06 * i,
         ));
       }
     }

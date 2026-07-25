@@ -272,6 +272,16 @@ class MemoryController extends GameController<MemState, MemAction> {
   MemAction? autoAdvance(MemState state) =>
       state is MemEval ? const MemResolve() : null;
 
+  // Hold the two face-up cards long enough to actually read them before the
+  // pair resolves — the point of Concentration. A miss dwells longer (you're
+  // memorising both), a match just needs a beat to register before it clears.
+  @override
+  Duration holdFor(MemState state) => state is MemEval
+      ? (state.isMatch
+          ? const Duration(milliseconds: 550)
+          : const Duration(milliseconds: 1050))
+      : Duration.zero;
+
   @override
   MemAction? autoAction(MemState state, math.Random rng) {
     switch (state) {

@@ -119,14 +119,17 @@ sealed class ChessState {
 }
 
 /// A game in progress; [selected] is the picked source square (or -1).
+/// [lastMove] (if any) drives the knight's L-shaped glide in `render`.
 class ChessPlaying extends ChessState {
-  const ChessPlaying(super.board, {this.selected = -1});
+  const ChessPlaying(super.board, {this.selected = -1, this.lastMove});
   final int selected;
+  final Move? lastMove;
 }
 
 /// Checkmate or stalemate — the side to move has no legal reply.
 class ChessOver extends ChessState {
-  const ChessOver(super.board);
+  const ChessOver(super.board, {this.lastMove});
+  final Move? lastMove;
 }
 
 // ---- reducer -------------------------------------------------------------
@@ -143,7 +146,9 @@ ChessState chessUpdate(ChessState s, ChessAction a) {
 
 ChessState _apply(ChessBoard board, Move m) {
   final nb = board.applyMove(m);
-  return genLegal(nb.toGameState()).isEmpty ? ChessOver(nb) : ChessPlaying(nb);
+  return genLegal(nb.toGameState()).isEmpty
+      ? ChessOver(nb, lastMove: m)
+      : ChessPlaying(nb, lastMove: m);
 }
 
 ChessState _tap(ChessPlaying s, int sq) {
@@ -239,17 +244,34 @@ class ChessController extends GameController<ChessState, ChessAction> {
   List<int> get _cornerTileIds =>
       [tileId(sqOf(0, 0)), tileId(sqOf(7, 0)), tileId(sqOf(0, 7)), tileId(sqOf(7, 7))];
 
+  /// An L-shaped waypoint list for a knight hop: travel the long (2-square) axis
+  /// first, then the short one. The final waypoint is the destination itself
+  /// (the engine snaps the last step to the piece's layout target).
+  List<(int, int)> _knightPath(int from, int to) {
+    final f0 = fileOf(from), r0 = rankOf(from);
+    final f1 = fileOf(to), r1 = rankOf(to);
+    final (cf, cr) = ((f1 - f0).abs() == 2) ? (f1, r0) : (f0, r1);
+    return [(cf + boardOff, cr + boardOff), (f1 + boardOff, r1 + boardOff)];
+  }
+
+  // The camera faces the side to move: white plays from yaw π (white at the
+  // bottom), black from yaw 0. The board sweeps 180° to the mover's side on each
+  // ply, so whoever is up always sees the board from their own perspective.
   TesseraCameraPose _cameraFor(int side) => TesseraCameraPose(
         focusX: boardOff + 3.5,
         focusY: boardOff + 3.5,
         distance: _camDistance,
-        yaw: (side == white) ? 3.14159 : 0.0,
+        yaw: side == white ? 3.14159 : 0.0,
         pitch: 0.82,
         fov: 0.72,
       );
 
   TesseraScene _scene(ChessState s) {
     final b = s.board;
+    final lm = switch (s) {
+      ChessPlaying(:final lastMove) => lastMove,
+      ChessOver(:final lastMove) => lastMove,
+    };
     final tiles = <TesseraTile>[];
     final entities = <TesseraEntity>[];
     for (var r = 0; r < 8; r++) {
@@ -266,6 +288,12 @@ class ChessController extends GameController<ChessState, ChessAction> {
         def: _piece[pieceColor(v)][pieceKind(v)],
         x: fileOf(sq) + boardOff,
         y: rankOf(sq) + boardOff,
+        // A knight can't slide in a straight line without cutting through the
+        // board, so route it through an L corner (long axis first). Other pieces
+        // move in a line, so a plain glide is correct.
+        path: (lm != null && sq == lm.to && pieceKind(v) == chessKnight)
+            ? _knightPath(lm.from, lm.to)
+            : const [],
       ));
     }
     return TesseraScene(

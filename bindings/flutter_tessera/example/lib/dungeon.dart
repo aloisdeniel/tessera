@@ -463,7 +463,9 @@ class DungeonController extends GameController<DgState, DgAction> {
         removeS: 0.45,
         tileS: 0.4,
         reflowS: 0.35,
-        cameraS: 0.9,
+        // Snappier board<->hero dolly (was 0.9): each move triggers a dolly in
+        // and back out, so a long camera tween doubled up around a 0.64s walk.
+        cameraS: 0.6,
       );
 
   @override
@@ -683,7 +685,7 @@ class DungeonController extends GameController<DgState, DgAction> {
       cards: cards,
       hands: hands,
       cardDraws: draws,
-      camera: _cameraFor(s),
+      camera: _cameraFor(s, moveHero: moveHero),
     );
   }
 
@@ -691,15 +693,24 @@ class DungeonController extends GameController<DgState, DgAction> {
   // the current card fullscreen-centre (its fan neighbours fall to the edges).
   // The engine tweens between the two poses, so board<->hand and card<->card
   // glide smoothly.
-  TesseraCamera _cameraFor(DgState s) {
+  TesseraCamera _cameraFor(DgState s, {bool moveHero = true}) {
     final c = s.c;
-    // While the hero is walking the track, ride along with it (FOCUS_ENTITY
-    // tracks the piece's live position each tick). Every other state — including
-    // the tile it lands on — falls back to the board framing, so the camera
-    // glides back out to the global view after each move.
-    if (s is DgMoving) {
+    // While the hero is *walking* the track, ride along with it (FOCUS_ENTITY
+    // tracks the piece's live position each tick). The throw beat (moveHero
+    // false) instead keeps the board framing the roll used, so the movement die
+    // — planted at the far corner — is read in a stable frame rather than
+    // dollying in tight on the still-stationary hero (which threw the die
+    // off-screen and wasted the whole beat). Landing falls back to the board
+    // view, so the camera glides back out after each move.
+    if (s is DgMoving && moveHero) {
       return const TesseraCameraFocusEntity(_heroId,
           distance: 9.0, yaw: 0, pitch: 0.92, fov: 0.72);
+    }
+    // A duel is decided by two dice thrown at the front edge; frame them close
+    // instead of reading them tiny from the far whole-board pose.
+    if (s is DgCombat) {
+      return const TesseraCameraFocusDice(_heroDieId,
+          distance: 9.0, yaw: 0, pitch: 0.95, fov: 0.72);
     }
     if (c.camFocus == CamFocus.hand && c.hand.isNotEmpty) {
       final slot = c.focusSlot.clamp(0, c.hand.length - 1);

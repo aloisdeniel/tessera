@@ -364,6 +364,9 @@ class CheckersController extends GameController<CkState, CkAction> {
         focusX: _off + 3.5,
         focusY: _off + 3.5,
         distance: _camDistance,
+        // The camera faces the side to move: red plays from yaw π (red at the
+        // bottom), black from yaw 0, so whoever is up sees the board from their
+        // own side after each ply.
         yaw: b.side == red ? 3.14159 : 0.0,
         pitch: 0.82,
         fov: 0.72,
