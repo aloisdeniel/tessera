@@ -4,7 +4,14 @@
 // pile, it shows *freely placed* cards, per-card flips (toggling `hidden`
 // crossfades a card from its concealing front to its face), and per-card picking
 // (pick.hitCard). Same reducer shape as the other games (see game.dart).
+//
+// It also exercises the engine's feedback features: card highlights (a pulsing
+// glow on the first pick, a paired glow on a match, a red outline on a miss)
+// derived from the same state the scene is, `cardFlipped` engine events timing
+// those highlights to the *visual* flip rather than the tap, and a 3D label at
+// the board edge tallying the pairs found.
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -156,12 +163,27 @@ MemState _resolve(MemEval s) {
 // ---- controller (rendering + wiring) -------------------------------------
 class MemoryController extends GameController<MemState, MemAction> {
   static const List<int> _fitCorners = [9001, 9002, 9003, 9004];
+  static const int _tallyLabelId = 9101;
+
+  static const List<double> _pickColor = [1.0, 0.85, 0.35, 1.0];
+  static const List<double> _matchColor = [0.40, 1.0, 0.55, 1.0];
+  static const List<double> _missColor = [1.0, 0.30, 0.25, 1.0];
 
   int _felt = 0;
   int _hidden = 0;
   int _back = 0;
+  int _font = 0;
   final List<int> _faceDef = List<int>.filled(_pairs, 0);
   double _camDistance = 14.0;
+
+  // Flip-feedback plumbing (visuals only — the reducer never sees any of it).
+  // [_visibleUp] tracks which cells have *visually* turned face-up, fed by the
+  // engine's `cardFlipped` events; [_lastShown] is the state the board is
+  // currently rendering, so an event can re-push its scene.
+  TesseraController? _tessera;
+  StreamSubscription<TesseraEvent>? _flips;
+  final Set<int> _visibleUp = <int>{};
+  MemState? _lastShown;
 
   @override
   String get title => 'Memory';
@@ -190,6 +212,15 @@ class MemoryController extends GameController<MemState, MemAction> {
 
   @override
   Future<void> registerDefs(TesseraController c) async {
+    // Each mount brings a fresh engine: re-arm the flip listener on it. A stale
+    // subscription from a previous mount is cancelled here; the live one ends
+    // with the controller's dispose, which closes the event stream.
+    await _flips?.cancel();
+    _tessera = c;
+    _visibleUp.clear();
+    _lastShown = null;
+    _flips = c.events.listen(_onEngineEvent);
+    _font = await registerGameFont(c);
     _felt = c.registerTileType(
         const TesseraTileType(thickness: 0.2, tint: [0.12, 0.30, 0.42, 1.0]));
     _hidden = c.registerAtlas(await renderCardHidden());
@@ -230,6 +261,87 @@ class MemoryController extends GameController<MemState, MemAction> {
     return 0;
   }
 
+  /// UI-side juice only: a `cardFlipped` event marks the cell as visually
+  /// face-up (or no longer so), and a *reveal* of a currently-picked card
+  /// re-pushes the state's own scene — now with that card's highlight included
+  /// — so the glow fades in on the flip itself, not on the tap. Game logic is
+  /// never advanced from here; the reducer owns all of that.
+  void _onEngineEvent(TesseraEvent e) {
+    if (e.type != TesseraEventType.cardFlipped) return;
+    final cell = e.subjectId - 1;
+    if (cell < 0 || cell >= _cells) return;
+    final nowHidden = e.value >= 0.5; // value = 1 when the card is now hidden
+    final changed =
+        nowHidden ? _visibleUp.remove(cell) : _visibleUp.add(cell);
+    final s = _lastShown;
+    final c = _tessera;
+    if (!changed || nowHidden || s == null || c == null) return;
+    if (!s.up.contains(cell)) return; // not a picked card — nothing to light up
+    // Events already queued when the screen pops can land after the
+    // controller's dispose; setScene no-ops on a disposed controller, so this
+    // late re-push is safe.
+    unawaited(c.setScene(_scene(s)));
+  }
+
+  /// The feedback highlights [s] calls for, gated on [_visibleUp] so nothing
+  /// lights up before its card has visually started to turn.
+  List<TesseraHighlight> _highlights(MemState s) {
+    TesseraHighlight glow(int cell, List<double> color, double pulseS) =>
+        TesseraHighlight(
+          targetId: cell + 1,
+          kind: TesseraHighlightKind.card,
+          style: TesseraHighlightStyle.glow,
+          color: color,
+          pulseS: pulseS,
+          pulseMin: 0.4,
+          pulseMax: 1.0,
+        );
+    switch (s) {
+      case MemPlaying(:final up)
+          when up.length == 1 && _visibleUp.contains(up[0]):
+        // Waiting on the second pick: the first card breathes.
+        return [glow(up[0], _pickColor, 1.1)];
+      case MemEval():
+        if (!s.up.every(_visibleUp.contains)) {
+          // The second flip hasn't visually started — no verdict yet; keep the
+          // first pick's waiting glow so nothing telegraphs the outcome early.
+          return _visibleUp.contains(s.up[0])
+              ? [glow(s.up[0], _pickColor, 1.1)]
+              : const [];
+        }
+        if (s.isMatch) {
+          // A found pair: both glow together for the beat before they clear.
+          return [for (final i in s.up) glow(i, _matchColor, 0.5)];
+        }
+        // A miss: a red outline beat on both before they flip back.
+        return [
+          for (final i in s.up)
+            TesseraHighlight(
+              targetId: i + 1,
+              kind: TesseraHighlightKind.card,
+              style: TesseraHighlightStyle.outline,
+              color: _missColor,
+              thickness: 4,
+            ),
+        ];
+      default:
+        return const [];
+    }
+  }
+
+  /// The pairs-found tally, floating just past the last card row (billboarded
+  /// world anchor; with font 0 the engine simply skips it).
+  TesseraLabel _tallyLabel(MemState s) => TesseraLabel(
+        id: _tallyLabelId,
+        font: _font,
+        text: s is MemWon
+            ? 'All $_pairs pairs · ${s.moves} tries'
+            : 'Pairs ${s.pairsFound} / $_pairs',
+        position: const [0, 0.35, -4.9],
+        size: 0.55,
+        color: const [1, 1, 1, 0.92],
+      );
+
   TesseraScene _scene(MemState s) {
     final tiles = <TesseraTile>[];
     for (var z = -5; z <= 5; z++) {
@@ -254,6 +366,8 @@ class MemoryController extends GameController<MemState, MemAction> {
     return TesseraScene(
       tiles: tiles,
       cards: cards,
+      labels: [_tallyLabel(s)],
+      highlights: _highlights(s),
       camera: TesseraCameraPose(
         focusX: 0,
         focusY: 0,
@@ -266,7 +380,13 @@ class MemoryController extends GameController<MemState, MemAction> {
   }
 
   @override
-  List<TesseraScene> render(MemState s) => [_scene(s)];
+  List<TesseraScene> render(MemState s) {
+    // Matched cards leave the board without a flip-back event, so drop them
+    // from the visually-face-up set here (a won board is fully cleared).
+    _visibleUp.removeWhere((i) => s is MemWon || s.matched.contains(i));
+    _lastShown = s;
+    return [_scene(s)];
+  }
 
   @override
   MemAction? autoAdvance(MemState state) =>
@@ -325,6 +445,7 @@ class MemoryController extends GameController<MemState, MemAction> {
     final dist = math.max(fit, 12.0);
     if (dist == _camDistance) return null;
     _camDistance = dist;
+    _lastShown = state;
     return [_scene(state)];
   }
 

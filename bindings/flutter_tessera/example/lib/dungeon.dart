@@ -11,8 +11,25 @@
 // The loop: roll to move → the hero walks the track one tile at a time → if a
 // monster blocks the path you stop and duel (hero d6 + item bonuses vs monster
 // d6 + power) → landing on a loot tile draws a card → reach the treasure to win.
+//
+// It is also the showcase for the engine's persistence + event features:
+//  · Save / Load — the whole crawl (reducer core + engine-serialized scene) is
+//    written to disk; loading restores through `restoreScene`, so the board
+//    *animates* from wherever it is straight back to the snapshot.
+//  · Replay last turn — every beat is appended to a `TesseraReplayRecorder`
+//    turn by turn; the button plays the last full turn back record by record.
+//  · Engine events — ENTITY_WAYPOINT_REACHED / ENTITY_HOP_LANDED fired during
+//    the hero's multi-step walk stamp a fading footprint trail on the tiles it
+//    actually crossed and feed a footstep counter (UI juice only; game logic
+//    never depends on them).
+//  · 3D labels — a live HP/name tag rides above the hero (and each monster
+//    advertises its strength), anchored to the entities' animating transforms.
 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tessera/flutter_tessera.dart';
@@ -217,6 +234,29 @@ class DgUnfocus extends DgAction {
   const DgUnfocus();
 }
 
+/// Side effect: snapshot the crawl (reducer core + engine-serialized scene) to
+/// disk. Handled by the controller; inert in the pure reducer.
+class DgSave extends DgAction {
+  const DgSave();
+}
+
+/// Side effect: restore the on-disk snapshot — the board animates from
+/// wherever it currently is back to the saved scene via `restoreScene`.
+class DgLoad extends DgAction {
+  const DgLoad();
+}
+
+/// Side effect: play the last recorded turn back through the replay container.
+class DgReplayTurn extends DgAction {
+  const DgReplayTurn();
+}
+
+/// Intrinsic: a restore / replay driven outside the host's scene queue has
+/// fully settled — resume normal play.
+class DgAsyncDone extends DgAction {
+  const DgAsyncDone();
+}
+
 // ---- states --------------------------------------------------------------
 sealed class DgState {
   const DgState(this.c);
@@ -271,6 +311,19 @@ class DgLost extends DgState {
   const DgLost(super.c);
 }
 
+/// A saved crawl is being restored: `restoreScene` is animating the board from
+/// wherever it was to the snapshot, and [c] is the *loaded* core the game
+/// resumes on (via [DgAsyncDone]) once the engine settles. Input is ignored.
+class DgLoading extends DgState {
+  const DgLoading(super.c);
+}
+
+/// The replay container is pushing the last turn's recorded beats back through
+/// the engine; input is ignored until it finishes and play resumes on [c].
+class DgReplaying extends DgState {
+  const DgReplaying(super.c);
+}
+
 // ---- reducer -------------------------------------------------------------
 DgState dgUpdate(DgState s, DgAction a) {
   switch (a) {
@@ -299,6 +352,14 @@ DgState dgUpdate(DgState s, DgAction a) {
       return _reface(s, s.c.copy(focusSlot: slot));
     case DgUnfocus():
       return _reface(s, s.c.copy(camFocus: CamFocus.board));
+    // Save / load / replay are side effects: DungeonController.update
+    // intercepts them before the pure reducer runs. Inert here so the sealed
+    // switch stays exhaustive without polluting the game rules.
+    case DgSave():
+    case DgLoad():
+    case DgReplayTurn():
+    case DgAsyncDone():
+      return s;
   }
 }
 
@@ -317,6 +378,8 @@ DgState _reface(DgState s, Core core) => switch (s) {
           bonus: s.bonus),
       DgWon() => DgWon(core),
       DgLost() => DgLost(core),
+      DgLoading() => DgLoading(core),
+      DgReplaying() => DgReplaying(core),
     };
 
 DgState _roll(DgRoll s) {
@@ -440,6 +503,21 @@ class DungeonController extends GameController<DgState, DgAction> {
   static const int _heroDieId = 201;
   static const int _monDieId = 202;
   static const int _deckId = 300;
+  static const int _heroLabelId = 700;
+  int _monsterLabelId(int mi) => 710 + mi;
+
+  // ---- persistence / events / replay plumbing ------------------------------
+  TesseraController? _c; // for the serialize/replay APIs outside the queue
+  int _font = 0; // shared label font def (0 = unavailable, labels skipped)
+  StreamSubscription<TesseraEvent>? _events;
+  final List<Cell> _trail = []; // tiles the hero crossed, oldest first (events)
+  int _stepsTotal = 0; // lifetime hops landed, event-fed (status garnish)
+  TesseraReplayRecorder? _turnRec; // the turn currently being recorded
+  Uint8List? _lastTurn; // flattened container of the last completed turn
+  final Stopwatch _clock = Stopwatch()..start(); // replay-record timestamps
+  bool _asyncDone = false; // an out-of-queue restore/replay has settled
+  bool _quietSteps = false; // don't count replayed/restored hops as footsteps
+  String? _note; // one-shot status suffix ("saved" / "load failed")
 
   @override
   String get title => 'Dungeon';
@@ -470,6 +548,15 @@ class DungeonController extends GameController<DgState, DgAction> {
 
   @override
   Future<void> registerDefs(TesseraController c) async {
+    _c = c;
+    _font = await registerGameFont(c);
+    // Step feedback rides the engine's event stream (see _onEvent). Cancel any
+    // previous subscription first (defensive: registerDefs runs once per view),
+    // and tear down with the stream — it closes on controller.dispose(), and
+    // onDone also releases the native replay recorder.
+    await _events?.cancel();
+    _events = c.events.listen(_onEvent, onDone: _teardown);
+
     _floor = c.registerTileType(
         const TesseraTileType(thickness: 0.22, tint: [0.28, 0.29, 0.34, 1.0]));
     _stone = c.registerTileType(
@@ -522,11 +609,262 @@ class DungeonController extends GameController<DgState, DgAction> {
     }
   }
 
+  /// Engine-event juice: while the hero's multi-step walk animates, each
+  /// ENTITY_WAYPOINT_REACHED stamps a footprint on the tile the engine reports
+  /// it crossed, and each ENTITY_HOP_LANDED bumps the footstep counter. Purely
+  /// visual — the reducer never reads either (state already owns the walk).
+  void _onEvent(TesseraEvent e) {
+    if (e.subject != TesseraEventSubject.entity || e.subjectId != _heroId) {
+      return;
+    }
+    if (e.type == TesseraEventType.entityHopLanded) {
+      if (!_quietSteps) _stepsTotal++;
+    } else if (e.type == TesseraEventType.entityWaypointReached) {
+      _trail.removeWhere((t) => t.x == e.x && t.z == e.y);
+      _trail.add(Cell(e.x, e.y));
+      if (_trail.length > 8) _trail.removeAt(0); // longest walk is 6 steps
+    }
+  }
+
+  /// Fired when the controller's event stream closes (i.e. the view was
+  /// disposed): drop the dead subscription and free the native recorder.
+  void _teardown() {
+    _events = null;
+    _turnRec?.dispose();
+    _turnRec = null;
+  }
+
   @override
   DgState initial() => DgRoll(Core.initial());
 
   @override
-  DgState update(DgState state, DgAction action) => dgUpdate(state, action);
+  DgState update(DgState state, DgAction action) {
+    _note = null; // one-shot: any action clears the last save/load note
+    switch (action) {
+      case DgSave():
+        return (state is DgRoll) ? _save(state) : state;
+      case DgLoad():
+        return (state is DgRoll || state is DgWon || state is DgLost)
+            ? _load(state)
+            : state;
+      case DgReplayTurn():
+        return (state is DgRoll && _lastTurn != null)
+            ? _replayLastTurn(state)
+            : state;
+      case DgAsyncDone():
+        // The out-of-queue restore / replay settled: resume normal play. The
+        // resumed state's render pushes its scene the ordinary way, which the
+        // engine diffs to (almost) nothing since the board is already there.
+        return (state is DgLoading || state is DgReplaying)
+            ? DgRoll(state.c)
+            : state;
+      case DgRollMove():
+        // A fresh walk lays a fresh footprint trail (see _onEvent); the old
+        // one drops out of the next scene and fades away.
+        if (state is DgRoll) _trail.clear();
+        return dgUpdate(state, action);
+      case DgReset():
+        _trail.clear();
+        _stepsTotal = 0;
+        _lastTurn = null;
+        _turnRec?.dispose();
+        _turnRec = null;
+        return dgUpdate(state, action);
+      default:
+        // While a restore / replay drives the engine, everything else waits.
+        if (state is DgLoading || state is DgReplaying) return state;
+        return dgUpdate(state, action);
+    }
+  }
+
+  // ---- save / load / replay ------------------------------------------------
+  // The save file pairs a tiny JSON header (the reducer's Core, so the *game*
+  // resumes exactly) with the engine's own serialized-scene blob (so the
+  // *board* restores through tessera's deserialize path):
+  //   'DGS1' · u32-le header length · header JSON · serializeScene bytes.
+
+  static final String _savePath =
+      '${Directory.systemTemp.path}/tessera_dungeon_save.bin';
+
+  DgState _save(DgRoll s) {
+    final ctrl = _c;
+    if (ctrl == null) return s;
+    try {
+      final blob = ctrl.serializeScene(_scene(s));
+      final head = utf8.encode(jsonEncode(<String, dynamic>{
+        'heroPos': s.c.heroPos,
+        'hp': s.c.hp,
+        'deck': s.c.deck,
+        'hand': [
+          for (final h in s.c.hand) [h.id, h.kind],
+        ],
+        'monsters': [
+          for (final m in s.c.monsters) [m.idx, m.power, m.alive ? 1 : 0],
+        ],
+        'nextId': s.c.nextId,
+        'seed': s.c.seed,
+        'moveSeed': s.c.moveSeed,
+        'moveValue': s.c.moveValue,
+        'steps': _stepsTotal,
+        'trail': [
+          for (final t in _trail) [t.x, t.z],
+        ],
+      }));
+      final len = ByteData(4)..setUint32(0, head.length, Endian.little);
+      final out = BytesBuilder(copy: false)
+        ..add('DGS1'.codeUnits)
+        ..add(len.buffer.asUint8List())
+        ..add(head)
+        ..add(blob);
+      File(_savePath).writeAsBytesSync(out.takeBytes());
+      _note = 'saved ✓';
+    } catch (_) {
+      _note = 'save failed'; // disk trouble is a status note, never a crash
+    }
+    return s;
+  }
+
+  DgState _load(DgState s) {
+    final ctrl = _c;
+    if (ctrl == null) return s;
+    final Core core;
+    final Uint8List blob;
+    try {
+      final bytes = File(_savePath).readAsBytesSync();
+      if (bytes.length < 8 || String.fromCharCodes(bytes, 0, 4) != 'DGS1') {
+        throw const FormatException('bad save magic');
+      }
+      final headLen =
+          ByteData.sublistView(bytes, 4, 8).getUint32(0, Endian.little);
+      final head = jsonDecode(utf8.decode(bytes.sublist(8, 8 + headLen)))
+          as Map<String, dynamic>;
+      blob = bytes.sublist(8 + headLen);
+      core = Core(
+        heroPos: head['heroPos'] as int,
+        hp: head['hp'] as int,
+        deck: [for (final k in head['deck'] as List) k as int],
+        hand: [
+          for (final h in head['hand'] as List)
+            ItemCard((h as List)[0] as int, h[1] as int),
+        ],
+        monsters: [
+          for (final m in head['monsters'] as List)
+            Monster(
+              idx: (m as List)[0] as int,
+              power: m[1] as int,
+              alive: m[2] as int != 0,
+            ),
+        ],
+        nextId: head['nextId'] as int,
+        seed: head['seed'] as int,
+        moveSeed: head['moveSeed'] as int,
+        moveValue: head['moveValue'] as int,
+        camFocus: CamFocus.board,
+        focusSlot: 0,
+      );
+      _stepsTotal = head['steps'] as int? ?? 0;
+      _trail
+        ..clear()
+        ..addAll([
+          for (final t in (head['trail'] as List? ?? const []))
+            Cell((t as List)[0] as int, t[1] as int),
+        ]);
+    } catch (_) {
+      _note = 'load failed'; // missing/corrupt file: stay where we are
+      return s;
+    }
+    // Restore through the engine's own deserialize path: the saved scene is
+    // pushed with setScene semantics, so the board *animates* from wherever it
+    // currently is straight to the snapshot. The transitional DgLoading state
+    // renders nothing — the host queue stays empty while the engine settles —
+    // and autoAdvance resumes on the loaded core via DgAsyncDone. (A load can
+    // never race a walk: the host disables buttons while any transition is in
+    // flight, and update() ignores DgLoad during DgLoading/DgReplaying.) If
+    // the blob is somehow stale the game still recovers, because the resumed
+    // state's own render pushes the same scene the normal way.
+    _lastTurn = null; // the last recorded turn belongs to the pre-load board
+    _asyncDone = false;
+    _quietSteps = true;
+    () async {
+      try {
+        await ctrl.restoreScene(blob);
+      } catch (_) {
+        // Malformed blob: recovery happens via the resumed state's render.
+      }
+      _quietSteps = false;
+      _asyncDone = true;
+    }();
+    return DgLoading(core);
+  }
+
+  DgState _replayLastTurn(DgRoll s) {
+    final ctrl = _c;
+    final data = _lastTurn;
+    if (ctrl == null || data == null) return s;
+    // Step the container's records in order; each play() resolves once that
+    // beat has fully animated, so the turn re-runs with its original pacing
+    // (record 0 is the pre-roll resting frame, so playback opens by gliding
+    // the board back to where the turn began).
+    _asyncDone = false;
+    _quietSteps = true;
+    () async {
+      try {
+        final player = ctrl.openReplay(data);
+        try {
+          for (var i = 0; i < player.length; i++) {
+            // _events nulls out when the controller's stream closes, i.e. the
+            // view is being disposed mid-replay — stop pushing scenes then.
+            // (Belt and braces: play() itself also no-ops once the controller
+            // is disposed, so a scene can't reach a torn-down engine even if
+            // that teardown ordering ever changes.)
+            if (_events == null) break;
+            await player.play(i);
+          }
+        } finally {
+          player.dispose();
+        }
+      } catch (_) {
+        // A corrupt container just ends the replay early.
+      }
+      _quietSteps = false;
+      _asyncDone = true;
+    }();
+    return DgReplaying(s.c);
+  }
+
+  /// Feed the replay recorder with every scene the host is about to play. A
+  /// "turn" spans from one resting state (roll prompt / game over) to the
+  /// next: the resting frame seeds the container so playback opens on the
+  /// board as it stood, every beat between (die throw, walk, draw, duel) is
+  /// appended, and the closing resting frame flattens the container into
+  /// [_lastTurn] for the "Replay last turn" button.
+  void _record(DgState s, List<TesseraScene> scenes) {
+    final ctrl = _c;
+    if (ctrl == null) return;
+    try {
+      final now = _clock.elapsedMilliseconds;
+      final boundary = s is DgRoll || s is DgWon || s is DgLost;
+      var rec = _turnRec;
+      if (boundary) {
+        if (rec != null && rec.length > 1) {
+          for (final scene in scenes) {
+            rec.add(scene, timestampMs: now);
+          }
+          _lastTurn = rec.serialize();
+        }
+        rec?.dispose();
+        _turnRec = ctrl.createReplayRecorder()
+          ..add(scenes.last, timestampMs: now);
+        return;
+      }
+      rec ??= _turnRec = ctrl.createReplayRecorder();
+      for (final scene in scenes) {
+        rec.add(scene, timestampMs: now);
+      }
+    } catch (_) {
+      // Recording is pure garnish — never let it break a render.
+    }
+  }
 
   // Tap wiring for the camera-focus harness:
   //  - board focus: tapping one of the hero's hand cards pulls the camera in on
@@ -536,6 +874,7 @@ class DungeonController extends GameController<DgState, DgAction> {
   @override
   DgAction? onTap(DgState state, TesseraPickResult? pick,
       {Offset? local, Size? view}) {
+    if (state is DgLoading || state is DgReplaying) return null;
     final c = state.c;
     if (c.camFocus == CamFocus.hand) {
       if (local != null && view != null) {
@@ -678,6 +1017,58 @@ class DungeonController extends GameController<DgState, DgAction> {
         ),
     ];
 
+    // Footprint decals on the tiles the hero actually crossed, fed by the
+    // engine's ENTITY_WAYPOINT_REACHED events during the walk (see _onEvent):
+    // the trail is empty while the walk itself renders, fades in with the
+    // arrival scene, lingers while you plan, and fades out when the next roll
+    // clears it. Older steps are fainter; the hero's own tile stays clean.
+    final overlays = <TesseraOverlay>[
+      for (var i = 0; i < _trail.length; i++)
+        if (_trail[i].x != kPath[c.heroPos].x ||
+            _trail[i].z != kPath[c.heroPos].z)
+          TesseraOverlay(
+            x: _trail[i].x,
+            y: _trail[i].z,
+            shape: TesseraOverlayShape.disc,
+            tint: [0.55, 0.85, 1.0, 0.12 + 0.26 * (i + 1) / _trail.length],
+          ),
+    ];
+
+    // 3D labels: the hero's name + HP tag rides along above the piece (the
+    // offset tracks its live animating transform, so it walks, hops and gets
+    // knocked back with him), and every living monster advertises its power.
+    final labels = <TesseraLabel>[
+      if (_font != 0 && s is! DgLost)
+        TesseraLabel(
+          id: _heroLabelId,
+          font: _font,
+          text: 'Hero · HP ${c.hp}/$kMaxHp',
+          anchor: TesseraLabelAnchor.entity,
+          anchorId: _heroId,
+          position: const [0, 2.25, 0],
+          size: 0.34,
+          color: switch (c.hp) {
+            >= kMaxHp => const [0.72, 1.0, 0.75, 1.0],
+            2 => const [1.0, 0.88, 0.5, 1.0],
+            _ => const [1.0, 0.5, 0.45, 1.0],
+          },
+        ),
+      if (_font != 0)
+        for (var i = 0; i < c.monsters.length; i++)
+          if (c.monsters[i].alive)
+            TesseraLabel(
+              id: _monsterLabelId(i),
+              font: _font,
+              text: '${c.monsters[i].power > 1 ? 'Ogre' : 'Grunt'} · '
+                  '+${c.monsters[i].power}',
+              anchor: TesseraLabelAnchor.entity,
+              anchorId: _monsterId(i),
+              position: const [0, 2.0, 0],
+              size: 0.28,
+              color: const [1.0, 0.62, 0.58, 0.95],
+            ),
+    ];
+
     return TesseraScene(
       tiles: tiles,
       entities: entities,
@@ -685,6 +1076,8 @@ class DungeonController extends GameController<DgState, DgAction> {
       cards: cards,
       hands: hands,
       cardDraws: draws,
+      overlays: overlays,
+      labels: labels,
       camera: _cameraFor(s, moveHero: moveHero),
     );
   }
@@ -729,18 +1122,25 @@ class DungeonController extends GameController<DgState, DgAction> {
 
   @override
   List<TesseraScene> render(DgState s) {
+    // While a restore or replay drives the engine directly (outside the host's
+    // scene queue), hand the host nothing to push — autoAdvance fires
+    // DgAsyncDone once the engine settles and normal rendering resumes.
+    if (s is DgLoading || s is DgReplaying) return const [];
     // A movement roll plays in two beats so the die is read *before* the hero
     // commits: first throw the die with the hero still on its tile, then — once
     // the host has awaited that scene settling (TesseraController.setScene's
     // Future) — walk the hero to the destination. Every other state is one scene.
-    if (s is DgMoving && s.target > s.c.heroPos) {
-      return [_scene(s, moveHero: false), _scene(s, moveHero: true)];
-    }
-    return [_scene(s)];
+    final scenes = (s is DgMoving && s.target > s.c.heroPos)
+        ? [_scene(s, moveHero: false), _scene(s, moveHero: true)]
+        : [_scene(s)];
+    _record(s, scenes); // every beat lands in the turn's replay container
+    return scenes;
   }
 
   @override
   List<TesseraScene>? onResize(TesseraController c, DgState state, double w, double h) {
+    // Never push a re-fit while a restore/replay owns the engine.
+    if (state is DgLoading || state is DgReplaying) return null;
     final fit = c.cameraFitDistance(tileIds: _fitCorners, padding: 0.09);
     if (fit == null) return null;
     // Fit only ever pulls back from the tuned landscape distance (the ground-
@@ -758,6 +1158,10 @@ class DungeonController extends GameController<DgState, DgAction> {
   DgAction? autoAdvance(DgState state) => switch (state) {
         DgMoving() => const DgStep(),
         DgDrew() => const DgAfterDraw(),
+        // A restore/replay runs outside the scene queue: once its Future has
+        // flagged completion (and the engine is idle again), resume play.
+        DgLoading() || DgReplaying() =>
+          _asyncDone ? const DgAsyncDone() : null,
         _ => null,
       };
 
@@ -799,6 +1203,14 @@ class DungeonController extends GameController<DgState, DgAction> {
           out.add(const GameButton('Drink potion (+1 life)', DgDrinkPotion(),
               icon: Icons.local_drink, tone: GameButtonTone.normal));
         }
+        if (_lastTurn != null) {
+          out.add(const GameButton('Replay last turn', DgReplayTurn(),
+              icon: Icons.replay));
+        }
+        out.add(const GameButton('Save', DgSave(), icon: Icons.save_outlined));
+        if (File(_savePath).existsSync()) {
+          out.add(const GameButton('Load', DgLoad(), icon: Icons.folder_open));
+        }
         return out;
       case DgCombat():
         final out = <GameButton<DgAction>>[];
@@ -811,9 +1223,11 @@ class DungeonController extends GameController<DgState, DgAction> {
         return out;
       case DgWon():
       case DgLost():
-        return const [
-          GameButton('New crawl', DgReset(),
+        return [
+          const GameButton('New crawl', DgReset(),
               icon: Icons.refresh, tone: GameButtonTone.primary),
+          if (File(_savePath).existsSync())
+            const GameButton('Load save', DgLoad(), icon: Icons.folder_open),
         ];
       default:
         return const [];
@@ -829,7 +1243,9 @@ class DungeonController extends GameController<DgState, DgAction> {
     switch (state) {
       case DgRoll():
         return 'Tile ${c.heroPos}/$kGoal  ·  $life  ·  '
-            'deck ${c.deck.length}  ·  hand ${c.hand.length}  —  roll to move';
+            'deck ${c.deck.length}  ·  hand ${c.hand.length}'
+            '${_stepsTotal > 0 ? '  ·  👣 $_stepsTotal' : ''}'
+            '  —  roll to move${_note != null ? '  ·  $_note' : ''}';
       case DgMoving():
         return 'Rolled a ${c.moveValue} — advancing…  ·  $life';
       case DgDrew():
@@ -839,9 +1255,16 @@ class DungeonController extends GameController<DgState, DgAction> {
         return 'Duel!  you ${state.heroDie}${state.bonus > 0 ? '+${state.bonus}' : ''} = ${state.heroTotal}'
             '  vs  monster ${state.monDie}+${m.power} = ${state.monTotal}  ·  $life';
       case DgWon():
-        return 'You reached the treasure!  🏆  Tap New crawl.';
+        return 'You reached the treasure!  🏆  Tap New crawl.'
+            '${_note != null ? '  ·  $_note' : ''}';
       case DgLost():
-        return 'You fell in the dungeon.  ☠  Tap New crawl.';
+        return 'You fell in the dungeon.  ☠  Tap New crawl.'
+            '${_note != null ? '  ·  $_note' : ''}';
+      case DgLoading():
+        return 'Loading — the board glides back to your saved crawl…';
+      case DgReplaying():
+        return 'Instant replay — last turn, straight from the engine\'s '
+            'recording…';
     }
   }
 }

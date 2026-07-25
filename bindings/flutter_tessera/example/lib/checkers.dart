@@ -6,10 +6,20 @@
 //
 // Sealed action + sealed state, a pure reducer `ckUpdate`, greedy AI. The piece
 // meshes come from checkers_gen.dart; the board is tiles, the pieces entities.
+//
+// Selection feedback rides the engine's decal/highlight layers instead of tile
+// recoloring: legal destinations become ground overlays (calm discs for quiet
+// steps, pulsing gold rings on every jump-landing square with a red ring around
+// each piece the chain would remove), the picked piece wears an outline, and
+// every piece holding a mandatory capture glows ember so the forced-jump rule
+// reads at a glance. The engine event stream ticks a capture counter as each
+// hop of a multi-jump chain lands — pure UI juice; the rules live in the state.
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemSound, SystemSoundType;
 import 'package:flutter_tessera/flutter_tessera.dart';
 
 import 'checkers_gen.dart';
@@ -231,11 +241,19 @@ class CheckersController extends GameController<CkState, CkAction> {
   double _camDistance = 12.0;
   int _tileLight = 0;
   int _tileDark = 0;
-  int _tileSel = 0;
-  int _tileTarget = 0;
   int _poof = 0;
   // [color][king?0/1] -> entity def id.
   final List<List<int>> _piece = List.generate(2, (_) => List<int>.filled(2, 0));
+
+  // Engine-event capture ticks (UI juice only — never game logic). When a
+  // capture chain starts animating, `update` arms the watch with the moving
+  // piece's entity id and how many captures the chain makes; each
+  // entityHopLanded for that piece then ticks the counter, and `status` shows
+  // the tally ("double jump!") once the chain settles.
+  StreamSubscription<TesseraEvent>? _events;
+  int _watchId = 0; // entity id of the piece animating a capture chain
+  int _watchCaptures = 0; // captures that chain will make (0 = not a chain)
+  int _chainTicks = 0; // hops landed so far, one per capture
 
   @override
   String get title => 'Checkers';
@@ -268,10 +286,6 @@ class CheckersController extends GameController<CkState, CkAction> {
         const TesseraTileType(thickness: 0.22, tint: [0.86, 0.79, 0.63, 1.0]));
     _tileDark = c.registerTileType(
         const TesseraTileType(thickness: 0.22, tint: [0.40, 0.26, 0.19, 1.0]));
-    _tileSel = c.registerTileType(
-        const TesseraTileType(thickness: 0.24, tint: [0.26, 0.52, 0.86, 1.0]));
-    _tileTarget = c.registerTileType(
-        const TesseraTileType(thickness: 0.24, tint: [0.32, 0.66, 0.42, 1.0]));
 
     _poof = c.registerEffectType(const TesseraEffectType(
       onRemove: TesseraParticle(
@@ -297,13 +311,51 @@ class CheckersController extends GameController<CkState, CkAction> {
       _piece[black][king ? 1 : 0] = c.registerEntityType(TesseraEntityType(
           glb: buildCheckerGlb(king, blkCol), scale: 0.95, onDespawnEffect: _poof));
     }
+
+    // Hop-landed beats for multi-jump chains. The subscription dies with the
+    // controller (dispose closes the stream); cancelling first keeps a
+    // re-registration from stacking listeners.
+    _events?.cancel();
+    _events = c.events.listen(_onEvent);
+  }
+
+  void _onEvent(TesseraEvent e) {
+    if (e.type != TesseraEventType.entityHopLanded ||
+        e.subject != TesseraEventSubject.entity) {
+      return;
+    }
+    if (_watchCaptures == 0 ||
+        e.subjectId != _watchId ||
+        _chainTicks >= _watchCaptures) {
+      return;
+    }
+    _chainTicks++; // one capture flew by underneath this touchdown
+    SystemSound.play(SystemSoundType.click);
   }
 
   @override
   CkState initial() => CkPlaying(CkBoard.initial());
 
   @override
-  CkState update(CkState state, CkAction action) => ckUpdate(state, action);
+  CkState update(CkState state, CkAction action) {
+    final next = ckUpdate(state, action);
+    if (action is CkReset) {
+      _watchId = 0;
+      _watchCaptures = 0;
+      _chainTicks = 0;
+    } else if (next is CkPlaying &&
+        next.lastPath.isNotEmpty &&
+        !identical(next.board, state.board)) {
+      // A move just started animating: watch its piece's hop touchdowns. The
+      // path carries one landing per capture, so hop-landed events tick the
+      // capture counter (0 expected captures = a quiet step, nothing to tick).
+      final opp = next.board.side; // the side that just got jumped over
+      _watchId = next.board.ids[next.lastPath.last];
+      _watchCaptures = state.board.count(opp) - next.board.count(opp);
+      _chainTicks = 0;
+    }
+    return next;
+  }
 
   int _pieceDef(int p) => _piece[_colorOf(p)][_isKing(p) ? 1 : 0];
 
@@ -313,28 +365,16 @@ class CheckersController extends GameController<CkState, CkAction> {
   TesseraScene _scene(CkState s) {
     final b = s.board;
     final selected = s is CkPlaying ? s.selected : -1;
-
-    // Destination squares reachable from the current selection (for highlights).
-    final targets = <int>{};
-    if (selected >= 0) {
-      for (final m in ckMoves(b.sq, b.side)) {
-        if (m.from == selected) targets.add(m.to);
-      }
-    }
+    final moves = s is CkPlaying ? ckMoves(b.sq, b.side) : const <CkMove>[];
 
     final tiles = <TesseraTile>[];
     for (var r = 0; r < 8; r++) {
       for (var c = 0; c < 8; c++) {
-        final sq = r * 8 + c;
-        int def;
-        if (sq == selected) {
-          def = _tileSel;
-        } else if (targets.contains(sq)) {
-          def = _tileTarget;
-        } else {
-          def = _isDark(r, c) ? _tileDark : _tileLight;
-        }
-        tiles.add(TesseraTile(x: c + _off, y: r + _off, def: def, id: _tid(r, c)));
+        tiles.add(TesseraTile(
+            x: c + _off,
+            y: r + _off,
+            def: _isDark(r, c) ? _tileDark : _tileLight,
+            id: _tid(r, c)));
       }
     }
 
@@ -360,6 +400,8 @@ class CheckersController extends GameController<CkState, CkAction> {
     return TesseraScene(
       tiles: tiles,
       entities: entities,
+      overlays: _overlays(selected, moves),
+      highlights: _highlights(s, selected, moves),
       camera: TesseraCameraPose(
         focusX: _off + 3.5,
         focusY: _off + 3.5,
@@ -376,6 +418,124 @@ class CheckersController extends GameController<CkState, CkAction> {
 
   @override
   List<TesseraScene> render(CkState s) => [_scene(s)];
+
+  /// Ground decals for the selected piece's legal moves. Quiet steps get a calm
+  /// green disc; capture chains are emphasized — every landing square along a
+  /// chain carries a pulsing gold ring (the final destination brightest) and
+  /// each piece the chain would remove is circled in red. All the chain rings
+  /// share one pulse period so a multi-jump breathes as a single figure. One
+  /// overlay per square: brighter marks out-rank dimmer ones where chains
+  /// overlap.
+  List<TesseraOverlay> _overlays(int selected, List<CkMove> moves) {
+    if (selected < 0) return const [];
+    final marks = <int, (int, TesseraOverlay)>{};
+    void mark(int rank, int sq, TesseraOverlay o) {
+      final cur = marks[sq];
+      if (cur == null || cur.$1 < rank) marks[sq] = (rank, o);
+    }
+
+    TesseraOverlay ring(int sq, List<double> tint, double aMin, double aMax,
+            double scMin, double scMax) =>
+        TesseraOverlay(
+          x: sq % 8 + _off,
+          y: sq ~/ 8 + _off,
+          shape: TesseraOverlayShape.ring,
+          tint: tint,
+          pulseS: 0.9,
+          pulseAlphaMin: aMin,
+          pulseAlphaMax: aMax,
+          pulseScaleMin: scMin,
+          pulseScaleMax: scMax,
+        );
+
+    for (final m in moves) {
+      if (m.from != selected) continue;
+      if (!m.isJump) {
+        mark(
+            1,
+            m.to,
+            TesseraOverlay(
+              x: m.to % 8 + _off,
+              y: m.to ~/ 8 + _off,
+              tint: const [0.35, 0.78, 0.45, 0.50],
+              pulseS: 1.8,
+              pulseAlphaMin: 0.32,
+              pulseAlphaMax: 0.52,
+            ));
+        continue;
+      }
+      for (final cap in m.captures) {
+        mark(2, cap,
+            ring(cap, const [0.92, 0.22, 0.16, 0.70], 0.40, 0.75, 1.00, 1.10));
+      }
+      for (final land in m.path) {
+        final isFinal = land == m.to;
+        mark(
+            isFinal ? 4 : 3,
+            land,
+            isFinal
+                ? ring(land, const [1.00, 0.82, 0.25, 0.90], 0.55, 0.95, 0.85,
+                    1.05)
+                : ring(land, const [1.00, 0.82, 0.25, 0.45], 0.25, 0.50, 0.80,
+                    0.95));
+      }
+    }
+    return [for (final e in marks.values) e.$2];
+  }
+
+  /// Screen-space accents: the picked piece wears a gold outline, every piece
+  /// holding a mandatory capture this turn glows ember (the forced-jump rule at
+  /// a glance), and on game over the winning side settles into a slow victory
+  /// glow.
+  List<TesseraHighlight> _highlights(CkState s, int selected, List<CkMove> moves) {
+    final b = s.board;
+    if (s is CkOver) {
+      return [
+        for (var sq = 0; sq < 64; sq++)
+          if (b.sq[sq] != 0 && b.ids[sq] != 0 && _colorOf(b.sq[sq]) == s.winner)
+            TesseraHighlight(
+              targetId: b.ids[sq],
+              style: TesseraHighlightStyle.glow,
+              color: const [1.00, 0.80, 0.30, 1.0],
+              thickness: 12,
+              pulseS: 2.4,
+              pulseMin: 0.30,
+              pulseMax: 0.70,
+            ),
+      ];
+    }
+    final out = <TesseraHighlight>[];
+    if (selected >= 0 && b.ids[selected] != 0) {
+      out.add(TesseraHighlight(
+        targetId: b.ids[selected],
+        style: TesseraHighlightStyle.outline,
+        color: const [1.00, 0.85, 0.30, 1.0],
+        thickness: 3,
+        pulseS: 1.4,
+        pulseMin: 0.70,
+        pulseMax: 1.00,
+      ));
+    }
+    // Diff key is (kind, targetId): the selected piece keeps its outline and
+    // skips the glow.
+    final jumpers = <int>{
+      for (final m in moves)
+        if (m.isJump) m.from
+    };
+    for (final sq in jumpers) {
+      if (sq == selected || b.ids[sq] == 0) continue;
+      out.add(TesseraHighlight(
+        targetId: b.ids[sq],
+        style: TesseraHighlightStyle.glow,
+        color: const [1.00, 0.45, 0.18, 1.0],
+        thickness: 14,
+        pulseS: 0.9,
+        pulseMin: 0.35,
+        pulseMax: 0.85,
+      ));
+    }
+    return out;
+  }
 
   @override
   CkAction? autoAction(CkState state, math.Random rng) {
@@ -425,8 +585,12 @@ class CheckersController extends GameController<CkState, CkAction> {
         ? '  ·  selected ${_squareName(state.selected)}'
         : '';
     final forced = ckMoves(b.sq, b.side).any((m) => m.isJump) ? '  ·  must jump' : '';
-    return '$side to move  ·  Red ${b.count(red)}  Black ${b.count(black)}$sel$forced';
+    // The event-driven tally: entityHopLanded ticks during the last chain.
+    final chain = _chainTicks >= 2 ? '  ·  ${_chainWord(_chainTicks)} jump!' : '';
+    return '$side to move  ·  Red ${b.count(red)}  Black ${b.count(black)}$sel$forced$chain';
   }
+
+  String _chainWord(int n) => switch (n) { 2 => 'double', 3 => 'triple', _ => '×$n' };
 
   String _squareName(int s) =>
       '${String.fromCharCode('a'.codeUnitAt(0) + s % 8)}${s ~/ 8 + 1}';

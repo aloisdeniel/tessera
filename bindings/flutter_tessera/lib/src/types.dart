@@ -18,6 +18,37 @@ enum TesseraShadowMode { none, blob, map }
 /// enum TesseraProjection { perspective=0, isometric=1 }
 enum TesseraProjection { perspective, isometric }
 
+/// enum TesseraOverlayShape { sprite=0, disc=1, ring=2 }
+enum TesseraOverlayShape { sprite, disc, ring }
+
+/// enum TesseraLabelAnchor { world=0, entity=1, tile=2, dice=3, card=4, draw=5 }
+enum TesseraLabelAnchor { world, entity, tile, dice, card, draw }
+
+/// enum TesseraHighlightKind { entity=0, tile=1, dice=2, card=3 }
+enum TesseraHighlightKind { entity, tile, dice, card }
+
+/// enum TesseraHighlightStyle { outline=0, glow=1 }
+enum TesseraHighlightStyle { outline, glow }
+
+/// enum TesseraEventType — the moments the engine surfaces on
+/// [TesseraController.events] (see [TesseraEvent.value] for each payload).
+enum TesseraEventType {
+  none,
+  diceContact, // die touched the ground; value = impact speed
+  diceSettled, // tumble/slide finished; value = face index
+  entityHopLanded, // hop-arc touchdown (each hop of a move)
+  entityWaypointReached, // multi-step segment handoff; value = step number
+  entitySpawned, // spawn transition completed
+  entityRemoved, // removal transition completed
+  cardFlipped, // hidden<->visible flip began; value = 1 when now hidden
+  cardDealt, // card spawned off a source pile (deal began)
+  cameraArrived, // camera tween settled at its goal pose
+  opCompleted, // set_state operation settled; subjectId = op id
+}
+
+/// enum TesseraEventSubject — what [TesseraEvent.subjectId] refers to.
+enum TesseraEventSubject { none, entity, dice, card, draw, camera, operation }
+
 /// A tile definition: a flat prism tinted [tint] (RGBA, 0..1), [thickness]
 /// relative to the tile (default 0.25).
 class TesseraTileType {
@@ -258,6 +289,43 @@ class TesseraHand {
   final double cardSpacing;
 }
 
+/// A flat decal rendered on top of the tile at ([x], [y]) — move-range fills,
+/// threat rings, drop-target highlights. Keyed by coord when diffing: a coord
+/// that newly appears fades in, one that vanishes fades out, and a tint change
+/// crossfades from the currently displayed tint. At most one overlay per coord.
+///
+/// [shape] picks a textured sprite ([atlas]/[uv], atlas 0 = solid tint) or a
+/// procedural filled disc / ring. When [pulseS] > 0 the overlay breathes:
+/// alpha between [pulseAlphaMin]..[pulseAlphaMax] (when max > 0) and/or
+/// footprint scale between [pulseScaleMin]..[pulseScaleMax] (when max > 0).
+class TesseraOverlay {
+  const TesseraOverlay({
+    required this.x,
+    required this.y,
+    this.shape = TesseraOverlayShape.disc,
+    this.atlas = 0,
+    this.uv = const [0, 0, 0, 0],
+    this.tint = const [1, 1, 1, 1],
+    this.pulseS = 0,
+    this.pulseAlphaMin = 0,
+    this.pulseAlphaMax = 0,
+    this.pulseScaleMin = 0,
+    this.pulseScaleMax = 0,
+  });
+
+  final int x;
+  final int y;
+  final TesseraOverlayShape shape;
+  final int atlas;
+  final List<double> uv; // u0,v0,u1,v1 (all-zero => the whole atlas)
+  final List<double> tint;
+  final double pulseS;
+  final double pulseAlphaMin;
+  final double pulseAlphaMax;
+  final double pulseScaleMin;
+  final double pulseScaleMax;
+}
+
 /// A die placed in the world. A die that newly appears (by [id]) is thrown and
 /// settles with [face] up at [position]; one that vanishes fades out. Changing
 /// its def/face/seed/throwS re-throws it. Changing *only* the [position] (same
@@ -280,6 +348,106 @@ class TesseraDie {
   final List<double> position;
   final int seed;
   final double throwS;
+}
+
+/// A world-anchored 3D text label (scores, HP, dice totals, coordinates),
+/// rendered from a font registered with `TesseraController.registerFont`.
+/// Keyed by [id] when diffing: a new id fades in, a vanished one fades out,
+/// and a [text] or [color] change crossfades from what is currently shown.
+///
+/// [anchor] selects what the label is glued to: `world` places it at
+/// [position] directly; the other modes anchor to the live object [anchorId]
+/// and treat [position] as an offset from its LIVE animating transform (so
+/// the label rides along with moves/hops/throws). [size] is the line height
+/// in world units. With [billboard] the label always faces the camera;
+/// otherwise it lies flat on the ground plane. Text longer than 63 UTF-8
+/// bytes is truncated by the engine's bounded copy.
+class TesseraLabel {
+  const TesseraLabel({
+    required this.id,
+    required this.font,
+    required this.text,
+    this.anchor = TesseraLabelAnchor.world,
+    this.anchorId = 0,
+    this.position = const [0, 0, 0],
+    this.size = 0.5,
+    this.color = const [1, 1, 1, 1],
+    this.billboard = true,
+  });
+
+  final int id;
+  final int font;
+  final String text;
+  final TesseraLabelAnchor anchor;
+  final int anchorId;
+  final List<double> position; // world point (world) or anchor offset
+  final double size;
+  final List<double> color;
+  final bool billboard;
+}
+
+/// A screen-space selection highlight on one live object ([kind] +
+/// [targetId], mirroring the camera focus conventions). The object is
+/// re-rendered into a silhouette mask at its live animating transform and
+/// composited over the lit scene — after depth-of-field, so the selection
+/// stays crisp — as a dilated colored outline or a blurred additive glow.
+/// Keyed by (kind, targetId) when diffing: a new highlight fades in, a
+/// vanished one fades out, and a color change crossfades. [thickness] is the
+/// outline width / glow radius in pixels (<=0 => default). When [pulseS] > 0
+/// the intensity breathes between [pulseMin]..[pulseMax] (used when max > 0);
+/// the pulse animates in the engine and never blocks scene completion.
+class TesseraHighlight {
+  const TesseraHighlight({
+    required this.targetId,
+    this.kind = TesseraHighlightKind.entity,
+    this.style = TesseraHighlightStyle.outline,
+    this.color = const [1, 1, 1, 1],
+    this.thickness = 0,
+    this.pulseS = 0,
+    this.pulseMin = 0,
+    this.pulseMax = 0,
+  });
+
+  final int targetId;
+  final TesseraHighlightKind kind;
+  final TesseraHighlightStyle style;
+  final List<double> color; // RGBA (all-zero => white)
+  final double thickness; // px (<=0 => default)
+  final double pulseS;
+  final double pulseMin;
+  final double pulseMax;
+}
+
+/// One typed engine event, delivered on [TesseraController.events] as
+/// transitions animate — a die striking the felt ([TesseraEventType
+/// .diceContact]), a piece landing from a hop, a card flipping over — for
+/// sound / haptics / FX sync. [subjectId] names the object it happened to,
+/// interpreted per [subject]; ([x], [y]) is the board tile nearest the subject
+/// where that is meaningful, else (0, 0). [value] is a small per-type payload
+/// (impact speed, face index, step number; see [TesseraEventType]). [time] is
+/// the engine clock (accumulated tick seconds) at emission.
+class TesseraEvent {
+  const TesseraEvent({
+    required this.type,
+    required this.subject,
+    required this.subjectId,
+    required this.time,
+    required this.x,
+    required this.y,
+    required this.value,
+  });
+
+  final TesseraEventType type;
+  final TesseraEventSubject subject;
+  final int subjectId;
+  final double time;
+  final int x;
+  final int y;
+  final double value;
+
+  @override
+  String toString() => 'TesseraEvent(${type.name}, ${subject.name}/$subjectId, '
+      't: $time, coord: ($x,$y), value: $value)';
 }
 
 /// How the scene camera is positioned. Under the hood the engine tweens the
@@ -448,6 +616,9 @@ class TesseraScene {
     this.cardDraws = const [],
     this.hands = const [],
     this.dice = const [],
+    this.overlays = const [],
+    this.labels = const [],
+    this.highlights = const [],
     required this.camera,
     this.epoch = 0,
   });
@@ -458,6 +629,9 @@ class TesseraScene {
   final List<TesseraCardDraw> cardDraws;
   final List<TesseraHand> hands;
   final List<TesseraDie> dice;
+  final List<TesseraOverlay> overlays;
+  final List<TesseraLabel> labels;
+  final List<TesseraHighlight> highlights;
   final TesseraCamera camera;
   final int epoch;
 }

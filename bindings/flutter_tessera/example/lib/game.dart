@@ -13,10 +13,58 @@
 // (AI / dealer / auto-advance) via `autoAction`.
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_tessera/flutter_tessera.dart';
+
+/// The shared shadow mode applied to every game's engine. `GameScreen` merges
+/// it over each game's own [GameController.quality] (which keeps its msaa /
+/// renderScale) and re-applies it live when the app-bar toggle flips it.
+/// Defaults to real shadow mapping so the feature is visible everywhere; the
+/// toggle drops back to the cheap blob decals for comparison.
+final ValueNotifier<TesseraShadowMode> sharedShadowMode =
+    ValueNotifier<TesseraShadowMode>(TesseraShadowMode.map);
+
+Uint8List? _gameFontBytes; // loaded once, shared by every game's engine
+
+/// Register the example's shared label font on [c] and return its font def id
+/// for [TesseraLabel.font] (0 when no font could be loaded — the engine then
+/// simply skips those labels). Each `TesseraView` owns its own engine, so call
+/// this once per controller during `registerDefs`:
+///
+///     _font = await registerGameFont(c);
+///
+/// Loads the bundled Roboto (Apache-2.0, `assets/fonts/`) and falls back to a
+/// macOS system TTF if the asset is somehow unavailable. [pixelHeight] is the
+/// baked glyph height in texels — the default suits typical label sizes.
+Future<int> registerGameFont(TesseraController c,
+    {double pixelHeight = 64}) async {
+  var bytes = _gameFontBytes;
+  if (bytes == null) {
+    try {
+      final data = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
+      bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } catch (_) {
+      for (final path in const [
+        '/System/Library/Fonts/Supplemental/Arial.ttf',
+        '/Library/Fonts/Arial.ttf',
+      ]) {
+        final f = File(path);
+        if (f.existsSync()) {
+          bytes = f.readAsBytesSync();
+          break;
+        }
+      }
+    }
+    if (bytes == null) return 0;
+    _gameFontBytes = bytes;
+  }
+  return c.registerFont(bytes, pixelHeight: pixelHeight);
+}
 
 /// A game the menu can launch and `GameScreen` can drive.
 abstract class GameController<S, A> {
@@ -119,21 +167,41 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   void initState() {
     super.initState();
     _state = game.initial();
+    sharedShadowMode.addListener(_onShadowModeChanged);
   }
 
   @override
   void dispose() {
+    sharedShadowMode.removeListener(_onShadowModeChanged);
     _loop?.cancel();
     _hold?.cancel();
     _controller?.dispose();
     super.dispose();
   }
 
+  /// The game's quality knobs with the shared shadow mode merged over them.
+  TesseraQualityData get _effectiveQuality {
+    final q = game.quality;
+    return TesseraQualityData(
+      shadows: sharedShadowMode.value,
+      msaa: q.msaa,
+      renderScale: q.renderScale,
+    );
+  }
+
+  void _onShadowModeChanged() {
+    // Live re-apply while the render loop runs: tessera_set_quality is
+    // any-thread (mutex-guarded engine-side; the renderer takes one consistent
+    // copy per frame), so flipping the shadow mode mid-animation is safe.
+    _controller?.setQuality(_effectiveQuality);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _onCreated(TesseraController c) async {
     _controller = c;
     await game.registerDefs(c);
     c.setLight(game.light);
-    c.setQuality(game.quality);
+    c.setQuality(_effectiveQuality);
     c.setTiming(game.timing);
 
     c.onResize = (w, h) {
@@ -261,6 +329,20 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
       appBar: AppBar(
         title: Text(game.title),
         actions: [
+          IconButton(
+            tooltip: sharedShadowMode.value == TesseraShadowMode.map
+                ? 'Shadow-mapped (tap for blob shadows)'
+                : 'Blob shadows (tap for shadow mapping)',
+            icon: Icon(sharedShadowMode.value == TesseraShadowMode.map
+                ? Icons.wb_sunny
+                : Icons.wb_sunny_outlined),
+            onPressed: !_ready
+                ? null
+                : () => sharedShadowMode.value =
+                    sharedShadowMode.value == TesseraShadowMode.map
+                        ? TesseraShadowMode.blob
+                        : TesseraShadowMode.map,
+          ),
           IconButton(
             tooltip: _autoplay ? 'Pause auto-play' : 'Auto-play',
             icon: Icon(_autoplay ? Icons.pause : Icons.smart_toy_outlined),

@@ -7,6 +7,8 @@ struct FrameUniform {
     float4   ambient;      // rgb ambient
     float4   light_color;  // rgb color, a = intensity
     float4   camera_pos;   // xyz eye position, w unused
+    float4x4 light_vp;     // world -> light clip (shadow map)
+    float4   shadow_params;// x enable, y 1/resolution, z const bias, w slope bias
 };
 struct VSOut {
     float4 position [[position]];
@@ -33,10 +35,36 @@ static inline float cel_ramp(float ndl) {
     return (lower + soft) / bands;
 }
 
+// Directional shadow-map visibility: project into light clip space, 3x3 PCF
+// with a slope-scaled bias (tuned at board scale against acne/peter-panning).
+// Returns 1 when unshadowed / mapping disabled / outside the fitted map.
+static float shadow_visibility(float3 world_pos, float ndl,
+                               constant FrameUniform& frame,
+                               depth2d<float> smap, sampler ssamp) {
+    if (frame.shadow_params.x < 0.5) return 1.0;
+    float4 lp = frame.light_vp * float4(world_pos, 1.0);
+    float3 p = lp.xyz / lp.w;
+    float2 uv = float2(0.5 + 0.5 * p.x, 0.5 - 0.5 * p.y);
+    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 ||
+        p.z <= 0.0 || p.z >= 1.0) return 1.0;
+    float bias  = max(frame.shadow_params.z, frame.shadow_params.w * (1.0 - ndl));
+    float texel = frame.shadow_params.y;
+    float ref   = p.z - bias;
+    float lit = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            float d = smap.sample(ssamp, uv + float2(dx, dy) * texel);
+            lit += ref <= d ? 1.0 : 0.0;
+        }
+    return lit / 9.0;
+}
+
 fragment float4 fs_main(VSOut in [[stage_in]],
                         constant FrameUniform& frame [[buffer(0)]],
                         texture2d<float> tex [[texture(0)]],
-                        sampler samp [[sampler(0)]])
+                        depth2d<float> shadow_map [[texture(1)]],
+                        sampler samp [[sampler(0)]],
+                        sampler shadow_samp [[sampler(1)]])
 {
     float3 n = normalize(in.normal);
     float3 L = normalize(-frame.light_dir.xyz);
@@ -47,9 +75,10 @@ fragment float4 fs_main(VSOut in [[stage_in]],
 
     float ndl   = max(dot(n, L), 0.0);
     float ramp  = cel_ramp(ndl);
+    float vis   = shadow_visibility(in.world_pos, ndl, frame, shadow_map, shadow_samp);
 
     float3 ambient = srgb_to_linear(frame.ambient.rgb);
-    float3 direct  = frame.light_color.rgb * frame.light_color.a * ramp;
+    float3 direct  = frame.light_color.rgb * frame.light_color.a * ramp * vis;
     float3 lit     = albedo * (ambient + direct);
 
     // Subtle Fresnel rim to lift silhouettes off the background.

@@ -15,6 +15,7 @@
 // via channel) → dispose.
 
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:ffi';
 import 'dart:io' show Platform;
 
@@ -39,6 +40,7 @@ class TesseraController {
   TesseraController._(this._channel, this._engine) {
     _channel.setMethodCallHandler(_handleNativeCall);
     _installOperationCallback();
+    _installEventCallback();
   }
 
   final MethodChannel _channel;
@@ -73,6 +75,54 @@ class TesseraController {
       return true;
     });
   }
+
+  // Engine event plumbing. The native tick thread emits typed events into a
+  // fixed ring; a NativeCallable.listener callback (registered at attach, before
+  // the render loop starts) marshals a wake-up onto this isolate, where the ring
+  // is drained and re-emitted on [events]. The callback's event pointer is only
+  // a wake-up signal — delivery is asynchronous, so the slot may already be
+  // recycled; the drain never loses anything between wake-ups.
+  NativeCallable<t.TesseraEventNative>? _eventCallback;
+  final _events = StreamController<TesseraEvent>.broadcast();
+
+  void _installEventCallback() {
+    final cb = NativeCallable<t.TesseraEventNative>.listener(_onEngineEvent);
+    _eventCallback = cb;
+    _engine.setEventCallback(cb.nativeFunction, nullptr);
+  }
+
+  void _onEngineEvent(Pointer<t.TesseraEvent> ev, Pointer<Void> user) {
+    // Never dereference `ev` (recycled ring slot); drain the ring instead.
+    if (_disposed || _events.isClosed) return;
+    for (final e in _engine.drainEvents()) {
+      _events.add(TesseraEvent(
+        type: e.type >= 0 && e.type < TesseraEventType.values.length
+            ? TesseraEventType.values[e.type]
+            : TesseraEventType.none,
+        subject: e.subject >= 0 && e.subject < TesseraEventSubject.values.length
+            ? TesseraEventSubject.values[e.subject]
+            : TesseraEventSubject.none,
+        subjectId: e.subjectId,
+        time: e.time,
+        x: e.coordX,
+        y: e.coordY,
+        value: e.value,
+      ));
+    }
+  }
+
+  /// Broadcast stream of typed engine events — dice contacts and settles, hop
+  /// landings, waypoint handoffs, spawns/removals, card flips and deals, camera
+  /// arrival, operation completion — for sound, haptics and FX sync. Events fire
+  /// on the engine's tick thread and are delivered asynchronously onto this
+  /// isolate (the one the controller lives on), in emission order. Listen any
+  /// time; events emitted while nobody listens are discarded (broadcast
+  /// semantics). Closed by [dispose].
+  Stream<TesseraEvent> get events => _events.stream;
+
+  /// Total engine events dropped to ring overflow since engine creation (0 when
+  /// delivery keeps up). Cumulative; any-thread.
+  int get eventsDropped => _engine.eventsDropped;
 
   /// Called when the view's logical (point) size changes — on first layout and
   /// on every resize / orientation change. The engine has already been resized,
@@ -238,6 +288,23 @@ class TesseraController {
     return id;
   }
 
+  /// Register a TrueType/OpenType font from raw file bytes; the engine bakes
+  /// ASCII + Latin-1 glyphs at [pixelHeight] texels into a GPU atlas. Returns
+  /// its def id (0 = failure). Referenced by [TesseraLabel.font]; place labels
+  /// via [setScene].
+  int registerFont(Uint8List ttf, {double pixelHeight = 48}) {
+    final bytes = calloc<Uint8>(ttf.length);
+    bytes.asTypedList(ttf.length).setAll(0, ttf);
+    final def = calloc<t.TesseraBytes>();
+    def.ref
+      ..data = bytes.cast<Void>()
+      ..size = ttf.length;
+    final id = _engine.registerFont(def, pixelHeight); // copies the bytes
+    calloc.free(def);
+    calloc.free(bytes);
+    return id;
+  }
+
   /// Set the directional light + ambient.
   void setLight(TesseraLightData light) {
     final l = calloc<t.TesseraLight>();
@@ -251,8 +318,12 @@ class TesseraController {
     calloc.free(l);
   }
 
-  /// Set render quality (shadows, MSAA, resolution scale).
+  /// Set render quality (shadows, MSAA, resolution scale). Unlike the other
+  /// setup calls this one is any-thread on the engine side (mutex-guarded; the
+  /// renderer takes one consistent copy per frame), so it may also be called
+  /// live after [start] — e.g. toggling the shadow mode at runtime.
   void setQuality(TesseraQualityData quality) {
+    if (_disposed) return;
     final q = calloc<t.TesseraQuality>();
     q.ref
       ..shadows = quality.shadows.index
@@ -323,7 +394,21 @@ class TesseraController {
   /// Awaiting lets callers sequence dependent beats — e.g. throw a die, await
   /// it settling, *then* move a piece — instead of pushing both at once.
   /// Ignoring the Future keeps the old fire-and-forget behaviour.
+  ///
+  /// After [dispose] this is a no-op returning an already-completed Future —
+  /// late pushes (e.g. an event handler racing a screen pop) must not reach an
+  /// engine the native view may already be tearing down.
   Future<void> setScene(TesseraScene scene) {
+    if (_disposed) return Future.value();
+    final op = _withNativeScene(scene, (st) => _engine.setState(st));
+    return _awaitOperation(op);
+  }
+
+  /// Marshal [scene] into a native `TesseraState`, run [body] with it, then
+  /// free every allocation (the engine deep-copies whatever it keeps). The
+  /// shared bridge under [setScene], [serializeScene] and replay recording.
+  R _withNativeScene<R>(
+      TesseraScene scene, R Function(Pointer<t.TesseraState> st) body) {
     final tiles = calloc<t.TesseraTilePlacement>(
         scene.tiles.isEmpty ? 1 : scene.tiles.length);
     final ents = calloc<t.TesseraEntityPlacement>(
@@ -336,6 +421,12 @@ class TesseraController {
         scene.hands.isEmpty ? 1 : scene.hands.length);
     final dice = calloc<t.TesseraDicePlacement>(
         scene.dice.isEmpty ? 1 : scene.dice.length);
+    final overlays = calloc<t.TesseraOverlayPlacement>(
+        scene.overlays.isEmpty ? 1 : scene.overlays.length);
+    final labels = calloc<t.TesseraLabelPlacement>(
+        scene.labels.isEmpty ? 1 : scene.labels.length);
+    final highlights = calloc<t.TesseraHighlightPlacement>(
+        scene.highlights.isEmpty ? 1 : scene.highlights.length);
     // Per-placement multi-step path buffers, freed after setState (which copies).
     final pathPtrs = <Pointer<NativeType>>[];
 
@@ -446,6 +537,67 @@ class TesseraController {
         p.position[k] = s.position[k];
       }
     }
+    for (var i = 0; i < scene.overlays.length; ++i) {
+      final s = scene.overlays[i];
+      final p = overlays[i];
+      p.coord
+        ..x = s.x
+        ..y = s.y;
+      p
+        ..shape = s.shape.index
+        ..atlas = s.atlas
+        ..pulseS = s.pulseS
+        ..pulseAlphaMin = s.pulseAlphaMin
+        ..pulseAlphaMax = s.pulseAlphaMax
+        ..pulseScaleMin = s.pulseScaleMin
+        ..pulseScaleMax = s.pulseScaleMax;
+      p.uv
+        ..u0 = s.uv[0]
+        ..v0 = s.uv[1]
+        ..u1 = s.uv[2]
+        ..v1 = s.uv[3];
+      for (var k = 0; k < 4; ++k) {
+        p.tint[k] = s.tint[k];
+      }
+    }
+    for (var i = 0; i < scene.labels.length; ++i) {
+      final s = scene.labels[i];
+      final p = labels[i];
+      p
+        ..id = s.id
+        ..font = s.font
+        ..anchor = s.anchor.index
+        ..anchorId = s.anchorId
+        ..size = s.size
+        ..billboard = s.billboard;
+      final bytes = utf8.encode(s.text);
+      final n = bytes.length < 63 ? bytes.length : 63;
+      for (var k = 0; k < n; ++k) {
+        p.text[k] = bytes[k];
+      }
+      p.text[n] = 0;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+      }
+      for (var k = 0; k < 4; ++k) {
+        p.color[k] = s.color[k];
+      }
+    }
+    for (var i = 0; i < scene.highlights.length; ++i) {
+      final s = scene.highlights[i];
+      final p = highlights[i];
+      p
+        ..targetId = s.targetId
+        ..kind = s.kind.index
+        ..style = s.style.index
+        ..thickness = s.thickness
+        ..pulseS = s.pulseS
+        ..pulseMin = s.pulseMin
+        ..pulseMax = s.pulseMax;
+      for (var k = 0; k < 4; ++k) {
+        p.color[k] = s.color[k];
+      }
+    }
 
     final st = calloc<t.TesseraState>();
     st.ref
@@ -463,7 +615,13 @@ class TesseraController {
       ..hands = hands
       ..handCount = scene.hands.length
       ..dice = dice
-      ..diceCount = scene.dice.length;
+      ..diceCount = scene.dice.length
+      ..overlays = overlays
+      ..overlayCount = scene.overlays.length
+      ..labels = labels
+      ..labelCount = scene.labels.length
+      ..highlights = highlights
+      ..highlightCount = scene.highlights.length;
     // `calloc` zeroed the whole TesseraState, so any camera field a case does
     // not touch stays 0 (mode 0 = ORBIT, ids/target/orientation all zero).
     final cam = st.ref.camera;
@@ -543,9 +701,9 @@ class TesseraController {
           ..fov = c.fov;
     }
 
-    // deep-copies; safe to free immediately after. Returns the operation id
-    // whose completion resolves the Future below.
-    final op = _engine.setState(st);
+    // Whatever [body] does (set_state, serialize, replay-append) deep-copies
+    // what it keeps, so everything is safe to free as soon as it returns.
+    final result = body(st);
     calloc.free(st);
     calloc.free(tiles);
     calloc.free(ents);
@@ -553,10 +711,60 @@ class TesseraController {
     calloc.free(draws);
     calloc.free(hands);
     calloc.free(dice);
+    calloc.free(overlays);
+    calloc.free(labels);
+    calloc.free(highlights);
     for (final p in pathPtrs) {
       calloc.free(p);
     }
+    return result;
+  }
+
+  // ---- state serialization, save / undo & replay ----
+
+  /// Serialize [scene] into a self-contained, versioned binary blob (identical
+  /// on every platform) — the building block for save games, undo stacks and
+  /// replays. Pure data: no engine state is read and nothing is pushed; the
+  /// bytes round-trip through [restoreScene]. Any-thread.
+  Uint8List serializeScene(TesseraScene scene) =>
+      _withNativeScene(scene, (st) => _engine.serializeState(st));
+
+  /// Reconstruct the scene stored in [blob] (bytes produced by
+  /// [serializeScene], or one record of a replay) and push it to the engine,
+  /// returning the same completion Future as [setScene]. Throws
+  /// [ArgumentError] on a malformed blob (bad magic/version/truncation). A
+  /// no-op (already-completed Future) after [dispose], like [setScene].
+  Future<void> restoreScene(Uint8List blob) {
+    if (_disposed) return Future.value();
+    final st = _engine.deserializeState(blob);
+    if (st == nullptr) {
+      throw ArgumentError('flutter_tessera: malformed scene blob');
+    }
+    final op = _engine.setState(st);
+    _engine.freeState(st);
     return _awaitOperation(op);
+  }
+
+  /// New empty replay recorder. Append scenes as the game plays, then
+  /// [TesseraReplayRecorder.serialize] the whole container to bytes. Dispose it
+  /// when done recording.
+  TesseraReplayRecorder createReplayRecorder() {
+    final r = _engine.createReplay();
+    if (r == nullptr) {
+      throw StateError('flutter_tessera: replay allocation failed');
+    }
+    return TesseraReplayRecorder._(this, r);
+  }
+
+  /// Open a serialized replay container ([TesseraReplayRecorder.serialize]
+  /// bytes) for playback through this controller. Throws [ArgumentError] on
+  /// malformed input. Dispose the player when done.
+  TesseraReplayPlayer openReplay(Uint8List data) {
+    final r = _engine.openReplay(data);
+    if (r == nullptr) {
+      throw ArgumentError('flutter_tessera: malformed replay data');
+    }
+    return TesseraReplayPlayer._(this, r);
   }
 
   /// A Future that completes when operation [op]'s transition has fully settled,
@@ -603,11 +811,19 @@ class TesseraController {
     _disposed = true;
     onResize = null;
     _channel.setMethodCallHandler(null);
-    // Detach the native callback before it can fire into a torn-down isolate,
-    // then release any Futures still waiting on an operation.
+    // Detach the native callbacks before closing their NativeCallables. The
+    // engine holds its callback slots under a mutex ACROSS delivery, so each
+    // clear below only returns once no tick-thread delivery is still using the
+    // old function pointer — closing the NativeCallable right after is safe
+    // even while the render loop is running. Then release any Futures still
+    // waiting on an operation.
     _engine.setOperationCallback(nullptr, nullptr);
     _opCallback?.close();
     _opCallback = null;
+    _engine.setEventCallback(nullptr, nullptr);
+    _eventCallback?.close();
+    _eventCallback = null;
+    _events.close();
     for (final completers in _opWaiters.values) {
       for (final c in completers) {
         if (!c.isCompleted) c.complete();
@@ -634,6 +850,100 @@ class TesseraController {
     for (var i = 0; i < 4; ++i) {
       p.colorStart[i] = spec.colorStart[i];
       p.colorEnd[i] = spec.colorEnd[i];
+    }
+  }
+}
+
+/// Records a timestamped sequence of scenes into a replay container (see
+/// `tessera_replay_*`). Obtain one from [TesseraController.createReplayRecorder],
+/// [add] a scene per beat as the game plays (each is serialized immediately —
+/// pure data, no engine state involved), [serialize] the whole container to
+/// bytes (write them to a file, ship them, ...), and [dispose] when done. Play
+/// the bytes back later with [TesseraController.openReplay].
+class TesseraReplayRecorder {
+  TesseraReplayRecorder._(this._controller, this._replay);
+
+  final TesseraController _controller;
+  Pointer<t.TesseraReplay> _replay;
+
+  /// Number of recorded scenes (0 after [dispose]).
+  int get length =>
+      _replay == nullptr ? 0 : _controller._engine.replayCount(_replay);
+
+  /// Append [scene] with a host-defined [timestampMs] (e.g. milliseconds since
+  /// recording started; playback order is append order regardless). Returns
+  /// false after [dispose] or on allocation failure.
+  bool add(TesseraScene scene, {int timestampMs = 0}) {
+    if (_replay == nullptr) return false;
+    return _controller._withNativeScene(
+        scene, (st) => _controller._engine.replayAppend(_replay, timestampMs, st));
+  }
+
+  /// Flatten the container to a self-contained byte blob (empty after
+  /// [dispose]).
+  Uint8List serialize() =>
+      _replay == nullptr ? Uint8List(0) : _controller._engine.serializeReplay(_replay);
+
+  /// Release the native container. Safe to call more than once.
+  void dispose() {
+    if (_replay != nullptr) {
+      _controller._engine.freeReplay(_replay);
+      _replay = nullptr;
+    }
+  }
+}
+
+/// Plays back a recorded replay through its controller. Obtain one from
+/// [TesseraController.openReplay]; [play] pushes record [index]'s scene to the
+/// engine (the engine animates the diff from whatever is currently shown, so
+/// stepping records in order replays the game's beats). [dispose] when done.
+class TesseraReplayPlayer {
+  TesseraReplayPlayer._(this._controller, this._replay);
+
+  final TesseraController _controller;
+  Pointer<t.TesseraReplay> _replay;
+
+  /// Number of records (0 after [dispose]).
+  int get length =>
+      _replay == nullptr ? 0 : _controller._engine.replayCount(_replay);
+
+  /// The recorded timestamp (ms, as passed to [TesseraReplayRecorder.add]) of
+  /// record [index], or null when out of range / after [dispose].
+  int? timestampMs(int index) {
+    if (_replay == nullptr) return null;
+    final out = calloc<Uint64>();
+    final st = _controller._engine.replayGet(_replay, index, out);
+    final ts = st == nullptr ? null : out.value;
+    if (st != nullptr) _controller._engine.freeState(st);
+    calloc.free(out);
+    return ts;
+  }
+
+  /// Push record [index]'s scene to the engine, returning the same completion
+  /// Future as [TesseraController.setScene]. Throws [RangeError] on a bad
+  /// index (or a corrupt record) and [StateError] after [dispose]. A no-op
+  /// (already-completed Future) once the *controller* has been disposed — a
+  /// playback loop racing a screen pop must not push into an engine the
+  /// native view may already be tearing down.
+  Future<void> play(int index) {
+    if (_replay == nullptr) {
+      throw StateError('flutter_tessera: replay player disposed');
+    }
+    if (_controller._disposed) return Future.value();
+    final st = _controller._engine.replayGet(_replay, index, nullptr);
+    if (st == nullptr) {
+      throw RangeError('flutter_tessera: no replay record $index');
+    }
+    final op = _controller._engine.setState(st);
+    _controller._engine.freeState(st);
+    return _controller._awaitOperation(op);
+  }
+
+  /// Release the native container. Safe to call more than once.
+  void dispose() {
+    if (_replay != nullptr) {
+      _controller._engine.freeReplay(_replay);
+      _replay = nullptr;
     }
   }
 }

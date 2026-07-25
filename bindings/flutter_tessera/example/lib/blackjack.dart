@@ -4,7 +4,15 @@
 // pure reducer `bjUpdate`, and a `render` that projects a phase into one — or a
 // sequence of — TesseraScenes (the dealer reveal is a multi-scene sequence).
 // The deck is a draw pile; each hand is a world-space fan of cards.
+//
+// Engine features on show: 3D hand-value labels beside each fan whose counters
+// tick the moment a card *physically* lands or flips — the scenes exclude
+// in-flight cards from the shown totals and the engine's CARD_DEALT /
+// CARD_FLIPPED / op-settle events push the fully counted frame when the motion
+// resolves (UI juice only; the reducer never looks at events) — plus a verdict
+// banner and a pulsing glow on the winning hand at round end.
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -229,11 +237,27 @@ class BlackjackController extends GameController<BjState, BjAction> {
   static const int _dealerHand = 2;
   static const int _deckId = 9;
   static const int _fullDeck = 52;
+  static const int _playerLabelId = 901;
+  static const int _dealerLabelId = 902;
+  static const int _verdictLabelId = 903;
 
   final List<int> _cardDef = List<int>.filled(52, 0);
   int _felt = 0;
   int _deckDef = 0;
+  int _font = 0;
   double _camDistance = 13.0;
+
+  // Beat bookkeeping (see _scene and _onEngineEvent): which cards the
+  // previously *built* scene already showed (newcomers are still flying off
+  // the shoe) and which of them it showed face-down (a card leaving that set
+  // is mid-flip), which cards the engine has confirmed as animating, and the
+  // fully counted label frame parked until that motion lands.
+  TesseraController? _engine;
+  StreamSubscription<TesseraEvent>? _events;
+  Set<int> _shownCards = {};
+  Set<int> _shownHidden = {};
+  final Set<int> _airborne = {};
+  TesseraScene? _pendingSettle;
 
   // Corner tiles hugging the dealer/player/deck area, for cameraFitDistance so
   // the cards stay in frame in portrait as well as landscape.
@@ -272,6 +296,22 @@ class BlackjackController extends GameController<BjState, BjAction> {
 
   @override
   Future<void> registerDefs(TesseraController c) async {
+    // Fresh engine: reset the beat bookkeeping and (re)wire the event stream,
+    // cancelling any subscription left from a previous attach. The stream
+    // itself closes when the controller is disposed, which ends the
+    // subscription and drops our reference via onDone.
+    _engine = c;
+    _shownCards = {};
+    _shownHidden = {};
+    _airborne.clear();
+    _pendingSettle = null;
+    await _events?.cancel();
+    _events = c.events.listen(_onEngineEvent, onDone: () {
+      _events = null;
+      if (identical(_engine, c)) _engine = null;
+    });
+
+    _font = await registerGameFont(c);
     _felt = c.registerTileType(
         const TesseraTileType(thickness: 0.2, tint: [0.09, 0.4, 0.24, 1.0]));
     final hidden = c.registerAtlas(await renderCardHidden());
@@ -284,6 +324,42 @@ class BlackjackController extends GameController<BjState, BjAction> {
       _cardDef[id] =
           c.registerCardType(TesseraCardType(visibleAtlas: face, hiddenAtlas: hidden, backAtlas: back));
     }
+  }
+
+  /// UI-side juice only: the engine reports the exact moments cards move, so
+  /// the hand-value counters can tick when a card *lands* rather than when its
+  /// state was pushed. The reducer never looks at these events.
+  void _onEngineEvent(TesseraEvent e) {
+    switch (e.type) {
+      case TesseraEventType.cardDealt:
+      case TesseraEventType.cardFlipped:
+        // The engine confirmed this card is in motion (flying off the shoe or
+        // mid-flip); its beat settles with the operation animating it.
+        if (e.subject == TesseraEventSubject.card) _airborne.add(e.subjectId);
+      case TesseraEventType.opCompleted:
+        _onBeatSettled();
+      default:
+        break;
+    }
+  }
+
+  /// A transition finished. If cards just landed, a fully counted label frame
+  /// is parked, and the engine is genuinely idle (mid-deal the next card's
+  /// scene is already in flight and carries the fresh totals itself), push it:
+  /// a label-only diff the engine resolves as a quick crossfade — everything
+  /// else in the frame is settled and snaps — so the counter ticks exactly on
+  /// the landing.
+  void _onBeatSettled() {
+    if (_airborne.isEmpty) return; // not a card beat (camera nudge, refit…)
+    _airborne.clear();
+    final c = _engine;
+    final settle = _pendingSettle;
+    if (c == null || settle == null || !c.isIdle) return;
+    _pendingSettle = null;
+    // Events already queued when the screen pops can land after the
+    // controller's dispose (onDone nulls _engine only afterwards); setScene
+    // no-ops on a disposed controller, so this late push is safe.
+    unawaited(c.setScene(settle));
   }
 
   @override
@@ -321,6 +397,14 @@ class BlackjackController extends GameController<BjState, BjAction> {
     for (var k = 3; k <= s.dealer.length; k++) {
       out.add(_scene(player: s.player, dealer: s.dealer.take(k).toList(), hideHole: false, deck: deckAt(k)));
     }
+    // …then the verdict beat: the final totals tick in, the verdict banner
+    // fades up, and the winning hand takes on its pulsing glow.
+    out.add(_scene(
+        player: s.player,
+        dealer: s.dealer,
+        hideHole: false,
+        deck: deckAt(s.dealer.length),
+        result: s.result));
     return out;
   }
 
@@ -329,6 +413,7 @@ class BlackjackController extends GameController<BjState, BjAction> {
     required List<int> dealer,
     required bool hideHole,
     required int deck,
+    BjResult? result,
   }) {
     final tiles = <TesseraTile>[];
     for (var z = -5; z <= 5; z++) {
@@ -389,20 +474,146 @@ class BlackjackController extends GameController<BjState, BjAction> {
       ),
     ];
 
-    return TesseraScene(
-      tiles: tiles,
-      cards: cards,
-      hands: hands,
-      cardDraws: deck > 0 ? draws : const [],
-      camera: TesseraCameraPose(
-        focusX: 0,
-        focusY: 0,
-        distance: _camDistance,
-        yaw: 0,
-        pitch: 0.95,
-        fov: 0.72,
-      ),
+    // ---- hand-value labels, ticking on the engine's beat -----------------
+    // A card only counts once it has physically arrived: cards new to this
+    // scene are still flying off the shoe and a card whose hidden flag just
+    // cleared is mid-flip. The shown labels exclude both; the fully counted
+    // variant is parked in [_pendingSettle] and pushed by the event stream
+    // the moment the engine reports the motion landed (_onBeatSettled), so
+    // the counters tick with the 3D cards, not with the state push.
+    final ids = <int>{
+      for (final card in player) card + 1,
+      for (final card in dealer) card + 1,
+    };
+    final hiddenIds = <int>{if (hideHole && dealer.isNotEmpty) dealer[0] + 1};
+    final flying = ids.difference(_shownCards);
+    final flipping = _shownHidden.difference(hiddenIds).intersection(ids);
+    _shownCards = ids;
+    _shownHidden = hiddenIds;
+
+    String labelText(String name, List<int> hand, {required bool settled}) {
+      final counted = <int>[
+        for (final card in hand)
+          if (!hiddenIds.contains(card + 1) &&
+              (settled ||
+                  (!flying.contains(card + 1) && !flipping.contains(card + 1))))
+            card,
+      ];
+      if (counted.isEmpty) return '';
+      final v = handValue(counted);
+      return v.soft ? '$name ${v.total - 10}/${v.total}' : '$name ${v.total}';
+    }
+
+    List<TesseraLabel> handLabels({required bool settled}) {
+      if (_font == 0) return const [];
+      final you = labelText('You', player, settled: settled);
+      final dlr = labelText('Dealer', dealer, settled: settled);
+      return [
+        if (you.isNotEmpty)
+          TesseraLabel(
+            id: _playerLabelId,
+            font: _font,
+            text: you,
+            position: const [-3.6, 1.3, 3.4],
+            size: 0.45,
+            color: const [0.93, 0.96, 1.0, 1.0],
+          ),
+        if (dlr.isNotEmpty)
+          TesseraLabel(
+            id: _dealerLabelId,
+            font: _font,
+            text: dlr,
+            position: const [-3.6, 0.6, -3.2],
+            size: 0.45,
+            color: const [0.93, 0.96, 1.0, 1.0],
+          ),
+        if (result != null)
+          TesseraLabel(
+            id: _verdictLabelId,
+            font: _font,
+            text: _verdictText(result),
+            position: const [0, 1.7, -0.6],
+            size: 0.62,
+            color: _verdictColor(result),
+          ),
+      ];
+    }
+
+    // The winning hand glows on the verdict beat (no glow on a push).
+    final highlights = <TesseraHighlight>[
+      if (result != null)
+        for (final card in _winningHand(result, player, dealer))
+          TesseraHighlight(
+            targetId: card + 1,
+            kind: TesseraHighlightKind.card,
+            style: TesseraHighlightStyle.glow,
+            color: const [1.0, 0.84, 0.35, 1.0],
+            thickness: 14,
+            pulseS: 1.6,
+            pulseMin: 0.55,
+            pulseMax: 1.0,
+          ),
+    ];
+
+    final camera = TesseraCameraPose(
+      focusX: 0,
+      focusY: 0,
+      distance: _camDistance,
+      yaw: 0,
+      pitch: 0.95,
+      fov: 0.72,
     );
+
+    TesseraScene sceneWith(List<TesseraLabel> labels) => TesseraScene(
+          tiles: tiles,
+          cards: cards,
+          hands: hands,
+          cardDraws: deck > 0 ? draws : const [],
+          labels: labels,
+          highlights: highlights,
+          camera: camera,
+        );
+
+    final shown = handLabels(settled: false);
+    final settled = handLabels(settled: true);
+    _pendingSettle = _sameLabelText(shown, settled) ? null : sceneWith(settled);
+    return sceneWith(shown);
+  }
+
+  /// The hand bathed in the winner's glow at round end (none on a push).
+  List<int> _winningHand(BjResult r, List<int> player, List<int> dealer) =>
+      switch (r) {
+        BjResult.playerWin || BjResult.blackjack || BjResult.dealerBust => player,
+        BjResult.dealerWin || BjResult.playerBust => dealer,
+        BjResult.push => const [],
+      };
+
+  /// The 3D verdict banner: short, and ASCII-only (the baked glyph atlas
+  /// covers ASCII + Latin-1, so no em dashes here — unlike [_resultText]).
+  String _verdictText(BjResult r) => switch (r) {
+        BjResult.blackjack => 'Blackjack!',
+        BjResult.playerWin => 'You win',
+        BjResult.dealerWin => 'Dealer wins',
+        BjResult.push => 'Push',
+        BjResult.playerBust => 'Bust!',
+        BjResult.dealerBust => 'Dealer busts',
+      };
+
+  List<double> _verdictColor(BjResult r) => switch (r) {
+        BjResult.blackjack ||
+        BjResult.playerWin ||
+        BjResult.dealerBust =>
+          const [1.0, 0.85, 0.35, 1.0],
+        BjResult.push => const [0.85, 0.88, 0.95, 1.0],
+        BjResult.dealerWin || BjResult.playerBust => const [1.0, 0.5, 0.45, 1.0],
+      };
+
+  static bool _sameLabelText(List<TesseraLabel> a, List<TesseraLabel> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id || a[i].text != b[i].text) return false;
+    }
+    return true;
   }
 
   @override

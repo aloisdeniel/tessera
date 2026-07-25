@@ -1,0 +1,30 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSOut {
+    float4 position [[position]];
+    float2 uv;
+    float2 local;
+    float4 tint;
+    float  shape;
+};
+
+// Tile-overlay decal: a tinted sprite quad, or a procedural filled disc / ring
+// (both with a soft rim so the edge doesn't shimmer).
+fragment float4 fs_main(VSOut in [[stage_in]],
+                        texture2d<float> tex [[texture(0)]],
+                        sampler samp [[sampler(0)]])
+{
+    if (in.shape < 0.5) {                       // SPRITE: textured quad
+        return tex.sample(samp, in.uv) * in.tint;
+    }
+    float2 d = in.local - float2(0.5, 0.5);
+    float  r = length(d) * 2.0;                 // 0 centre, 1 at tile edge
+    float  a;
+    if (in.shape < 1.5) {                       // DISC: filled, soft rim
+        a = smoothstep(0.92, 0.80, r);
+    } else {                                    // RING: soft band near the rim
+        a = smoothstep(0.98, 0.90, r) * smoothstep(0.64, 0.74, r);
+    }
+    return float4(in.tint.rgb, in.tint.a * a);
+}

@@ -1,0 +1,45 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// Depth-only shadow-map pass for GPU-skinned meshes: same palette skinning as
+// skinned.vertex.msl, but only the position reaches light clip space.
+struct ShadowFrameUniform {
+    float4x4 light_vp;
+};
+struct ObjectUniform {
+    float4x4 model;
+    float4   tint;
+    float4   uv_rect;
+};
+struct JointUniform {
+    float4x4 joints[64];
+};
+
+struct VSIn {
+    float3 pos     [[attribute(0)]];
+    uint4  joints  [[attribute(3)]];
+    float4 weights [[attribute(4)]];
+};
+struct VSOut {
+    float4 position [[position]];
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant ShadowFrameUniform& frame [[buffer(0)]],
+                     constant ObjectUniform&      obj   [[buffer(1)]],
+                     constant JointUniform&       sk    [[buffer(2)]])
+{
+    float wsum = in.weights.x + in.weights.y + in.weights.z + in.weights.w;
+    float4x4 skin;
+    if (wsum < 1e-4) {
+        skin = float4x4(1.0);
+    } else {
+        skin = sk.joints[in.joints.x] * in.weights.x
+             + sk.joints[in.joints.y] * in.weights.y
+             + sk.joints[in.joints.z] * in.weights.z
+             + sk.joints[in.joints.w] * in.weights.w;
+    }
+    VSOut out;
+    out.position = frame.light_vp * (obj.model * (skin * float4(in.pos, 1.0)));
+    return out;
+}

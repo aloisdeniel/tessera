@@ -157,6 +157,16 @@ cp -f "$SDL_A" "$NATIVE_OUT/libSDL3.a"
 
 step "ios-simulator: $(lipo -archs "$NATIVE_OUT/libtessera.a")"
 
+# Keep the plugin's bundled shader resources in sync with the engine we just
+# built: the iOS plugin ships assets/shaders/*.msl inside its resource bundle
+# (Sources/flutter_tessera/Resources/shaders), and a stale copy makes engine
+# create fail at pipeline setup (e.g. "failed to load overlay shaders").
+step "Syncing shader resources into the iOS plugin bundle"
+SHADER_RES="$REPO_ROOT/bindings/flutter_tessera/ios/flutter_tessera/Sources/flutter_tessera/Resources/shaders"
+mkdir -p "$SHADER_RES"
+rm -f "$SHADER_RES"/*.msl
+cp -f "$REPO_ROOT"/assets/shaders/*.msl "$SHADER_RES/"
+
 # restore_sdl runs here via the EXIT trap.
 log "Done — SDL submodule reverted; simulator slices in native/ios-simulator/"
 printf '    %s\n' "$NATIVE_OUT"

@@ -266,11 +266,88 @@ class ChessController extends GameController<ChessState, ChessAction> {
         fov: 0.72,
       );
 
+  /// Ground markers, one per square (the engine keys overlays by coord, so a
+  /// legal-move marker simply replaces the last-move tint when they collide):
+  /// the last move keeps a subtle steady tint on its from/to squares, and while
+  /// a piece is selected its legal destinations show as green discs (quiet
+  /// moves) or pulsing red rings (captures, en passant included).
+  List<TesseraOverlay> _overlays(ChessBoard b, Move? lm, int selected) {
+    final bySquare = <int, TesseraOverlay>{};
+    if (lm != null) {
+      for (final sq in [lm.from, lm.to]) {
+        bySquare[sq] = TesseraOverlay(
+          x: fileOf(sq) + boardOff,
+          y: rankOf(sq) + boardOff,
+          tint: const [0.95, 0.82, 0.35, 0.28],
+        );
+      }
+    }
+    if (selected >= 0) {
+      for (final m in genLegal(b.toGameState())) {
+        if (m.from != selected) continue;
+        final capture = b.sq[m.to] != 0 || m.isEp != 0;
+        bySquare[m.to] = capture
+            ? TesseraOverlay(
+                x: fileOf(m.to) + boardOff,
+                y: rankOf(m.to) + boardOff,
+                shape: TesseraOverlayShape.ring,
+                tint: const [0.95, 0.28, 0.22, 0.85],
+                pulseS: 1.2,
+                pulseAlphaMin: 0.5,
+                pulseAlphaMax: 0.9,
+                pulseScaleMin: 0.92,
+                pulseScaleMax: 1.04,
+              )
+            : TesseraOverlay(
+                x: fileOf(m.to) + boardOff,
+                y: rankOf(m.to) + boardOff,
+                tint: const [0.35, 0.85, 0.45, 0.5],
+              );
+      }
+    }
+    return bySquare.values.toList();
+  }
+
+  /// A golden pulsing outline on the selected piece, and a red glow on a king
+  /// standing in check (which is how checkmate reads on a finished board too).
+  /// The two never stack: if the checked king is itself the selection, the
+  /// outline wins — highlights are keyed by (kind, id), one per object.
+  List<TesseraHighlight> _highlights(ChessBoard b, int selected) {
+    final out = <TesseraHighlight>[];
+    if (selected >= 0 && b.ids[selected] != 0) {
+      out.add(TesseraHighlight(
+        targetId: b.ids[selected],
+        color: const [1.0, 0.85, 0.25, 1.0],
+        thickness: 3,
+        pulseS: 1.4,
+        pulseMin: 0.55,
+        pulseMax: 1.0,
+      ));
+    }
+    final g = b.toGameState();
+    final ks = kingSquare(g, b.side);
+    if (ks >= 0 && ks != selected && b.ids[ks] != 0 && isAttacked(g, ks, b.side ^ 1)) {
+      out.add(TesseraHighlight(
+        targetId: b.ids[ks],
+        style: TesseraHighlightStyle.glow,
+        color: const [1.0, 0.25, 0.18, 1.0],
+        pulseS: 1.0,
+        pulseMin: 0.4,
+        pulseMax: 1.0,
+      ));
+    }
+    return out;
+  }
+
   TesseraScene _scene(ChessState s) {
     final b = s.board;
     final lm = switch (s) {
       ChessPlaying(:final lastMove) => lastMove,
       ChessOver(:final lastMove) => lastMove,
+    };
+    final selected = switch (s) {
+      ChessPlaying(:final selected) => selected,
+      ChessOver() => -1,
     };
     final tiles = <TesseraTile>[];
     final entities = <TesseraEntity>[];
@@ -299,6 +376,8 @@ class ChessController extends GameController<ChessState, ChessAction> {
     return TesseraScene(
       tiles: tiles,
       entities: entities,
+      overlays: _overlays(b, lm, selected),
+      highlights: _highlights(b, selected),
       camera: _cameraFor(b.side),
       epoch: b.ply,
     );
@@ -335,18 +414,29 @@ class ChessController extends GameController<ChessState, ChessAction> {
     return [_scene(state)];
   }
 
+  /// Is the side to move's king attacked? (Drives the glow and the status.)
+  bool _inCheck(ChessBoard b) {
+    final g = b.toGameState();
+    final ks = kingSquare(g, b.side);
+    return ks >= 0 && isAttacked(g, ks, b.side ^ 1);
+  }
+
   @override
   String status(ChessState state) {
     final b = state.board;
     if (state is ChessOver) {
       final loser = b.side == white ? 'White' : 'Black';
-      return 'Game over — $loser has no legal move.';
+      final winner = b.side == white ? 'Black' : 'White';
+      return _inCheck(b)
+          ? 'Checkmate — $winner wins.'
+          : 'Stalemate — $loser has no legal move.';
     }
     final side = b.side == white ? 'White' : 'Black';
+    final chk = _inCheck(b) ? '  ·  check!' : '';
     final sel = state is ChessPlaying && state.selected >= 0
         ? '  ·  selected ${_squareName(state.selected)}'
         : '';
-    return '$side to move  ·  ply ${b.ply}$sel';
+    return '$side to move$chk  ·  ply ${b.ply}$sel';
   }
 
   String _squareName(int s) =>

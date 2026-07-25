@@ -1,0 +1,59 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+struct HighlightUniform {
+    float4 color;    // rgb outline/glow color, a = base opacity (fade)
+    float4 params;   // x thickness px, y texel_x, z texel_y, w intensity
+    float4 params2;  // x style: 0 = crisp outline, 1 = soft additive glow
+};
+
+// Selection composite: sample the silhouette mask and either dilate it into a
+// crisp rim just outside the object (outline) or blur it into a soft halo
+// (glow, additive blend in the pipeline). Runs over the post-DoF scene.
+fragment float4 fs_main(VSOut in [[stage_in]],
+                        constant HighlightUniform& u [[buffer(0)]],
+                        texture2d<float> mask [[texture(0)]],
+                        sampler samp [[sampler(0)]])
+{
+    float2 texel = float2(u.params.y, u.params.z);
+    float r = max(u.params.x, 1.0);
+    float center = mask.sample(samp, in.uv).r;
+    float alpha;
+
+    if (u.params2.x < 0.5) {
+        // OUTLINE: max over two rings of taps dilates the silhouette by r
+        // pixels; subtracting the center keeps only the band outside the
+        // object, so the rim hugs the shape and the interior stays untouched.
+        const int N = 16;
+        float m = center;
+        for (int i = 0; i < N; ++i) {
+            float a = (2.0 * 3.14159265) * (float(i) / float(N));
+            float2 dir = float2(cos(a), sin(a));
+            m = max(m, mask.sample(samp, in.uv + dir * r * texel).r);
+            m = max(m, mask.sample(samp, in.uv + dir * (0.5 * r) * texel).r);
+        }
+        alpha = clamp(m - center, 0.0, 1.0);
+    } else {
+        // GLOW: golden-angle spiral disc blur over 2r pixels — brightest on
+        // the object, falling off into a halo around it.
+        const int N = 24;
+        const float golden = 2.39996323;
+        float sum = center;
+        float total = 1.0;
+        for (int i = 0; i < N; ++i) {
+            float t = (float(i) + 0.5) / float(N);
+            float a = golden * float(i);
+            float2 off = float2(cos(a), sin(a)) * (2.0 * r * sqrt(t)) * texel;
+            float wgt = 1.0 - 0.7 * sqrt(t);
+            sum += mask.sample(samp, in.uv + off).r * wgt;
+            total += wgt;
+        }
+        alpha = sum / total;
+    }
+    return float4(u.color.rgb, u.color.a * u.params.w * alpha);
+}

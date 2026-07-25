@@ -1,0 +1,5 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// Depth-only pass: no color targets, depth write happens in the ROP.
+fragment void fs_main() {}

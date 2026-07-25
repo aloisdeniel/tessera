@@ -210,6 +210,14 @@ if want ios; then
   build_ios_slice "ios-device"    "iphoneos"        "arm64"
   build_ios_slice "ios-simulator" "iphonesimulator" "arm64;x86_64"
 
+  # Keep the iOS plugin's bundled shader resources in sync with the engine:
+  # a stale Resources/shaders copy makes engine create fail at pipeline setup.
+  step "Syncing shader resources into the iOS plugin bundle"
+  SHADER_RES="$REPO_ROOT/bindings/flutter_tessera/ios/flutter_tessera/Sources/flutter_tessera/Resources/shaders"
+  mkdir -p "$SHADER_RES"
+  rm -f "$SHADER_RES"/*.msl
+  cp -f "$REPO_ROOT"/assets/shaders/*.msl "$SHADER_RES/"
+
   step "Assembling xcframeworks"
   XCF_OUT="$FT_NATIVE/xcframeworks"
   mkdir -p "$XCF_OUT"
