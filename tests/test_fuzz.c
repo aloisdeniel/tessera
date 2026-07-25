@@ -247,6 +247,52 @@ int main(void) {
         CHECK(tessera_last_error(e) != NULL);
     }
 
+    /* ---- batch: state-blob / replay deserialization fuzz ------------------ */
+    {
+        /* a valid blob must reconstruct and go straight through set_state */
+        TesseraTilePlacement tiles[1] = { { .coord = {0, 0}, .tile_def = tile_id } };
+        TesseraEntityPlacement ents[1] = { { .id = 5, .def = ent_id, .coord = {0, 0} } };
+        TesseraState s = {
+            .tiles = tiles, .tile_count = 1,
+            .entities = ents, .entity_count = 1,
+            .camera = { .distance = 6, .yaw = 0.4f, .pitch = 0.7f, .fov = 0.9f },
+        };
+        size_t n = tessera_state_serialize(&s, NULL, 0);
+        CHECK(n > 0);
+        uint8_t* blob = (uint8_t*)malloc(n);
+        CHECK(blob != NULL);
+        CHECK(tessera_state_serialize(&s, blob, n) == n);
+        TesseraState* d = tessera_state_deserialize(blob, n);
+        CHECK(d != NULL);
+        if (d) { tessera_set_state(e, d); tessera_state_free(d); }
+        pump(e, "deserialized-set-state");
+
+        /* truncations, bit flips and raw garbage must be rejected cleanly */
+        CHECK(tessera_state_deserialize(NULL, n) == NULL);
+        for (size_t len = 0; len < n; ++len)
+            CHECK(tessera_state_deserialize(blob, len) == NULL);
+        uint32_t rng = 0xBEEFu;
+        uint8_t junk[256];
+        for (int it = 0; it < 200; ++it) {
+            size_t len = 1 + (rng % sizeof junk);
+            for (size_t i = 0; i < len; ++i) {
+                rng = rng * 1664525u + 1013904223u;
+                junk[i] = (uint8_t)(rng >> 24);
+            }
+            TesseraState* g = tessera_state_deserialize(junk, len);
+            if (g) tessera_state_free(g);       /* garbage may not parse; never crash */
+            CHECK(tessera_replay_open(junk, len) == NULL);
+        }
+        for (size_t i = 0; i < n; ++i) {        /* single-bit flips over the blob */
+            blob[i] ^= (uint8_t)(1u << (i % 8));
+            TesseraState* g = tessera_state_deserialize(blob, n);
+            if (g) tessera_state_free(g);
+            blob[i] ^= (uint8_t)(1u << (i % 8));
+        }
+        free(blob);
+        pump(e, "deserialize-fuzz");
+    }
+
     /* ---- batch: register calls with NULL defs ----------------------------- */
     CHECK(tessera_register_atlas(e, NULL) == 0);
     CHECK(tessera_register_tile_def(e, NULL) == 0);

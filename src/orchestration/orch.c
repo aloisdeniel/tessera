@@ -11,10 +11,19 @@
 #include "engine.h"
 #include "scene/scene.h"
 #include "anim/skeleton.h"
+#include "dice/dice.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Board tile nearest a world point (inverse of ts_grid_to_world), for the
+ * coord field of emitted engine events. */
+static TesseraCoord orch_event_coord(const vec3 p) {
+    TesseraCoord c = { (int32_t)lroundf(p[0] / TS_TILE_SIZE),
+                       (int32_t)lroundf(p[2] / TS_TILE_SIZE) };
+    return c;
+}
 
 #define TS_HOP_HEIGHT 0.6f
 #define TS_TILE_RISE  0.4f   /* tiles rise from below / sink to below by this */
@@ -23,6 +32,10 @@
  * (the logical pos stays put, so shadows/picking are unaffected). Kept clear of
  * the blob-shadow plane (y=0.02) so the base doesn't z-fight the shadow either. */
 #define TS_ENTITY_LIFT 0.035f
+/* Overlay decals float between the blob-shadow plane (y=0.02) and the entity
+ * lift, so they never z-fight the tile top; shadows composite on top of them
+ * (blobs draw later; neither pass writes depth). */
+#define TS_OVERLAY_LIFT 0.028f
 
 /* ---- card constants ---- */
 #define TS_CARD_FLIP_S   0.32f    /* visible<->hidden crossfade duration       */
@@ -50,6 +63,9 @@ void ts_orch_destroy(struct TsOrch* o) {
     free(o->entities);
     free(o->tiles);
     free(o->cards);
+    free(o->overlays);
+    free(o->labels);
+    free(o->highlights);
     free(o);
 }
 
@@ -87,6 +103,52 @@ static TsCardInst* orch_add_card(struct TsOrch* o) {
     return inst;
 }
 
+static TsOverlayInst* orch_add_overlay(struct TsOrch* o) {
+    if (o->overlay_count == o->overlay_cap) {
+        size_t nc = o->overlay_cap ? o->overlay_cap * 2 : 8;
+        o->overlays = (TsOverlayInst*)realloc(o->overlays, nc * sizeof(TsOverlayInst));
+        o->overlay_cap = nc;
+    }
+    TsOverlayInst* inst = &o->overlays[o->overlay_count++];
+    memset(inst, 0, sizeof *inst);
+    return inst;
+}
+
+static TsLabelInst* orch_add_label(struct TsOrch* o) {
+    if (o->label_count == o->label_cap) {
+        size_t nc = o->label_cap ? o->label_cap * 2 : 8;
+        o->labels = (TsLabelInst*)realloc(o->labels, nc * sizeof(TsLabelInst));
+        o->label_cap = nc;
+    }
+    TsLabelInst* inst = &o->labels[o->label_count++];
+    memset(inst, 0, sizeof *inst);
+    return inst;
+}
+
+static TsHighlightInst* orch_add_highlight(struct TsOrch* o) {
+    if (o->highlight_count == o->highlight_cap) {
+        size_t nc = o->highlight_cap ? o->highlight_cap * 2 : 8;
+        o->highlights = (TsHighlightInst*)realloc(o->highlights, nc * sizeof(TsHighlightInst));
+        o->highlight_cap = nc;
+    }
+    TsHighlightInst* inst = &o->highlights[o->highlight_count++];
+    memset(inst, 0, sizeof *inst);
+    return inst;
+}
+
+static TsHighlightInst* orch_find_highlight(struct TsOrch* o, uint32_t kind, uint64_t id) {
+    for (size_t i = 0; i < o->highlight_count; ++i)
+        if (o->highlights[i].kind == kind && o->highlights[i].target_id == id)
+            return &o->highlights[i];
+    return NULL;
+}
+
+static TsLabelInst* orch_find_label(struct TsOrch* o, TesseraLabelId id) {
+    for (size_t i = 0; i < o->label_count; ++i)
+        if (o->labels[i].id == id) return &o->labels[i];
+    return NULL;
+}
+
 static TsCardInst* orch_find_card(struct TsOrch* o, uint64_t id, bool is_draw) {
     for (size_t i = 0; i < o->card_count; ++i)
         if (o->cards[i].id == id && o->cards[i].is_draw == is_draw)
@@ -105,6 +167,13 @@ static TsTileInst* orch_find_tile(struct TsOrch* o, TesseraCoord c) {
     for (size_t i = 0; i < o->tile_count; ++i)
         if (o->tiles[i].coord.x == c.x && o->tiles[i].coord.y == c.y)
             return &o->tiles[i];
+    return NULL;
+}
+
+static TsOverlayInst* orch_find_overlay(struct TsOrch* o, TesseraCoord c) {
+    for (size_t i = 0; i < o->overlay_count; ++i)
+        if (o->overlays[i].coord.x == c.x && o->overlays[i].coord.y == c.y)
+            return &o->overlays[i];
     return NULL;
 }
 
@@ -241,6 +310,7 @@ static void entity_spawn(TsEntityInst* inst, const TesseraEntityPlacement* ep,
     inst->to_alpha = 1.0f;
     inst->arc = false;
     inst->removing = false;
+    inst->spawning = true;
     inst->alive = true;
     inst->seg_count = 1;
     inst->seg_index = 0;
@@ -341,6 +411,7 @@ static void entity_remove(TsEntityInst* inst, float remove_s) {
     inst->to_alpha = 0.0f;
     inst->arc = false;
     inst->removing = true;
+    inst->spawning = false;   /* an aborted spawn never reports SPAWNED */
     inst->seg_count = 1;   /* drop any in-flight multi-step path */
     inst->seg_index = 0;
     ts_tween_start(&inst->tween, remove_s, 0.0f, TS_EASE_IN_CUBIC);
@@ -680,6 +751,13 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
         }
         TsCardInst* c = orch_find_card(o, cp->id, false);
         if (c) {
+            /* a hidden<->visible change on a live card starts the flip
+             * crossfade below — surface it as a CARD_FLIPPED event */
+            if (!c->removing && c->hidden != cp->hidden)
+                ts_engine_emit_event(e, TESSERA_EVENT_CARD_FLIPPED,
+                                     TESSERA_EVENT_SUBJECT_CARD, cp->id,
+                                     orch_event_coord(c->pos),
+                                     cp->hidden ? 1.0f : 0.0f);
             if (nh && c->hand != cp->hand) {
                 /* Entering a hand: fly up in front of it, then settle into the
                  * slot, so the card doesn't slice through the ones already
@@ -706,6 +784,9 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
             if (nh) { hand_approach_target(nh, pos, wp); wpp = wp; }
             card_spawn_from(ni, cp->id, cp->def, pos, rot, cp->hidden,
                             thick, src_pos, src_rot, src_hidden, wpp, timing->move_s);
+            ts_engine_emit_event(e, TESSERA_EVENT_CARD_DEALT,
+                                 TESSERA_EVENT_SUBJECT_CARD, cp->id,
+                                 orch_event_coord(src_pos), 0.0f);
         } else {
             card_spawn(ni, cp->id, cp->def, false, pos, rot,
                        cp->hidden, thick, 1, timing->add_s);
@@ -726,9 +807,17 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
             continue;
         }
         TsCardInst* c = orch_find_card(o, dp->id, true);
-        if (c) card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, NULL, 0, timing);
-        else   card_spawn(orch_add_card(o), dp->id, dp->def, true, pos, rot,
-                          dp->top_hidden, thick, dp->count, timing->add_s);
+        if (c) {
+            if (!c->removing && c->hidden != dp->top_hidden)
+                ts_engine_emit_event(e, TESSERA_EVENT_CARD_FLIPPED,
+                                     TESSERA_EVENT_SUBJECT_DRAW, dp->id,
+                                     orch_event_coord(c->pos),
+                                     dp->top_hidden ? 1.0f : 0.0f);
+            card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, NULL, 0, timing);
+        } else {
+            card_spawn(orch_add_card(o), dp->id, dp->def, true, pos, rot,
+                       dp->top_hidden, thick, dp->count, timing->add_s);
+        }
     }
 
     if (seed) return;
@@ -746,6 +835,330 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
                 if (next->cards[j].id == c->id) { present = true; break; }
         }
         if (!present) card_remove(c, timing->remove_s);
+    }
+}
+
+/* ============================================================ overlays */
+/* Effective overlay tint (all-zero => white, matching tiles). */
+static void overlay_tint(const TesseraOverlayPlacement* op, float out[4]) {
+    if (op->tint[0] == 0.0f && op->tint[1] == 0.0f &&
+        op->tint[2] == 0.0f && op->tint[3] == 0.0f) {
+        out[0] = out[1] = out[2] = out[3] = 1.0f;
+        return;
+    }
+    memcpy(out, op->tint, 4 * sizeof(float));
+}
+
+/* Copy the placement's visual + pulse spec onto the instance (the pulse clock
+ * keeps running so a re-emit doesn't restart the breathe mid-cycle). */
+static void overlay_set_spec(TsOverlayInst* v, const TesseraOverlayPlacement* op) {
+    v->coord = op->coord;
+    v->shape = op->shape;
+    v->atlas = op->atlas;
+    v->uv    = op->uv;
+    v->pulse_s         = op->pulse_s;
+    v->pulse_alpha_min = op->pulse_alpha_min;
+    v->pulse_alpha_max = op->pulse_alpha_max;
+    v->pulse_scale_min = op->pulse_scale_min;
+    v->pulse_scale_max = op->pulse_scale_max;
+}
+
+static void overlay_snap(TsOverlayInst* v, const TesseraOverlayPlacement* op) {
+    overlay_set_spec(v, op);
+    float t[4]; overlay_tint(op, t);
+    for (int k = 0; k < 4; ++k) v->from_tint[k] = v->to_tint[k] = v->tint[k] = t[k];
+    v->from_alpha = v->to_alpha = v->alpha = 1.0f;
+    v->pulse_t = 0.0f;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+static void overlay_spawn(TsOverlayInst* v, const TesseraOverlayPlacement* op,
+                          float fade_s) {
+    overlay_snap(v, op);
+    v->from_alpha = 0.0f;
+    v->alpha = 0.0f;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+/* Retarget from the current interpolated tint/alpha (crossfade). An unchanged,
+ * settled re-emit snaps (zero duration) so it doesn't hold the engine busy;
+ * shape/atlas/uv swap immediately (only tint + fade animate). */
+static void overlay_retarget(TsOverlayInst* v, const TesseraOverlayPlacement* op,
+                             float fade_s) {
+    float t[4]; overlay_tint(op, t);
+    bool settled = !v->removing && fabsf(v->alpha - 1.0f) < 1e-3f;
+    for (int k = 0; k < 4 && settled; ++k)
+        if (fabsf(v->tint[k] - t[k]) > 1e-3f) settled = false;
+    overlay_set_spec(v, op);
+    for (int k = 0; k < 4; ++k) { v->from_tint[k] = v->tint[k]; v->to_tint[k] = t[k]; }
+    v->from_alpha = v->alpha;
+    v->to_alpha = 1.0f;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, settled ? 0.0f : fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+static void overlay_remove(TsOverlayInst* v, float fade_s) {
+    for (int k = 0; k < 4; ++k) { v->from_tint[k] = v->tint[k]; v->to_tint[k] = v->tint[k]; }
+    v->from_alpha = v->alpha;
+    v->to_alpha = 0.0f;
+    v->removing = true;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_IN_CUBIC);
+}
+
+/* Diff overlays by coord: added fade in, removed fade out, changed tint
+ * crossfades from the current interpolated value. */
+static void overlay_diff(struct TsOrch* o, const TsSnapshot* next,
+                         const TesseraTiming* timing, bool seed) {
+    size_t n = next ? next->overlay_count : 0;
+
+    if (seed) o->overlay_count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        const TesseraOverlayPlacement* op = &next->overlays[i];
+        if (seed) { overlay_snap(orch_add_overlay(o), op); continue; }
+        TsOverlayInst* v = orch_find_overlay(o, op->coord);
+        if (v) overlay_retarget(v, op, timing->tile_s);
+        else   overlay_spawn(orch_add_overlay(o), op, timing->tile_s);
+    }
+
+    if (seed) return;
+
+    /* live overlays absent from next: begin fade-out */
+    for (size_t i = 0; i < o->overlay_count; ++i) {
+        TsOverlayInst* v = &o->overlays[i];
+        if (v->removing) continue;
+        bool present = false;
+        for (size_t j = 0; j < n; ++j)
+            if (next->overlays[j].coord.x == v->coord.x &&
+                next->overlays[j].coord.y == v->coord.y) { present = true; break; }
+        if (!present) overlay_remove(v, timing->tile_s);
+    }
+}
+
+/* ============================================================ labels */
+/* Effective label color (all-zero => white, matching tiles/overlays). */
+static void label_color(const TesseraLabelPlacement* lp, float out[4]) {
+    if (lp->color[0] == 0.0f && lp->color[1] == 0.0f &&
+        lp->color[2] == 0.0f && lp->color[3] == 0.0f) {
+        out[0] = out[1] = out[2] = out[3] = 1.0f;
+        return;
+    }
+    memcpy(out, lp->color, 4 * sizeof(float));
+}
+
+/* Copy the placement's non-animated spec onto the instance. */
+static void label_set_spec(TsLabelInst* v, const TesseraLabelPlacement* lp) {
+    v->id        = lp->id;
+    v->font      = lp->font;
+    v->anchor    = lp->anchor;
+    v->anchor_id = lp->anchor_id;
+    v->billboard = lp->billboard;
+    v->size      = lp->size > 0.0f ? lp->size : 0.5f;
+}
+
+static void label_snap(TsLabelInst* v, const TesseraLabelPlacement* lp) {
+    label_set_spec(v, lp);
+    memcpy(v->text, lp->text, TESSERA_LABEL_TEXT_CAP);
+    v->text[TESSERA_LABEL_TEXT_CAP - 1] = 0;
+    v->prev_text[0] = 0;
+    v->text_mix = 1.0f;
+    float c[4]; label_color(lp, c);
+    for (int k = 0; k < 4; ++k) v->from_color[k] = v->to_color[k] = v->color[k] = c[k];
+    vec3 off = { lp->position[0], lp->position[1], lp->position[2] };
+    glm_vec3_copy(off, v->from_off);
+    glm_vec3_copy(off, v->to_off);
+    glm_vec3_copy(off, v->off);
+    v->from_alpha = v->to_alpha = v->alpha = 1.0f;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+    ts_tween_start(&v->text_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+static void label_spawn(TsLabelInst* v, const TesseraLabelPlacement* lp, float fade_s) {
+    label_snap(v, lp);
+    v->from_alpha = 0.0f;
+    v->alpha = 0.0f;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+/* Retarget from the current interpolated offset/color/alpha; a text change
+ * crossfades from the currently shown string. An unchanged, settled re-emit
+ * snaps (zero duration) so it never holds the engine busy. */
+static void label_retarget(TsLabelInst* v, const TesseraLabelPlacement* lp, float fade_s) {
+    float c[4]; label_color(lp, c);
+    vec3 off = { lp->position[0], lp->position[1], lp->position[2] };
+    bool text_changed = strncmp(v->text, lp->text, TESSERA_LABEL_TEXT_CAP - 1) != 0;
+
+    bool settled = !v->removing && fabsf(v->alpha - 1.0f) < 1e-3f &&
+                   ts_tween_done(&v->text_tween) && !text_changed;
+    for (int k = 0; k < 4 && settled; ++k)
+        if (fabsf(v->color[k] - c[k]) > 1e-3f) settled = false;
+    if (settled) {
+        vec3 d;
+        glm_vec3_sub(off, v->off, d);
+        if (glm_vec3_norm2(d) > 1e-6f) settled = false;
+    }
+
+    label_set_spec(v, lp);
+    if (text_changed) {
+        /* crossfade from what is currently displayed */
+        memcpy(v->prev_text, v->text, TESSERA_LABEL_TEXT_CAP);
+        memcpy(v->text, lp->text, TESSERA_LABEL_TEXT_CAP);
+        v->text[TESSERA_LABEL_TEXT_CAP - 1] = 0;
+        v->text_mix = 0.0f;
+        ts_tween_start(&v->text_tween, fade_s, 0.0f, TS_EASE_IN_OUT_CUBIC);
+    }
+    for (int k = 0; k < 4; ++k) { v->from_color[k] = v->color[k]; v->to_color[k] = c[k]; }
+    glm_vec3_copy(v->off, v->from_off);
+    glm_vec3_copy(off, v->to_off);
+    v->from_alpha = v->alpha;
+    v->to_alpha = 1.0f;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, settled ? 0.0f : fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+static void label_remove(TsLabelInst* v, float fade_s) {
+    for (int k = 0; k < 4; ++k) { v->from_color[k] = v->color[k]; v->to_color[k] = v->color[k]; }
+    glm_vec3_copy(v->off, v->from_off);
+    glm_vec3_copy(v->off, v->to_off);
+    v->from_alpha = v->alpha;
+    v->to_alpha = 0.0f;
+    v->removing = true;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_IN_CUBIC);
+}
+
+/* Diff labels by id: added fade in, removed fade out, text/color/offset
+ * changes crossfade/retween from the current interpolated values. */
+static void label_diff(struct TsOrch* o, const TsSnapshot* next,
+                       const TesseraTiming* timing, bool seed) {
+    size_t n = next ? next->label_count : 0;
+
+    if (seed) o->label_count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        const TesseraLabelPlacement* lp = &next->labels[i];
+        if (lp->id == 0 || lp->font == 0) continue;
+        if (seed) { label_snap(orch_add_label(o), lp); continue; }
+        TsLabelInst* v = orch_find_label(o, lp->id);
+        if (v) label_retarget(v, lp, timing->tile_s);
+        else   label_spawn(orch_add_label(o), lp, timing->add_s);
+    }
+
+    if (seed) return;
+
+    /* live labels absent from next: begin fade-out */
+    for (size_t i = 0; i < o->label_count; ++i) {
+        TsLabelInst* v = &o->labels[i];
+        if (v->removing) continue;
+        bool present = false;
+        for (size_t j = 0; j < n; ++j)
+            if (next->labels[j].id == v->id &&
+                next->labels[j].font != 0) { present = true; break; }
+        if (!present) label_remove(v, timing->remove_s);
+    }
+}
+
+/* ============================================================ highlights */
+/* Effective highlight color (all-zero => white, matching overlays/labels). */
+static void highlight_color(const TesseraHighlightPlacement* hp, float out[4]) {
+    if (hp->color[0] == 0.0f && hp->color[1] == 0.0f &&
+        hp->color[2] == 0.0f && hp->color[3] == 0.0f) {
+        out[0] = out[1] = out[2] = out[3] = 1.0f;
+        return;
+    }
+    memcpy(out, hp->color, 4 * sizeof(float));
+}
+
+/* Copy the placement's non-animated spec onto the instance (the pulse clock
+ * keeps running so a re-emit doesn't restart the breathe mid-cycle). */
+static void highlight_set_spec(TsHighlightInst* v, const TesseraHighlightPlacement* hp) {
+    v->kind      = hp->kind;
+    v->target_id = hp->target_id;
+    v->style     = hp->style;
+    v->thickness = hp->thickness;
+    v->pulse_s   = hp->pulse_s;
+    v->pulse_min = hp->pulse_min;
+    v->pulse_max = hp->pulse_max;
+}
+
+static void highlight_snap(TsHighlightInst* v, const TesseraHighlightPlacement* hp) {
+    highlight_set_spec(v, hp);
+    float c[4]; highlight_color(hp, c);
+    for (int k = 0; k < 4; ++k) v->from_color[k] = v->to_color[k] = v->color[k] = c[k];
+    v->from_alpha = v->to_alpha = v->alpha = 1.0f;
+    v->pulse_t = 0.0f;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+static void highlight_spawn(TsHighlightInst* v, const TesseraHighlightPlacement* hp,
+                            float fade_s) {
+    highlight_snap(v, hp);
+    v->from_alpha = 0.0f;
+    v->alpha = 0.0f;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+/* Retarget from the current interpolated color/alpha (crossfade). An unchanged,
+ * settled re-emit snaps (zero duration) so it doesn't hold the engine busy;
+ * style/thickness swap immediately (only color + fade animate). */
+static void highlight_retarget(TsHighlightInst* v, const TesseraHighlightPlacement* hp,
+                               float fade_s) {
+    float c[4]; highlight_color(hp, c);
+    bool settled = !v->removing && fabsf(v->alpha - 1.0f) < 1e-3f;
+    for (int k = 0; k < 4 && settled; ++k)
+        if (fabsf(v->color[k] - c[k]) > 1e-3f) settled = false;
+    highlight_set_spec(v, hp);
+    for (int k = 0; k < 4; ++k) { v->from_color[k] = v->color[k]; v->to_color[k] = c[k]; }
+    v->from_alpha = v->alpha;
+    v->to_alpha = 1.0f;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, settled ? 0.0f : fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+static void highlight_remove(TsHighlightInst* v, float fade_s) {
+    for (int k = 0; k < 4; ++k) { v->from_color[k] = v->color[k]; v->to_color[k] = v->color[k]; }
+    v->from_alpha = v->alpha;
+    v->to_alpha = 0.0f;
+    v->removing = true;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_IN_CUBIC);
+}
+
+/* Diff highlights by (kind, target id): added fade in, removed fade out,
+ * changed color crossfades from the current interpolated value. */
+static void highlight_diff(struct TsOrch* o, const TsSnapshot* next,
+                           const TesseraTiming* timing, bool seed) {
+    size_t n = next ? next->highlight_count : 0;
+
+    if (seed) o->highlight_count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        const TesseraHighlightPlacement* hp = &next->highlights[i];
+        if (hp->target_id == 0) continue;
+        if (seed) { highlight_snap(orch_add_highlight(o), hp); continue; }
+        TsHighlightInst* v = orch_find_highlight(o, hp->kind, hp->target_id);
+        if (v) highlight_retarget(v, hp, timing->tile_s);
+        else   highlight_spawn(orch_add_highlight(o), hp, timing->tile_s);
+    }
+
+    if (seed) return;
+
+    /* live highlights absent from next: begin fade-out */
+    for (size_t i = 0; i < o->highlight_count; ++i) {
+        TsHighlightInst* v = &o->highlights[i];
+        if (v->removing) continue;
+        bool present = false;
+        for (size_t j = 0; j < n; ++j)
+            if (next->highlights[j].kind == v->kind &&
+                next->highlights[j].target_id == v->target_id) { present = true; break; }
+        if (!present) highlight_remove(v, timing->tile_s);
     }
 }
 
@@ -794,6 +1207,9 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
             ts_tween_start(&t->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
         }
         card_diff(o, e, next, timing, true);
+        overlay_diff(o, next, timing, true);
+        label_diff(o, next, timing, true);
+        highlight_diff(o, next, timing, true);
         o->seeded = true;
         free(targets);
         return;
@@ -879,6 +1295,9 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
     }
 
     card_diff(o, e, next, timing, false);
+    overlay_diff(o, next, timing, false);
+    label_diff(o, next, timing, false);
+    highlight_diff(o, next, timing, false);
 
     o->seeded = true;
     free(targets);
@@ -910,7 +1329,7 @@ static void advance_anim(TsEntityInst* inst, float dt) {
 }
 
 /* ----------------------------------------------------------- advance */
-void ts_orch_advance(struct TsOrch* o, float dt) {
+void ts_orch_advance(struct TsOrch* o, TesseraEngine* e, float dt) {
     /* entities */
     for (size_t i = 0; i < o->entity_count;) {
         TsEntityInst* inst = &o->entities[i];
@@ -927,6 +1346,18 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
             inst->from_alpha = inst->to_alpha;
             ts_tween_start(&inst->tween, inst->seg_dur, 0.0f, TS_EASE_OUT_CUBIC);
             if (over > 0.0f) ts_tween_advance(&inst->tween, over);
+            /* segment handoff: the walk just touched down on a waypoint
+             * (from_pos now holds the reached point) */
+            if (e) {
+                TesseraCoord wc = orch_event_coord(inst->from_pos);
+                ts_engine_emit_event(e, TESSERA_EVENT_ENTITY_WAYPOINT_REACHED,
+                                     TESSERA_EVENT_SUBJECT_ENTITY, inst->id,
+                                     wc, (float)inst->seg_index);
+                if (inst->arc)
+                    ts_engine_emit_event(e, TESSERA_EVENT_ENTITY_HOP_LANDED,
+                                         TESSERA_EVENT_SUBJECT_ENTITY, inst->id,
+                                         wc, 0.0f);
+            }
         }
         float p = ts_tween_value01(&inst->tween);
 
@@ -939,11 +1370,29 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
         /* clear the "moving" flag when the whole (possibly multi-step) move
          * completes so the clip crossfades back from walk to idle. */
         if (inst->anim_moving && ts_tween_done(&inst->tween) &&
-            inst->seg_index + 1 >= inst->seg_count)
+            inst->seg_index + 1 >= inst->seg_count) {
             inst->anim_moving = false;
+            /* final touchdown of an arced move (single hop or last step) */
+            if (e && inst->arc)
+                ts_engine_emit_event(e, TESSERA_EVENT_ENTITY_HOP_LANDED,
+                                     TESSERA_EVENT_SUBJECT_ENTITY, inst->id,
+                                     orch_event_coord(inst->to_pos), 0.0f);
+        }
+        /* spawn transition settled */
+        if (inst->spawning && ts_tween_done(&inst->tween)) {
+            inst->spawning = false;
+            if (e)
+                ts_engine_emit_event(e, TESSERA_EVENT_ENTITY_SPAWNED,
+                                     TESSERA_EVENT_SUBJECT_ENTITY, inst->id,
+                                     orch_event_coord(inst->pos), 0.0f);
+        }
         advance_anim(inst, dt);
 
         if (inst->removing && ts_tween_done(&inst->tween)) {
+            if (e)
+                ts_engine_emit_event(e, TESSERA_EVENT_ENTITY_REMOVED,
+                                     TESSERA_EVENT_SUBJECT_ENTITY, inst->id,
+                                     orch_event_coord(inst->pos), 0.0f);
             o->entities[i] = o->entities[o->entity_count - 1];
             o->entity_count--;
             continue;
@@ -980,6 +1429,13 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
             c->from_alpha = c->to_alpha;
             ts_tween_start(&c->tween, c->seg_dur, 0.0f, TS_EASE_OUT_CUBIC);
             if (over > 0.0f) ts_tween_advance(&c->tween, over);
+            /* card segment handoff (multi-step path / hand-approach staging) */
+            if (e)
+                ts_engine_emit_event(e, TESSERA_EVENT_ENTITY_WAYPOINT_REACHED,
+                                     c->is_draw ? TESSERA_EVENT_SUBJECT_DRAW
+                                                : TESSERA_EVENT_SUBJECT_CARD,
+                                     c->id, orch_event_coord(c->from_pos),
+                                     (float)c->seg_index);
         }
         float p = ts_tween_value01(&c->tween);
         glm_vec3_lerp(c->from_pos, c->to_pos, p, c->pos);
@@ -992,6 +1448,62 @@ void ts_orch_advance(struct TsOrch* o, float dt) {
         if (c->removing && ts_tween_done(&c->tween)) {
             o->cards[i] = o->cards[o->card_count - 1];
             o->card_count--;
+            continue;
+        }
+        ++i;
+    }
+
+    /* overlays */
+    for (size_t i = 0; i < o->overlay_count;) {
+        TsOverlayInst* v = &o->overlays[i];
+        ts_tween_advance(&v->tween, dt);
+        float p = ts_tween_value01(&v->tween);
+        for (int k = 0; k < 4; ++k)
+            v->tint[k] = ts_lerpf(v->from_tint[k], v->to_tint[k], p);
+        v->alpha = ts_lerpf(v->from_alpha, v->to_alpha, p);
+        v->pulse_t += dt;   /* free-running; never blocks idle */
+
+        if (v->removing && ts_tween_done(&v->tween)) {
+            o->overlays[i] = o->overlays[o->overlay_count - 1];
+            o->overlay_count--;
+            continue;
+        }
+        ++i;
+    }
+
+    /* labels */
+    for (size_t i = 0; i < o->label_count;) {
+        TsLabelInst* v = &o->labels[i];
+        ts_tween_advance(&v->tween, dt);
+        ts_tween_advance(&v->text_tween, dt);
+        float p = ts_tween_value01(&v->tween);
+        for (int k = 0; k < 4; ++k)
+            v->color[k] = ts_lerpf(v->from_color[k], v->to_color[k], p);
+        glm_vec3_lerp(v->from_off, v->to_off, p, v->off);
+        v->alpha = ts_lerpf(v->from_alpha, v->to_alpha, p);
+        v->text_mix = ts_tween_value01(&v->text_tween);
+
+        if (v->removing && ts_tween_done(&v->tween)) {
+            o->labels[i] = o->labels[o->label_count - 1];
+            o->label_count--;
+            continue;
+        }
+        ++i;
+    }
+
+    /* highlights */
+    for (size_t i = 0; i < o->highlight_count;) {
+        TsHighlightInst* v = &o->highlights[i];
+        ts_tween_advance(&v->tween, dt);
+        float p = ts_tween_value01(&v->tween);
+        for (int k = 0; k < 4; ++k)
+            v->color[k] = ts_lerpf(v->from_color[k], v->to_color[k], p);
+        v->alpha = ts_lerpf(v->from_alpha, v->to_alpha, p);
+        v->pulse_t += dt;   /* free-running; never blocks idle */
+
+        if (v->removing && ts_tween_done(&v->tween)) {
+            o->highlights[i] = o->highlights[o->highlight_count - 1];
+            o->highlight_count--;
             continue;
         }
         ++i;
@@ -1016,11 +1528,25 @@ bool ts_orch_is_idle(const struct TsOrch* o) {
             c->seg_index + 1 < c->seg_count)
             return false;
     }
+    for (size_t i = 0; i < o->overlay_count; ++i) {
+        const TsOverlayInst* v = &o->overlays[i];
+        if (v->removing || !ts_tween_done(&v->tween)) return false;
+    }
+    for (size_t i = 0; i < o->label_count; ++i) {
+        const TsLabelInst* v = &o->labels[i];
+        if (v->removing || !ts_tween_done(&v->tween) ||
+            !ts_tween_done(&v->text_tween)) return false;
+    }
+    for (size_t i = 0; i < o->highlight_count; ++i) {
+        const TsHighlightInst* v = &o->highlights[i];
+        if (v->removing || !ts_tween_done(&v->tween)) return false;
+    }
     return true;
 }
 
 bool ts_orch_has_content(const struct TsOrch* o) {
-    return o->entity_count > 0 || o->tile_count > 0 || o->card_count > 0;
+    return o->entity_count > 0 || o->tile_count > 0 || o->card_count > 0 ||
+           o->overlay_count > 0 || o->label_count > 0 || o->highlight_count > 0;
 }
 
 bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out) {
@@ -1150,6 +1676,8 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
         memset(it, 0, sizeof *it);
         it->mesh = &e->registry.tile_mesh;
         it->texture = ts_registry_atlas_texture(&e->registry, spec->atlas);
+        it->hl_kind = TESSERA_HIGHLIGHT_TILE;
+        it->hl_id = t->id;   /* 0 = unqueryable, never matches a highlight */
 
         float y = tile_cur_y(t);
         float a = tile_cur_alpha(t);
@@ -1198,6 +1726,8 @@ size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
             it->mesh = &e->registry.cube_mesh;
 
         it->texture = ts_registry_atlas_texture(&e->registry, spec->atlas);
+        it->hl_kind = TESSERA_HIGHLIGHT_ENTITY;
+        it->hl_id = inst->id;
 
         /* Skinned meshes carry the skinned vertex format, so they MUST be drawn
          * with the skinned pipeline. Flag the format up front; the renderer skips
@@ -1267,6 +1797,7 @@ size_t ts_orch_build_cards(struct TsOrch* o, TesseraEngine* e,
         TsCardDrawItem* it = &items[w];
         memset(it, 0, sizeof *it);
         it->mesh = &cm->mesh;
+        it->hl_id = c->is_draw ? 0 : c->id;   /* piles are not highlightable */
 
         float base = cm->thickness > 0.0f ? cm->thickness : 0.03f;
         float sy = c->scale * (c->is_draw ? (c->thick / base) : 1.0f);
@@ -1328,6 +1859,147 @@ size_t ts_orch_build_blobs(struct TsOrch* o, TesseraEngine* e,
         float lift_fade = 1.0f / (1.0f + lift * 1.5f);
         b->radius *= (1.0f + lift * 0.4f);
         b->alpha = 0.38f * inst->alpha * lift_fade;
+    }
+    return w;
+}
+
+/* ----------------------------------------------------------- overlays */
+size_t ts_orch_build_overlays(struct TsOrch* o, TesseraEngine* e,
+                              TsArena* arena, TsOverlayItem** out) {
+    (void)e;
+    *out = NULL;
+    if (o->overlay_count == 0) return 0;
+    TsOverlayItem* items = TS_ARENA_ARR(arena, TsOverlayItem, o->overlay_count);
+    if (!items) return 0;
+    *out = items;
+
+    size_t w = 0;
+    for (size_t i = 0; i < o->overlay_count; ++i) {
+        const TsOverlayInst* v = &o->overlays[i];
+
+        float amul = 1.0f, smul = 1.0f;
+        if (v->pulse_s > 0.0f) {
+            /* raised-cosine breathe, starting at the min */
+            float ph = 0.5f - 0.5f * cosf(v->pulse_t * (2.0f * GLM_PIf) / v->pulse_s);
+            if (v->pulse_alpha_max > 0.0f)
+                amul = ts_lerpf(v->pulse_alpha_min, v->pulse_alpha_max, ph);
+            if (v->pulse_scale_max > 0.0f)
+                smul = ts_lerpf(v->pulse_scale_min, v->pulse_scale_max, ph);
+        }
+        float a = v->alpha * v->tint[3] * amul;
+        if (a <= 0.003f || smul <= 0.001f) continue;
+
+        TsOverlayItem* it = &items[w++];
+        vec3 wpos;
+        ts_grid_to_world(v->coord.x, v->coord.y, wpos);
+        it->center[0] = wpos[0];
+        it->center[1] = TS_OVERLAY_LIFT;   /* just above the tile top, below pieces */
+        it->center[2] = wpos[2];
+        it->scale = smul;
+        it->shape = v->shape;
+        it->atlas = v->atlas;
+        /* an all-zero uv means "the whole atlas" (and untextured always is) */
+        if (v->atlas == 0 || (v->uv.u0 == 0.0f && v->uv.v0 == 0.0f &&
+                              v->uv.u1 == 0.0f && v->uv.v1 == 0.0f)) {
+            it->uv = (TesseraRect){ 0.0f, 0.0f, 1.0f, 1.0f };
+        } else {
+            it->uv = v->uv;
+        }
+        it->color[0] = v->tint[0];
+        it->color[1] = v->tint[1];
+        it->color[2] = v->tint[2];
+        it->color[3] = a;
+    }
+    return w;
+}
+
+/* ----------------------------------------------------------- labels */
+/* Resolve a label's anchor point against the LIVE interpolated scene (the
+ * same sources the camera FOCUS_* modes track). Returns false when the
+ * anchored object is not live — the label is hidden that frame. */
+static bool label_anchor_pos(struct TsOrch* o, TesseraEngine* e,
+                             const TsLabelInst* v, vec3 out) {
+    switch (v->anchor) {
+    case TESSERA_LABEL_ANCHOR_ENTITY:
+        return ts_orch_entity_pos(o, (TesseraEntityId)v->anchor_id, out);
+    case TESSERA_LABEL_ANCHOR_TILE:
+        return ts_orch_tile_pos(o, (TesseraTileId)v->anchor_id, out);
+    case TESSERA_LABEL_ANCHOR_DICE:
+        return e->dice && ts_dice_pos(e->dice, (TesseraDiceId)v->anchor_id, out);
+    case TESSERA_LABEL_ANCHOR_CARD:
+        return ts_orch_card_pos(o, (TesseraCardId)v->anchor_id, out);
+    case TESSERA_LABEL_ANCHOR_DRAW:
+        return ts_orch_draw_pos(o, (TesseraCardDrawId)v->anchor_id, out);
+    default:
+        glm_vec3_zero(out);
+        return true;                     /* WORLD: offset alone is the point */
+    }
+}
+
+/* ----------------------------------------------------------- highlights */
+size_t ts_orch_build_highlights(struct TsOrch* o, TsArena* arena,
+                                TsHighlightItem** out) {
+    *out = NULL;
+    if (o->highlight_count == 0) return 0;
+    TsHighlightItem* items = TS_ARENA_ARR(arena, TsHighlightItem, o->highlight_count);
+    if (!items) return 0;
+    *out = items;
+
+    size_t w = 0;
+    for (size_t i = 0; i < o->highlight_count; ++i) {
+        const TsHighlightInst* v = &o->highlights[i];
+
+        float imul = 1.0f;
+        if (v->pulse_s > 0.0f && v->pulse_max > 0.0f) {
+            /* raised-cosine breathe, starting at the min */
+            float ph = 0.5f - 0.5f * cosf(v->pulse_t * (2.0f * GLM_PIf) / v->pulse_s);
+            imul = ts_lerpf(v->pulse_min, v->pulse_max, ph);
+        }
+        float a = v->alpha * v->color[3];
+        if (a * imul <= 0.003f) continue;
+
+        TsHighlightItem* it = &items[w++];
+        it->kind = v->kind;
+        it->id = v->target_id;
+        it->style = v->style;
+        it->color[0] = v->color[0];
+        it->color[1] = v->color[1];
+        it->color[2] = v->color[2];
+        it->color[3] = a;
+        it->thickness = v->thickness > 0.0f ? v->thickness : 3.0f;
+        it->intensity = imul;
+    }
+    return w;
+}
+
+size_t ts_orch_build_labels(struct TsOrch* o, TesseraEngine* e,
+                            TsArena* arena, TsLabelItem** out) {
+    *out = NULL;
+    if (o->label_count == 0) return 0;
+    TsLabelItem* items = TS_ARENA_ARR(arena, TsLabelItem, o->label_count);
+    if (!items) return 0;
+    *out = items;
+
+    size_t w = 0;
+    for (size_t i = 0; i < o->label_count; ++i) {
+        TsLabelInst* v = &o->labels[i];
+        float a = v->alpha * v->color[3];
+        if (a <= 0.003f) continue;
+        vec3 base;
+        if (!label_anchor_pos(o, e, v, base)) continue;
+
+        TsLabelItem* it = &items[w++];
+        glm_vec3_add(base, v->off, it->pos);
+        it->size = v->size;
+        it->color[0] = v->color[0];
+        it->color[1] = v->color[1];
+        it->color[2] = v->color[2];
+        it->color[3] = a;
+        it->text_mix = v->text_mix;
+        it->text = v->text;
+        it->prev_text = (v->text_mix < 0.999f && v->prev_text[0]) ? v->prev_text : NULL;
+        it->font = v->font;
+        it->billboard = v->billboard;
     }
     return w;
 }

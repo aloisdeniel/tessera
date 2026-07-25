@@ -108,4 +108,16 @@ if(TESSERA_BUILD_TESTS)
             ${TP} ${TP}/cglm/include)
         add_test(NAME ${name} COMMAND ${name})
     endforeach()
+
+    # FFI binding drift gate: diff the Lua cdef + Dart ffi struct layouts
+    # against the canonical C ABI dump (test_ffi_layout --dump).
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME ffi_binding_drift
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_ffi_bindings.py
+                --dump-tool $<TARGET_FILE:test_ffi_layout>
+                --lua  ${CMAKE_CURRENT_SOURCE_DIR}/bindings/lua/tessera.lua
+                --dart ${CMAKE_CURRENT_SOURCE_DIR}/bindings/dart/lib/src/ffi.dart)
+    endif()
 endif()

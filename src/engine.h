@@ -24,6 +24,10 @@ typedef struct TsDice       TsDice;         /* dice/dice.h — thrown dice */
 
 #define TS_ERR_CAP 512
 
+/* Fixed capacity of the engine event ring (and the per-tick callback stage).
+ * Overflow drops the OLDEST events and bumps ev_dropped. */
+#define TS_EVENT_CAP 256
+
 struct TesseraEngine {
     TesseraConfig config;
     TsLog         log;
@@ -50,11 +54,24 @@ struct TesseraEngine {
 
     TesseraTiming timing;
     TesseraLight  light;
-    TesseraQuality quality;
+    TesseraQuality quality;       /* guarded by state_mutex (set any-thread)   */
+    TesseraQuality quality_frame; /* frame-consistent copy, render thread only */
     TesseraFocus  focus;        /* depth-of-field (off by default) */
+
+    /* directional shadow map (TESSERA_SHADOW_MAP): light matrix fitted to the
+     * scene bounds by the depth pre-pass each frame, consumed by the main pass. */
+    mat4          shadow_vp;
+    bool          shadow_active;      /* a map was rendered this frame */
+    float         shadow_bias_const;  /* sampling biases in normalized depth,  */
+    float         shadow_bias_slope;  /* rescaled from the fitted depth range  */
 
     /* thread-safety for set_state handoff */
     SDL_Mutex*    state_mutex;
+    /* guards the op/event callback slots below AND is held across their
+     * invocation, so tessera_set_*_callback(e, NULL, ...) returning guarantees
+     * no in-flight delivery still uses the old fn (hosts may then release it).
+     * Lock order: cb_mutex may be taken before state_mutex, never after. */
+    SDL_Mutex*    cb_mutex;
     TsStateStore* state;    /* current / target / pending snapshots (M3) */
 
     /* operation tracking: each set_state gets a monotonic id; an operation
@@ -67,6 +84,18 @@ struct TesseraEngine {
     bool                 op_has_inflight;
     TesseraOpCompletedFn op_cb;
     void*                op_cb_user;
+
+    /* typed engine event stream: a fixed ring drained by tessera_poll_events
+     * (any-thread; ev_head/ev_len/ev_dropped guarded by state_mutex) plus a
+     * tick-local stage so the optional callback fires on the tick thread
+     * OUTSIDE the mutex at the end of the tick that emitted the events. */
+    TesseraEvent   ev_ring[TS_EVENT_CAP];
+    uint32_t       ev_head, ev_len;
+    uint32_t       ev_dropped;        /* cumulative overflow drops */
+    TesseraEventFn ev_cb;
+    void*          ev_cb_user;
+    TesseraEvent   ev_stage[TS_EVENT_CAP];
+    uint32_t       ev_stage_len;      /* tick thread only */
 
     TsOrch*       orch;     /* diff + tween instances (M4)               */
     TsFx*         fx;       /* particle systems (M6)                     */
@@ -91,6 +120,11 @@ typedef struct TsDrawItem {
     bool            skinned;
     const mat4*     joints;
     uint32_t        joint_count;
+    /* selection-highlight source tag: which live object produced this item
+     * (hl_kind = TesseraHighlightKind; hl_id 0 = not highlightable). Lets the
+     * highlight post pass re-render matching draws into the silhouette mask. */
+    uint32_t        hl_kind;
+    uint64_t        hl_id;
 } TsDrawItem;
 
 /* Build the frame's draw list into `arena` and return count; *out points at
@@ -100,6 +134,13 @@ size_t ts_scene_build_drawlist(TesseraEngine* e, TsArena* arena, TsDrawItem** ou
 
 /* Set the per-engine last-error string (printf-style). */
 void ts_engine_set_error(TesseraEngine* e, const char* fmt, ...);
+
+/* Emit one typed engine event (tick thread only; called from the advance
+ * paths — orchestrator, dice, camera, op settle). Stamps the engine clock,
+ * pushes into the poll ring (dropping the oldest on overflow) and stages the
+ * event for the end-of-tick callback flush. Cheap: no allocation. */
+void ts_engine_emit_event(TesseraEngine* e, uint32_t type, uint32_t subject,
+                          uint64_t subject_id, TesseraCoord coord, float value);
 
 /* Advance animation clocks + render exactly one frame. */
 void ts_engine_tick(TesseraEngine* e, double dt);
@@ -123,6 +164,19 @@ bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
  * the on-screen renderer and the offscreen capture path. */
 void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
                             SDL_GPURenderPass* pass, uint32_t vp_w, uint32_t vp_h);
+
+/* Render the directional shadow map (its own depth-only render pass) when
+ * quality.shadows == TESSERA_SHADOW_MAP. Must run on `cmd` BEFORE the main
+ * render pass begins; sets e->shadow_active/shadow_vp for record_draws. */
+void ts_engine_shadow_pass(TesseraEngine* e, SDL_GPUCommandBuffer* cmd);
+
+/* Selection outline & glow post pass: for each live highlight, re-render the
+ * flagged object(s) flat into the silhouette mask (at their live interpolated
+ * transforms), then composite a dilated outline / blurred additive glow over
+ * `dst`. Runs AFTER the main pass (and after depth-of-field, so the selection
+ * stays crisp) on the same command buffer. */
+void ts_engine_highlight_pass(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
+                              SDL_GPUTexture* dst, uint32_t w, uint32_t h);
 
 /* Render one frame offscreen at (w,h) and write it to `png_path`. Returns
  * false and sets last-error on failure. Useful for headless golden tests. */

@@ -43,6 +43,9 @@ bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
 
     ts_fx_prepare(e, cmd);
 
+    /* Directional shadow map: its own depth-only pass before the main pass. */
+    ts_engine_shadow_pass(e, cmd);
+
     /* DoF renders the scene offscreen, then blurs into the capture color. */
     bool dof = ts_engine_dof_active(e) && ts_gpu_ensure_scene_target(g, w, h);
 
@@ -65,6 +68,9 @@ bool ts_engine_render_rgba(TesseraEngine* e, uint32_t w, uint32_t h,
         TsDofParams dp; ts_engine_resolve_dof(e, &dp);
         ts_gpu_dof_post(g, cmd, g->scene_color, color, depth, w, h, &dp);
     }
+
+    /* Selection outline/glow: composited after DoF so it stays crisp. */
+    ts_engine_highlight_pass(e, cmd, color, w, h);
 
     SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
     SDL_GPUTextureRegion region = { .texture = color, .w = w, .h = h, .d = 1 };

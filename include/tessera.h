@@ -61,6 +61,7 @@ typedef uint64_t TesseraCardId;   /* live card instance id (0 = invalid)      */
 typedef uint64_t TesseraCardDrawId;/* live card-pile instance id (0 = invalid) */
 typedef uint64_t TesseraHandId;   /* live hand instance id (0 = none/invalid)  */
 typedef uint64_t TesseraDiceId;   /* live die instance id (0 = invalid)        */
+typedef uint64_t TesseraLabelId;  /* live text-label instance id (0 = invalid) */
 typedef uint64_t TesseraOpId;     /* set_state operation id (0 = none/complete) */
 
 typedef enum {
@@ -288,6 +289,117 @@ typedef struct {
     float         card_spacing;
 } TesseraHandPlacement;
 
+/* ---- tile overlays (ground decals) ------------------------------------ */
+/* Built-in overlay shapes. SPRITE samples `atlas`/`uv` across the tile (atlas
+ * 0 => a solid tinted quad); DISC and RING are procedural fills that ignore
+ * the atlas. */
+typedef enum {
+    TESSERA_OVERLAY_SPRITE = 0,
+    TESSERA_OVERLAY_DISC   = 1,
+    TESSERA_OVERLAY_RING   = 2
+} TesseraOverlayShape;
+
+/* A flat decal rendered on top of the tile at `coord` (move-range fills,
+ * threat rings, drop-target highlights, ...). Keyed by `coord` when diffing:
+ * an overlay whose coord newly appears fades in, one that vanishes fades out,
+ * and a tint change crossfades from the currently displayed tint. At most one
+ * overlay per coord. `tint` multiplies the sprite / fills the shape (all-zero
+ * => white).
+ *
+ * Optional pulse: when `pulse_s > 0` the overlay breathes with that period —
+ * its alpha oscillates between `pulse_alpha_min..pulse_alpha_max` (used when
+ * `pulse_alpha_max > 0`) and/or its footprint scales between
+ * `pulse_scale_min..pulse_scale_max` (used when `pulse_scale_max > 0`). */
+typedef struct {
+    TesseraCoord coord;      /* board tile the decal sits on (diff key)     */
+    uint32_t     shape;      /* TesseraOverlayShape                         */
+    TesseraDefId atlas;      /* SPRITE source atlas (0 = untextured/white)  */
+    TesseraRect  uv;         /* SPRITE sub-rect of `atlas`                  */
+    float        tint[4];    /* RGBA multiply (all-zero => white)           */
+    float        pulse_s;    /* breathe period in seconds (<= 0 => steady)  */
+    float        pulse_alpha_min, pulse_alpha_max;
+    float        pulse_scale_min, pulse_scale_max;
+} TesseraOverlayPlacement;
+
+/* ---- world-anchored text labels --------------------------------------- */
+/* What a label is glued to. WORLD anchors at `position` directly; the other
+ * modes anchor to a live object by id (mirroring the camera FOCUS_* modes) and
+ * treat `position` as an offset from that object's LIVE animating transform, so
+ * the label stays glued through moves/hops/throws. */
+typedef enum {
+    TESSERA_LABEL_ANCHOR_WORLD  = 0, /* position is a world point               */
+    TESSERA_LABEL_ANCHOR_ENTITY = 1, /* anchor_id = TesseraEntityId             */
+    TESSERA_LABEL_ANCHOR_TILE   = 2, /* anchor_id = TesseraTileId (non-zero id) */
+    TESSERA_LABEL_ANCHOR_DICE   = 3, /* anchor_id = TesseraDiceId               */
+    TESSERA_LABEL_ANCHOR_CARD   = 4, /* anchor_id = TesseraCardId (single card) */
+    TESSERA_LABEL_ANCHOR_DRAW   = 5  /* anchor_id = TesseraCardDrawId (pile)    */
+} TesseraLabelAnchor;
+
+/* Max label text bytes, including the NUL terminator. */
+#define TESSERA_LABEL_TEXT_CAP 64
+
+/* A 3D text label (scores, HP, dice totals, board coordinates), rendered from
+ * a font registered with tessera_register_font. Keyed by `id` when diffing: a
+ * label that newly appears fades in, one that vanishes fades out, and a text
+ * or color change crossfades from what is currently displayed. `text` is
+ * UTF-8 (ASCII + Latin-1 glyphs are baked; others are skipped), bounded by
+ * TESSERA_LABEL_TEXT_CAP and always NUL-terminated on copy. `size` is the
+ * line height in world units (<= 0 => 0.5). `color` multiplies the glyphs
+ * (all-zero => white). With `billboard` the label always faces the camera;
+ * otherwise it lies flat on the ground plane (+X right, top toward -Z),
+ * lifted a hair like a decal. A label anchored to an object that is not live
+ * is hidden until the object appears. */
+typedef struct {
+    TesseraLabelId id;         /* stable across states; diff key            */
+    TesseraDefId   font;       /* registered font (0 => label is skipped)   */
+    char           text[TESSERA_LABEL_TEXT_CAP]; /* UTF-8, NUL-terminated   */
+    uint32_t       anchor;     /* TesseraLabelAnchor                        */
+    uint64_t       anchor_id;  /* live object id (anchor != WORLD)          */
+    float          position[3];/* world point (WORLD) or offset from anchor */
+    float          size;       /* line height in world units (<=0 => 0.5)   */
+    float          color[4];   /* RGBA multiply (all-zero => white)         */
+    bool           billboard;  /* face the camera each frame                */
+} TesseraLabelPlacement;
+
+/* ---- selection highlights (outline / glow post pass) ------------------ */
+/* What a highlight is attached to, mirroring the camera FOCUS_* / label
+ * anchor object-reference conventions: a live object kind + its instance id. */
+typedef enum {
+    TESSERA_HIGHLIGHT_ENTITY = 0, /* target_id = TesseraEntityId               */
+    TESSERA_HIGHLIGHT_TILE   = 1, /* target_id = TesseraTileId (non-zero id)   */
+    TESSERA_HIGHLIGHT_DICE   = 2, /* target_id = TesseraDiceId                 */
+    TESSERA_HIGHLIGHT_CARD   = 3  /* target_id = TesseraCardId (single card)   */
+} TesseraHighlightKind;
+
+typedef enum {
+    TESSERA_HIGHLIGHT_OUTLINE = 0, /* crisp colored rim hugging the silhouette */
+    TESSERA_HIGHLIGHT_GLOW    = 1  /* soft additive halo over + around it      */
+} TesseraHighlightStyle;
+
+/* A screen-space selection highlight on one live object. The flagged object is
+ * re-rendered into a silhouette mask at its LIVE animating transform each
+ * frame, then composited over the lit scene (after depth-of-field, so the
+ * selection stays crisp) as a dilated outline or a blurred additive glow.
+ * Keyed by (`kind`, `target_id`) when diffing: a highlight that newly appears
+ * fades in, one that vanishes fades out, and a color change crossfades from
+ * the currently displayed color. `color` is RGBA (all-zero => white);
+ * `thickness` is the outline width / glow radius in pixels (<= 0 => default).
+ *
+ * Optional pulse: when `pulse_s > 0` the highlight breathes with that period,
+ * its intensity oscillating between `pulse_min..pulse_max` (used when
+ * `pulse_max > 0`). The pulse animates in the engine and never keeps a
+ * transition from reporting idle. A highlight whose target is not live is
+ * simply not drawn until the object appears. */
+typedef struct {
+    uint64_t target_id;  /* live object id, interpreted per `kind` (diff key) */
+    uint32_t kind;       /* TesseraHighlightKind                              */
+    uint32_t style;      /* TesseraHighlightStyle                             */
+    float    color[4];   /* RGBA (all-zero => white)                          */
+    float    thickness;  /* outline width / glow radius, px (<= 0 => default) */
+    float    pulse_s;    /* breathe period in seconds (<= 0 => steady)        */
+    float    pulse_min, pulse_max; /* intensity range (used when max > 0)     */
+} TesseraHighlightPlacement;
+
 typedef enum {
     TESSERA_CAMERA_ORBIT        = 0, /* grid focus + distance/yaw/pitch (default) */
     TESSERA_CAMERA_MANUAL       = 1, /* eye position + orientation quaternion      */
@@ -335,12 +447,16 @@ typedef struct {
     const TesseraEntityPlacement* entities; size_t entity_count;
     const TesseraEffectPlacement* effects;  size_t effect_count;
     TesseraCamera camera;
-    uint64_t      epoch;        /* optional caller sequence number */
+    uint64_t      epoch;        /* optional caller sequence number; carried in
+                                 * the tessera_state_serialize blob header    */
     /* Appended after epoch so the offsets above stay stable. */
     const TesseraCardPlacement*     cards;      size_t card_count;
     const TesseraCardDrawPlacement* card_draws; size_t card_draw_count;
     const TesseraHandPlacement*     hands;      size_t hand_count;
     const TesseraDicePlacement*     dice;       size_t dice_count;
+    const TesseraOverlayPlacement*  overlays;   size_t overlay_count;
+    const TesseraLabelPlacement*    labels;     size_t label_count;
+    const TesseraHighlightPlacement* highlights; size_t highlight_count;
 } TesseraState;
 
 /* Deep-copies the snapshot; diffs against current; animates transitions.
@@ -371,11 +487,167 @@ TESSERA_API TesseraOpId tessera_last_completed_operation(TesseraEngine* e);
  * completed id. Fired on the tick thread (the thread that drives tessera_tick /
  * the engine-driven render loop), from inside the tick after the transition has
  * gone idle. Do NOT call back into tessera_set_state or other mutating tessera_*
- * from it. Register before starting the render loop. Pass fn = NULL to clear;
- * `user` is handed back verbatim. */
+ * from it. Registering/clearing is any-thread: the slot is mutex-guarded and
+ * held across delivery, so once a call passing fn = NULL returns no in-flight
+ * invocation still uses the old fn (the host may then release it). `user` is
+ * handed back verbatim. */
 typedef void (*TesseraOpCompletedFn)(TesseraOpId op, void* user);
 TESSERA_API void tessera_set_operation_callback(TesseraEngine* e,
                                                 TesseraOpCompletedFn fn, void* user);
+
+/* =======================================================================
+ *  Engine event stream (sound / haptics / FX sync)
+ *
+ *  As transitions animate, the engine emits typed events at the moments a
+ *  host wants to react to — a die striking the felt, a piece landing from a
+ *  hop, a card flipping over. Events accumulate in a fixed-capacity ring the
+ *  host drains with tessera_poll_events (any-thread); an optional callback
+ *  (tessera_set_event_callback) additionally delivers each event on the tick
+ *  thread, mirroring the operation callback. Nothing allocates per event.
+ * ===================================================================== */
+
+typedef enum {
+    TESSERA_EVENT_NONE                    = 0,
+    TESSERA_EVENT_DICE_CONTACT            = 1,  /* die touched the ground; value = impact speed  */
+    TESSERA_EVENT_DICE_SETTLED            = 2,  /* tumble/slide finished; value = face index     */
+    TESSERA_EVENT_ENTITY_HOP_LANDED       = 3,  /* hop-arc touchdown (each hop of a move)        */
+    TESSERA_EVENT_ENTITY_WAYPOINT_REACHED = 4,  /* multi-step segment handoff; value = step no.  */
+    TESSERA_EVENT_ENTITY_SPAWNED          = 5,  /* spawn transition completed                    */
+    TESSERA_EVENT_ENTITY_REMOVED          = 6,  /* removal transition completed (culled)         */
+    TESSERA_EVENT_CARD_FLIPPED            = 7,  /* hidden<->visible flip began; value = hidden   */
+    TESSERA_EVENT_CARD_DEALT              = 8,  /* card spawned off a source pile (deal began)   */
+    TESSERA_EVENT_CAMERA_ARRIVED          = 9,  /* camera tween settled at its goal pose         */
+    TESSERA_EVENT_OP_COMPLETED            = 10  /* set_state operation settled; subject_id = op  */
+} TesseraEventType;
+
+/* What subject_id refers to (the object the event happened to). */
+typedef enum {
+    TESSERA_EVENT_SUBJECT_NONE      = 0,
+    TESSERA_EVENT_SUBJECT_ENTITY    = 1,  /* subject_id = TesseraEntityId   */
+    TESSERA_EVENT_SUBJECT_DICE      = 2,  /* subject_id = TesseraDiceId     */
+    TESSERA_EVENT_SUBJECT_CARD      = 3,  /* subject_id = TesseraCardId     */
+    TESSERA_EVENT_SUBJECT_DRAW      = 4,  /* subject_id = TesseraCardDrawId */
+    TESSERA_EVENT_SUBJECT_CAMERA    = 5,  /* subject_id = 0                 */
+    TESSERA_EVENT_SUBJECT_OPERATION = 6   /* subject_id = TesseraOpId       */
+} TesseraEventSubject;
+
+/* One engine event. `time` is the engine clock (accumulated tick seconds) at
+ * emission. `coord` is the board tile nearest the subject where that is
+ * meaningful (entity hops/waypoints/spawns, dice contacts/settles, cards),
+ * else (0,0). `value` is a small per-type payload (see TesseraEventType). */
+typedef struct {
+    double       time;        /* engine tick time (s)                        */
+    uint64_t     subject_id;  /* object id, interpreted per `subject`        */
+    uint32_t     type;        /* TesseraEventType                            */
+    uint32_t     subject;     /* TesseraEventSubject                         */
+    TesseraCoord coord;       /* board coord where meaningful, else (0,0)    */
+    float        value;       /* small payload (impact speed, face, step...) */
+    uint32_t     reserved;    /* always 0                                    */
+} TesseraEvent;
+
+/* Drain up to `cap` pending events into `out`, oldest first, and return how
+ * many were written (0 = none pending). Consumes what it returns. Any-thread,
+ * lock-protected, no allocation. The engine buffers a bounded number of
+ * events (currently 256); when the ring overflows the OLDEST events are
+ * dropped and the dropped total (tessera_events_dropped) grows — poll at
+ * least once per frame-ish to keep everything. */
+TESSERA_API uint32_t tessera_poll_events(TesseraEngine* e, TesseraEvent* out, uint32_t cap);
+
+/* Total number of events dropped to ring overflow since engine creation
+ * (cumulative; 0 when the host keeps up). Any-thread. */
+TESSERA_API uint32_t tessera_events_dropped(TesseraEngine* e);
+
+/* Callback invoked once per event, in emission order, on the tick thread at
+ * the end of the tick that produced it (outside the engine's state mutex) —
+ * modeled on tessera_set_operation_callback. The TesseraEvent pointer is only
+ * valid for the duration of the call; copy it out if you keep it (async
+ * marshalling layers should poll instead of dereferencing later). Do NOT call
+ * back into tessera_set_state or other mutating tessera_* from it.
+ * Registering/clearing is any-thread: the slot is mutex-guarded and held
+ * across delivery, so once a call passing fn = NULL returns no in-flight
+ * invocation still uses the old fn (the host may then release it). Events are
+ * delivered to the callback in addition to (not instead of) the poll ring. */
+typedef void (*TesseraEventFn)(const TesseraEvent* ev, void* user);
+TESSERA_API void tessera_set_event_callback(TesseraEngine* e,
+                                            TesseraEventFn fn, void* user);
+
+/* =======================================================================
+ *  State serialization, save / undo & replay
+ *
+ *  A TesseraState can be flattened to a self-contained, versioned binary
+ *  blob (little-endian on every platform) and later reconstructed — the
+ *  building block for save games, undo stacks and replays. Serialization is
+ *  pure data: no engine is involved, and the blob carries EVERY state field
+ *  (tiles, entities incl. multi-step move paths, effects, cards incl. paths,
+ *  piles, hands, dice, overlays, labels, highlights, camera, epoch).
+ * ===================================================================== */
+
+/* State blob header constants: magic ("TSST" as stored little-endian) +
+ * format version. tessera_state_deserialize rejects unknown values cleanly. */
+#define TESSERA_STATE_BLOB_MAGIC   0x54535354u  /* bytes "TSST" on disk */
+#define TESSERA_STATE_BLOB_VERSION 1u
+
+/* Serialize `state` into `buf` and return the REQUIRED byte size. Two-call
+ * sizing: call with buf=NULL (or cap=0) to measure, allocate, then call again
+ * with the buffer. When `cap` is smaller than the required size nothing
+ * useful is written (the return value is still the required size). Returns 0
+ * only for a NULL state. The blob starts with a versioned header (magic,
+ * version, total size, then TesseraState.epoch as the caller's sequence
+ * number) so future ABI growth can migrate old blobs. */
+TESSERA_API size_t tessera_state_serialize(const TesseraState* state,
+                                           void* buf, size_t cap);
+
+/* Reconstruct a state from a blob produced by tessera_state_serialize. The
+ * returned TesseraState and every array it points at live in ONE allocation;
+ * free it with tessera_state_free (and nothing else). It is a normal state —
+ * push it straight through tessera_set_state. Returns NULL on any malformed
+ * input (bad magic/version/size, truncated arrays, garbage) without crashing. */
+TESSERA_API TesseraState* tessera_state_deserialize(const void* blob, size_t len);
+
+/* Free a state returned by tessera_state_deserialize / tessera_replay_get. */
+TESSERA_API void tessera_state_free(TesseraState* state);
+
+/* ---- replay: a timestamped sequence of state blobs -------------------- */
+/* Container header constants ("TSRP" as stored little-endian). */
+#define TESSERA_REPLAY_MAGIC   0x50525354u  /* bytes "TSRP" on disk */
+#define TESSERA_REPLAY_VERSION 1u
+
+/* A replay is an in-memory sequence of (timestamp_ms, state blob) records
+ * behind an opaque handle. Record states as a game plays with
+ * tessera_replay_append, flatten the whole container with
+ * tessera_replay_serialize (two-call sizing, same as state blobs) and write
+ * it wherever you like; later tessera_replay_open parses those bytes back and
+ * tessera_replay_get hands each recorded state to tessera_set_state. */
+typedef struct TesseraReplay TesseraReplay;
+
+/* New empty replay (for recording). NULL on allocation failure. */
+TESSERA_API TesseraReplay* tessera_replay_create(void);
+
+/* Parse a serialized replay container. Deep-copies `data`; the caller may
+ * free it immediately. Returns NULL on malformed input without crashing. */
+TESSERA_API TesseraReplay* tessera_replay_open(const void* data, size_t len);
+
+TESSERA_API void tessera_replay_free(TesseraReplay* r);
+
+/* Append one record: `state` is serialized immediately (the caller keeps
+ * ownership of its arrays). `timestamp_ms` is host-defined (e.g. ms since
+ * recording started); playback order is append order. */
+TESSERA_API bool tessera_replay_append(TesseraReplay* r, uint64_t timestamp_ms,
+                                       const TesseraState* state);
+
+/* Number of records. 0 for NULL. */
+TESSERA_API uint32_t tessera_replay_count(const TesseraReplay* r);
+
+/* Reconstruct record `index` (0-based, append order). Optionally writes the
+ * record's timestamp to *out_timestamp_ms. Free the returned state with
+ * tessera_state_free. NULL on a bad index / corrupt record. */
+TESSERA_API TesseraState* tessera_replay_get(const TesseraReplay* r, uint32_t index,
+                                             uint64_t* out_timestamp_ms);
+
+/* Flatten the container to bytes; two-call sizing like
+ * tessera_state_serialize. Returns 0 only for a NULL replay. */
+TESSERA_API size_t tessera_replay_serialize(const TesseraReplay* r,
+                                            void* buf, size_t cap);
 
 /* =======================================================================
  *  Picking / hit-testing (screen ray -> scene)
@@ -511,9 +783,9 @@ TESSERA_API bool tessera_is_idle(TesseraEngine* e);  /* true when no transitions
  * ===================================================================== */
 
 typedef enum {
-    TESSERA_SHADOW_NONE = 0,
-    TESSERA_SHADOW_BLOB = 1,
-    TESSERA_SHADOW_MAP  = 2
+    TESSERA_SHADOW_NONE = 0,   /* no contact shadows                           */
+    TESSERA_SHADOW_BLOB = 1,   /* soft dark decal under each entity (cheapest) */
+    TESSERA_SHADOW_MAP  = 2    /* directional depth map + PCF; suppresses blobs */
 } TesseraShadowMode;
 
 typedef struct {
@@ -529,7 +801,11 @@ typedef struct {
     float ambient[3];
 } TesseraLight;
 
+/* Set render quality. Any-thread (mutex-guarded; the renderer takes one
+ * consistent copy per frame), so hosts may toggle e.g. the shadow mode live. */
 TESSERA_API void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q);
+/* Set the directional light + ambient. Call on the tick/render thread (or
+ * before starting an engine-driven loop), not concurrently with tick. */
 TESSERA_API void tessera_set_light(TesseraEngine* e, const TesseraLight* l);
 
 /* =======================================================================
@@ -638,6 +914,20 @@ typedef struct {
 } TesseraCardDef;
 
 TESSERA_API TesseraDefId tessera_register_card_def(TesseraEngine* e, const TesseraCardDef* def);
+
+/* =======================================================================
+ *  Fonts (world-anchored 3D text labels)
+ *
+ *  Register a TrueType/OpenType font (`ttf` is file bytes or a path, like an
+ *  atlas image); the engine bakes ASCII + Latin-1 glyphs at `pixel_height`
+ *  into a GPU atlas at registration. Labels then reference the returned def
+ *  id from TesseraState.labels (see TesseraLabelPlacement) — everything is
+ *  state-driven. `pixel_height` is the rasterized glyph height in texels
+ *  (<= 0 => 48); pick roughly the label's tallest on-screen pixel size.
+ * ===================================================================== */
+
+TESSERA_API TesseraDefId tessera_register_font(TesseraEngine* e, const TesseraBytes* ttf,
+                                               float pixel_height);
 
 /* =======================================================================
  *  Debug / dev hooks

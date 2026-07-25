@@ -391,7 +391,26 @@ static void ctrl_apply(Game* c, Action a) {
 
 static TesseraDefId d_tile_light, d_tile_dark;
 static TesseraDefId d_piece[2][7];     /* [color][kind] */
+static TesseraDefId d_font;            /* 0 when no system font was found */
 static const char* KIND_CHAR = " PNBRQK";
+
+/* A TrueType font for the board labels (coordinates + turn banner). */
+static const char* find_font_path(void) {
+    static const char* candidates[] = {
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    };
+    const char* env = getenv("TESSERA_FONT");
+    if (env && env[0]) return env;
+    for (size_t i = 0; i < sizeof candidates / sizeof candidates[0]; ++i) {
+        FILE* f = fopen(candidates[i], "rb");
+        if (f) { fclose(f); return candidates[i]; }
+    }
+    return NULL;
+}
 
 static void register_defs(TesseraEngine* e) {
     d_tile_light = tessera_register_tile_def(e, &(TesseraTileDef){
@@ -411,6 +430,12 @@ static void register_defs(TesseraEngine* e) {
         .color_start = {0.85f, 0.85f, 0.9f, 0.75f}, .color_end = {0.5f, 0.5f, 0.55f, 0.0f},
         .blend = TESSERA_BLEND_ALPHA };
     TesseraDefId d_poof = tessera_register_effect_def(e, &(TesseraEffectDef){ .on_remove = poof });
+
+    const char* font_path = find_font_path();
+    d_font = font_path
+        ? tessera_register_font(e, &(TesseraBytes){ .path = font_path }, 56.0f)
+        : 0;
+    if (!d_font) fprintf(stderr, "chess: no font found; labels disabled\n");
 
     for (int color = 0; color < 2; ++color) {
         const float* col = (color == WHITE) ? white_col : black_col;
@@ -455,10 +480,118 @@ static void refit_camera(TesseraEngine* e) {
         g_cam_distance = d;
 }
 
-/* Build a VisualState from the rules state + id grid, and push it. */
-static void build_and_push(TesseraEngine* e, const Game* c) {
+/* Legal-move overlays for the piece on square `sel` (-1 = none): a pulsing
+ * gold ring on the selected square, a green disc on each quiet destination and
+ * a red ring on each capture. Returns the overlay count. */
+static size_t build_overlays(const Game* c, int sel, TesseraOverlayPlacement* out) {
+    if (sel < 0 || c->game_over) return 0;
+    size_t n = 0;
+    out[n++] = (TesseraOverlayPlacement){
+        .coord = { file_of(sel) + BOARD_OFF, rank_of(sel) + BOARD_OFF },
+        .shape = TESSERA_OVERLAY_RING,
+        .tint = { 1.0f, 0.85f, 0.30f, 0.95f },
+        .pulse_s = 1.2f, .pulse_alpha_min = 0.45f, .pulse_alpha_max = 1.0f,
+        .pulse_scale_min = 0.90f, .pulse_scale_max = 1.0f };
+
+    Action moves[256];
+    int nm = gen_legal(&c->state, moves);
+    for (int i = 0; i < nm && n < 64; ++i) {
+        if (moves[i].from != sel) continue;
+        int to = moves[i].to;
+        bool capture = c->state.sq[to] != 0 || moves[i].is_ep;
+        out[n++] = capture
+            ? (TesseraOverlayPlacement){
+                  .coord = { file_of(to) + BOARD_OFF, rank_of(to) + BOARD_OFF },
+                  .shape = TESSERA_OVERLAY_RING,
+                  .tint = { 1.0f, 0.28f, 0.22f, 0.85f } }
+            : (TesseraOverlayPlacement){
+                  .coord = { file_of(to) + BOARD_OFF, rank_of(to) + BOARD_OFF },
+                  .shape = TESSERA_OVERLAY_DISC,
+                  .tint = { 0.30f, 0.95f, 0.45f, 0.55f } };
+    }
+    return n;
+}
+
+/* Selection highlight riding on the selected piece's LIVE entity transform:
+ * white selections get a crisp gold outline, black a cool additive glow, so
+ * both post-pass styles show up in a demo game. Pulsing, like the ring decal. */
+static size_t build_piece_highlights(const Game* c, int sel,
+                                     TesseraHighlightPlacement* out) {
+    if (sel < 0 || c->game_over || !c->ids[sel]) return 0;
+    bool white = piece_color(c->state.sq[sel]) == WHITE;
+    out[0] = (TesseraHighlightPlacement){
+        .target_id = c->ids[sel],
+        .kind  = TESSERA_HIGHLIGHT_ENTITY,
+        .style = white ? TESSERA_HIGHLIGHT_OUTLINE : TESSERA_HIGHLIGHT_GLOW,
+        .thickness = white ? 4.0f : 12.0f,
+        .pulse_s = 1.2f, .pulse_min = 0.55f, .pulse_max = 1.0f };
+    if (white)
+        memcpy(out[0].color, (float[4]){ 1.0f, 0.85f, 0.30f, 0.95f }, sizeof out[0].color);
+    else
+        memcpy(out[0].color, (float[4]){ 0.35f, 0.75f, 1.0f, 0.85f }, sizeof out[0].color);
+    return 1;
+}
+
+/* Text labels: board coordinates along two edges, a turn banner above the
+ * board (its text change crossfades each ply), and a marker glued to each
+ * king's LIVE entity transform (rides along through castling). */
+static size_t build_labels(const Game* c, TesseraLabelPlacement* out) {
+    if (!d_font) return 0;
+    size_t n = 0;
+    for (int f = 0; f < 8; ++f) {              /* files a..h on white's edge */
+        TesseraLabelPlacement* l = &out[n++];
+        *l = (TesseraLabelPlacement){
+            .id = 200 + f, .font = d_font,
+            .position = { (float)(f + BOARD_OFF), 0.30f, (float)(BOARD_OFF - 1) + 0.25f },
+            .size = 0.42f, .color = { 0.85f, 0.82f, 0.72f, 0.9f }, .billboard = true };
+        snprintf(l->text, sizeof l->text, "%c", 'a' + f);
+    }
+    for (int r = 0; r < 8; ++r) {              /* ranks 1..8 on the a-file edge */
+        TesseraLabelPlacement* l = &out[n++];
+        *l = (TesseraLabelPlacement){
+            .id = 210 + r, .font = d_font,
+            .position = { (float)(BOARD_OFF - 1) + 0.25f, 0.30f, (float)(r + BOARD_OFF) },
+            .size = 0.42f, .color = { 0.85f, 0.82f, 0.72f, 0.9f }, .billboard = true };
+        snprintf(l->text, sizeof l->text, "%d", r + 1);
+    }
+    {                                          /* turn banner above the board */
+        TesseraLabelPlacement* l = &out[n++];
+        *l = (TesseraLabelPlacement){
+            .id = 100, .font = d_font,
+            .position = { BOARD_OFF + 3.5f, 3.1f, BOARD_OFF + 3.5f },
+            .size = 0.6f, .color = { 1.0f, 0.85f, 0.35f, 0.95f }, .billboard = true };
+        if (c->game_over)
+            snprintf(l->text, sizeof l->text, "Game over — ply %u", c->state.ply);
+        else
+            snprintf(l->text, sizeof l->text, "Ply %u · %s to move",
+                     c->state.ply + 1, c->state.side == WHITE ? "White" : "Black");
+    }
+    for (int s = 0; s < 64; ++s) {             /* a tag riding on each king */
+        if (piece_kind(c->state.sq[s]) != CHESS_KING || !c->ids[s]) continue;
+        int color = piece_color(c->state.sq[s]);
+        TesseraLabelPlacement* l = &out[n++];
+        *l = (TesseraLabelPlacement){
+            .id = 300 + (TesseraLabelId)color, .font = d_font,
+            .anchor = TESSERA_LABEL_ANCHOR_ENTITY, .anchor_id = c->ids[s],
+            .position = { 0.0f, 2.1f, 0.0f }, .size = 0.34f,
+            .billboard = true };
+        if (color == WHITE)
+            (void)memcpy(l->color, (float[4]){ 0.95f, 0.93f, 0.85f, 0.85f }, sizeof l->color);
+        else
+            (void)memcpy(l->color, (float[4]){ 0.45f, 0.48f, 0.60f, 0.9f }, sizeof l->color);
+        snprintf(l->text, sizeof l->text, "K");
+    }
+    return n;
+}
+
+/* Build a VisualState from the rules state + id grid (with the legal-move
+ * overlays of the piece on `sel`, if any), and push it. */
+static void build_and_push_sel(TesseraEngine* e, const Game* c, int sel) {
     TesseraTilePlacement tiles[64];
     TesseraEntityPlacement ents[32];
+    TesseraOverlayPlacement ovls[64];
+    TesseraLabelPlacement lbls[24];
+    TesseraHighlightPlacement hls[1];
     size_t nt = 0, ne = 0;
 
     for (int r = 0; r < 8; ++r) for (int f = 0; f < 8; ++f) {
@@ -476,13 +609,24 @@ static void build_and_push(TesseraEngine* e, const Game* c) {
             .coord = { file_of(s) + BOARD_OFF, rank_of(s) + BOARD_OFF }, .facing = 0 };
     }
 
+    size_t no = build_overlays(c, sel, ovls);
+    size_t nl = build_labels(c, lbls);
+    size_t nh = build_piece_highlights(c, sel, hls);
+
     TesseraState st = {
         .tiles = tiles, .tile_count = nt,
         .entities = ents, .entity_count = ne,
         .camera = side_camera(c->state.side),
         .epoch = c->state.ply,
+        .overlays = no ? ovls : NULL, .overlay_count = no,
+        .labels = nl ? lbls : NULL, .label_count = nl,
+        .highlights = nh ? hls : NULL, .highlight_count = nh,
     };
     tessera_set_state(e, &st);
+}
+
+static void build_and_push(TesseraEngine* e, const Game* c) {
+    build_and_push_sel(e, c, -1);
 }
 
 /* ===================================================================== *
@@ -527,8 +671,14 @@ static int run_demo(TesseraEngine* e, const char* dir, int max_plies) {
         bool capture = c.state.sq[a.to] != 0 || a.is_ep;
         int side = c.state.side;
 
+        /* "select" the mover: show its legal-move overlays before it moves */
+        build_and_push_sel(e, &c, a.from);
+        settle(e, 0.6);
+        snprintf(path, sizeof path, "%s/chess_%03d_pick.png", dir, i);
+        tessera_capture_png(e, 1280, 800, path);
+
         ctrl_apply(&c, a);
-        build_and_push(e, &c);
+        build_and_push(e, &c);    /* overlays vanish (fade out) with the move */
         settle(e, 0.9);           /* let the slide + any capture poof play out */
 
         snprintf(path, sizeof path, "%s/chess_%03d.png", dir, i);
@@ -600,26 +750,35 @@ int main(int argc, char** argv) {
             else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                      ev.button.button == SDL_BUTTON_LEFT && !c.game_over) {
                 TesseraPick pk;
-                if (!tessera_pick(e, ev.button.x, ev.button.y, &pk) || !pk.hit_tile) { sel = -1; continue; }
+                if (!tessera_pick(e, ev.button.x, ev.button.y, &pk) || !pk.hit_tile) {
+                    if (sel >= 0) { sel = -1; build_and_push(e, &c); }  /* clear overlays */
+                    continue;
+                }
                 int s = coord_to_square(pk.tile);
-                if (s < 0) { sel = -1; continue; }
+                if (s < 0) {
+                    if (sel >= 0) { sel = -1; build_and_push(e, &c); }
+                    continue;
+                }
                 if (sel < 0) {
-                    /* select one of our own pieces */
-                    if (c.state.sq[s] && piece_color(c.state.sq[s]) == c.state.side) sel = s;
+                    /* select one of our own pieces: show its legal-move overlays */
+                    if (c.state.sq[s] && piece_color(c.state.sq[s]) == c.state.side) {
+                        sel = s;
+                        build_and_push_sel(e, &c, sel);
+                    }
                 } else {
                     /* try to move sel -> s if it is legal */
                     Action moves[256]; int n = gen_legal(&c.state, moves);
                     Action chosen; bool found = false;
                     for (int i = 0; i < n; ++i)
                         if (moves[i].from == sel && moves[i].to == s) { chosen = moves[i]; found = true; break; }
+                    sel = -1;
                     if (found) {
                         char ms[8]; move_str(chosen, ms);
                         printf("%s plays %s\n", c.state.side == WHITE ? "white" : "black", ms);
                         ctrl_apply(&c, chosen);
-                        build_and_push(e, &c);
                         if (c.game_over) printf("game over.\n");
                     }
-                    sel = -1;
+                    build_and_push(e, &c);   /* move (or just deselect): overlays fade out */
                 }
             }
             else if (ev.type == SDL_EVENT_KEY_DOWN) {

@@ -749,6 +749,11 @@ static const struct {
 #define DICE_WOB_STIFF 120.0f  /* spring back toward zero offset             */
 #define DICE_WOB_DAMP  13.0f   /* underdamped → a quick decaying jiggle      */
 
+/* Ground contacts slower than this don't emit a DICE_CONTACT event: the
+ * restitution cascade ends in an analytic infinity of ever-tinier bounces the
+ * integrator resolves as near-zero-speed touches — inaudible, so untyped. */
+#define DICE_CONTACT_MIN_SPEED 0.25f
+
 /* Impact skid: each contact also nudges the horizontal path sideways (mostly
  * perpendicular to travel, alternating, plus a little forward) — a damped spring
  * that returns to zero so the die still settles at its requested spot. */
@@ -949,7 +954,14 @@ void ts_dice_clear(TsDice* d, float fade_s) {
             ts_dice_remove(d, d->items[i].id, fade_s);
 }
 
-void ts_dice_advance(TsDice* d, float dt) {
+/* Board tile nearest a world point, for the coord field of dice events. */
+static TesseraCoord dice_event_coord(const float p[3]) {
+    TesseraCoord c = { (int32_t)lroundf(p[0] / TS_TILE_SIZE),
+                       (int32_t)lroundf(p[2] / TS_TILE_SIZE) };
+    return c;
+}
+
+void ts_dice_advance(TsDice* d, TesseraEngine* e, float dt) {
     if (!d) return;
     for (size_t i = 0; i < d->count;) {
         DiceInst* it = &d->items[i];
@@ -962,7 +974,14 @@ void ts_dice_advance(TsDice* d, float dt) {
             ts_tween_vec3(&it->slide_tw, it->slide_from, it->rest_pos, it->pos);
             glm_quat_copy(it->rest_rot, it->rot);
             it->alpha = 1.0f; it->scale = 1.0f;
-            if (ts_tween_done(&it->slide_tw)) { it->sliding = false; it->resting = true; }
+            if (ts_tween_done(&it->slide_tw)) {
+                it->sliding = false;
+                it->resting = true;
+                if (e) ts_engine_emit_event(e, TESSERA_EVENT_DICE_SETTLED,
+                                            TESSERA_EVENT_SUBJECT_DICE, it->id,
+                                            dice_event_coord(it->rest_pos),
+                                            (float)it->face);
+            }
             ++i;
             continue;
         }
@@ -1008,6 +1027,12 @@ void ts_dice_advance(TsDice* d, float dt) {
                     float impact = fabsf(it->vy);
                     it->vy = -it->vy * DICE_RESTITUTION;    /* bounce */
                     it->nbounce++;
+
+                    /* audible ground contact: impact speed as the payload */
+                    if (e && impact > DICE_CONTACT_MIN_SPEED)
+                        ts_engine_emit_event(e, TESSERA_EVENT_DICE_CONTACT,
+                                             TESSERA_EVENT_SUBJECT_DICE, it->id,
+                                             dice_event_coord(it->pos), impact);
 
                     /* spin jolt (wobble) */
                     float k = impact * DICE_WOB_KICK;
@@ -1066,7 +1091,13 @@ void ts_dice_advance(TsDice* d, float dt) {
         it->alpha = ts_lerpf(it->from_alpha, it->to_alpha, f);
         it->scale = ts_lerpf(it->from_scale, it->to_scale, f);
 
-        if (!it->removing && ts_tween_done(&it->throw_tw)) it->resting = true;
+        if (!it->removing && !it->resting && ts_tween_done(&it->throw_tw)) {
+            it->resting = true;
+            if (e) ts_engine_emit_event(e, TESSERA_EVENT_DICE_SETTLED,
+                                        TESSERA_EVENT_SUBJECT_DICE, it->id,
+                                        dice_event_coord(it->rest_pos),
+                                        (float)it->face);
+        }
 
         if (it->removing && ts_tween_done(&it->fade_tw)) {
             d->items[i] = d->items[d->count - 1];
@@ -1253,6 +1284,8 @@ size_t ts_dice_build_drawlist(TsDice* d, TesseraEngine* e, struct TsDrawItem* ds
         di->uv_rect[0] = 0.0f; di->uv_rect[1] = 0.0f;
         di->uv_rect[2] = 1.0f; di->uv_rect[3] = 1.0f;
         di->skinned = false;
+        di->hl_kind = TESSERA_HIGHLIGHT_DICE;
+        di->hl_id = it->id;
     }
     return w;
 }

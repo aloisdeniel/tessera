@@ -19,6 +19,9 @@ typedef struct TsSnapshot {
     TesseraCardDrawPlacement* card_draws; size_t card_draw_count;
     TesseraHandPlacement*     hands;      size_t hand_count;
     TesseraDicePlacement*     dice;       size_t dice_count;
+    TesseraOverlayPlacement*  overlays;   size_t overlay_count;
+    TesseraLabelPlacement*    labels;     size_t label_count;
+    TesseraHighlightPlacement* highlights; size_t highlight_count;
     TesseraCamera camera;
     uint64_t      epoch;
     TesseraOpId   op_id;   /* set_state operation id that produced this snapshot */

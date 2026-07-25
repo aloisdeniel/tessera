@@ -13,12 +13,19 @@ TesseraDefId tessera_register_entity_def(TesseraEngine*, const TesseraEntityDef*
 TesseraDefId tessera_register_effect_def(TesseraEngine*, const TesseraEffectDef* def);
 TesseraDefId tessera_register_dice_def  (TesseraEngine*, const TesseraDiceDef*   def);
 TesseraDefId tessera_register_card_def  (TesseraEngine*, const TesseraCardDef*   def);
+TesseraDefId tessera_register_font      (TesseraEngine*, const TesseraBytes* ttf, float pixel_height);
 ```
 
 (Dice and cards are registered like other defs, then **placed through
 `tessera_set_state`** — see [Dice](#dice--procedural-polyhedral-dice-with-per-face-sprites)
 and [Cards](#cards--flat-textured-cards-piles--hands). Everything is
 state-driven; there is no imperative placement API.)
+
+`tessera_register_font` reads a TrueType/OpenType file (bytes or path, like an
+atlas) and bakes ASCII + Latin-1 glyphs at `pixel_height` texels (`<= 0` ⇒ 48)
+into one GPU atlas. The returned id is referenced by
+`TesseraLabelPlacement.font` — see **Text labels** in `state-model.md` for
+placing world-anchored 3D text through `TesseraState.labels`.
 
 ## `TesseraBytes` — a borrowed byte span
 

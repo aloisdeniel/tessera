@@ -94,6 +94,8 @@ void ts_registry_shutdown(TsRegistry* r) {
             ts_dice_free_model(r->gpu, &d->as.dice);
         if (d->kind == TS_DEF_CARD)
             ts_card_free_model(r->gpu, &d->as.card);
+        if (d->kind == TS_DEF_FONT)
+            ts_font_free(r->gpu, &d->as.font);
     }
     ts_gpu_free_texture(r->gpu, &r->white);
     ts_gpu_free_texture(r->gpu, &r->particle_dot);
@@ -272,6 +274,31 @@ TesseraDefId ts_registry_add_card(TsRegistry* r, const TesseraCardDef* def,
     TsDef* d = (TsDef*)slot;
     d->kind = TS_DEF_CARD;
     d->as.card = model;
+    return (TesseraDefId)h;
+}
+
+TesseraDefId ts_registry_add_font(TsRegistry* r, const TesseraBytes* ttf, float pixel_height,
+                                  char* err, size_t err_sz) {
+    if (!ttf) { snprintf(err, err_sz, "register_font: null font"); return 0; }
+    size_t size = 0;
+    void* bytes = resolve_bytes(ttf, &size);
+    if (!bytes) { snprintf(err, err_sz, "register_font: cannot read font bytes"); return 0; }
+
+    TsFontDef font;
+    bool ok = ts_font_build(r->gpu, r->log, bytes, size, pixel_height, &font, err, err_sz);
+    free(bytes);
+    if (!ok) return 0;
+
+    void* slot;
+    TsHandle h = ts_slotmap_alloc(&r->defs, &slot);
+    if (!h) {
+        ts_font_free(r->gpu, &font);
+        snprintf(err, err_sz, "register_font: registry full");
+        return 0;
+    }
+    TsDef* d = (TsDef*)slot;
+    d->kind = TS_DEF_FONT;
+    d->as.font = font;
     return (TesseraDefId)h;
 }
 

@@ -158,6 +158,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    /* optional second arg: shadow mode (none/blob/map) for the captures */
+    if (argc > 2) {
+        TesseraQuality q = { .shadows = TESSERA_SHADOW_BLOB, .msaa = 1, .render_scale = 1.0f };
+        if (!strcmp(argv[2], "none")) q.shadows = TESSERA_SHADOW_NONE;
+        if (!strcmp(argv[2], "map"))  q.shadows = TESSERA_SHADOW_MAP;
+        tessera_set_quality(e, &q);
+    }
+
     size_t glb_size = 0;
     uint8_t* glb = ts_example_build_bar_glb(&glb_size);
     printf("generated skinned GLB: %zu bytes\n", glb_size);

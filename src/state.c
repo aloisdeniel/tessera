@@ -9,6 +9,9 @@ static size_t ts_align_up(size_t n, size_t align) {
     return (n + (align - 1)) & ~(align - 1);
 }
 
+/* NOTE: src/serialize.c walks the exact same structure to flatten a state to
+ * a versioned blob (and pins every struct sizeof with static asserts). When a
+ * new array/field is added here, extend the wire walk there too. */
 TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     if (!src) return NULL;
 
@@ -26,6 +29,9 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t ncd = src->card_draws ? src->card_draw_count : 0;
     size_t nh  = src->hands      ? src->hand_count      : 0;
     size_t ndi = src->dice       ? src->dice_count      : 0;
+    size_t nov = src->overlays   ? src->overlay_count   : 0;
+    size_t nlb = src->labels     ? src->label_count     : 0;
+    size_t nhl = src->highlights ? src->highlight_count : 0;
 
     /* Entity/card multi-step move paths are caller-owned pointer+count fields;
      * they must be deep-copied into the snapshot block too. Sum their sizes. */
@@ -45,6 +51,9 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t bytes_cd = ncd * sizeof(TesseraCardDrawPlacement);
     size_t bytes_h  = nh  * sizeof(TesseraHandPlacement);
     size_t bytes_di = ndi * sizeof(TesseraDicePlacement);
+    size_t bytes_ov = nov * sizeof(TesseraOverlayPlacement);
+    size_t bytes_lb = nlb * sizeof(TesseraLabelPlacement);
+    size_t bytes_hl = nhl * sizeof(TesseraHighlightPlacement);
 
     /* Pack every array into a single allocation, each segment aligned for its
      * element type. Path storage trails the placement arrays. */
@@ -55,7 +64,10 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t off_cd = ts_align_up(off_c  + bytes_c,  _Alignof(TesseraCardDrawPlacement));
     size_t off_h  = ts_align_up(off_cd + bytes_cd, _Alignof(TesseraHandPlacement));
     size_t off_di = ts_align_up(off_h  + bytes_h,  _Alignof(TesseraDicePlacement));
-    size_t off_ep = ts_align_up(off_di + bytes_di, _Alignof(TesseraCoord));
+    size_t off_ov = ts_align_up(off_di + bytes_di, _Alignof(TesseraOverlayPlacement));
+    size_t off_lb = ts_align_up(off_ov + bytes_ov, _Alignof(TesseraLabelPlacement));
+    size_t off_hl = ts_align_up(off_lb + bytes_lb, _Alignof(TesseraHighlightPlacement));
+    size_t off_ep = ts_align_up(off_hl + bytes_hl, _Alignof(TesseraCoord));
     size_t off_cp = ts_align_up(off_ep + bytes_ep, _Alignof(float));
     size_t total  = off_cp + bytes_cp;
 
@@ -127,6 +139,24 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
             s->dice = (TesseraDicePlacement*)(base + off_di);
             memcpy(s->dice, src->dice, bytes_di);
             s->dice_count = ndi;
+        }
+        if (nov) {
+            s->overlays = (TesseraOverlayPlacement*)(base + off_ov);
+            memcpy(s->overlays, src->overlays, bytes_ov);
+            s->overlay_count = nov;
+        }
+        if (nlb) {
+            s->labels = (TesseraLabelPlacement*)(base + off_lb);
+            memcpy(s->labels, src->labels, bytes_lb);
+            s->label_count = nlb;
+            /* text is an inline bounded array; force NUL termination */
+            for (size_t i = 0; i < nlb; ++i)
+                s->labels[i].text[TESSERA_LABEL_TEXT_CAP - 1] = 0;
+        }
+        if (nhl) {
+            s->highlights = (TesseraHighlightPlacement*)(base + off_hl);
+            memcpy(s->highlights, src->highlights, bytes_hl);
+            s->highlight_count = nhl;
         }
     }
 

@@ -15,10 +15,17 @@ int main(int argc, char** argv) {
     int max_frames = -1;      /* -1 = run until quit */
     bool headless = false;
     const char* shot = NULL;
+    TesseraShadowMode shadows = TESSERA_SHADOW_BLOB;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) max_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--headless")) headless = true;
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
+        else if (!strcmp(argv[i], "--shadows") && i + 1 < argc) {
+            const char* m = argv[++i];
+            if (!strcmp(m, "none"))      shadows = TESSERA_SHADOW_NONE;
+            else if (!strcmp(m, "blob")) shadows = TESSERA_SHADOW_BLOB;
+            else if (!strcmp(m, "map"))  shadows = TESSERA_SHADOW_MAP;
+        }
     }
 
     TesseraConfig cfg = {0};
@@ -36,6 +43,9 @@ int main(int argc, char** argv) {
         return 2;
     }
     fprintf(stderr, "backend: %s\n", tessera_backend_name(e));
+
+    TesseraQuality q = { .shadows = shadows, .msaa = 1, .render_scale = 1.0f };
+    tessera_set_quality(e, &q);
 
     if (shot) {
         bool ok = tessera_capture_png(e, 1280, 720, shot);

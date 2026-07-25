@@ -55,7 +55,16 @@ typedef struct {
     vec4 ambient;     /* rgb ambient, a intensity */
     vec4 light_color; /* rgb, a intensity */
     vec4 camera_pos;  /* xyz eye position, w unused (M7 rim/specular) */
+    /* Directional shadow map (TESSERA_SHADOW_MAP). Appended so shaders that
+     * declare only the prefix above keep working unchanged. */
+    mat4 light_vp;      /* world -> light clip (ortho, fitted per frame) */
+    vec4 shadow_params; /* x enable, y 1/resolution, z const bias, w slope bias */
 } TsFrameUniform;
+
+/* Depth-only pass per-frame uniform (world -> light clip). */
+typedef struct {
+    mat4 light_vp;
+} TsShadowFrameUniform;
 
 /* Per-object uniform. */
 typedef struct {
@@ -63,6 +72,15 @@ typedef struct {
     vec4 tint;
     vec4 uv_rect;   /* remap base UVs into an atlas region (u0,v0,u1,v1) */
 } TsObjectUniform;
+
+/* Per-overlay uniform: a tile decal quad. params.x carries the shape
+ * (TesseraOverlayShape); tint already includes fade + pulse alpha. */
+typedef struct {
+    mat4 model;
+    vec4 tint;
+    vec4 uv_rect;   /* SPRITE atlas remap (u0,v0,u1,v1) */
+    vec4 params;    /* x = shape; yzw unused */
+} TsOverlayUniform;
 
 /* Per-card uniform: three atlas rects (front visible / hidden / back) plus a
  * crossfade factor. Front fragments lerp visible<->hidden by params.x. */
@@ -102,12 +120,37 @@ typedef struct {
     SDL_GPUGraphicsPipeline* mesh_pipeline;   /* static lit mesh (cel/flat) */
     SDL_GPUGraphicsPipeline* skinned_pipeline;/* GPU-skinned mesh (M5)       */
     SDL_GPUGraphicsPipeline* blob_pipeline;   /* blob-shadow decal (M7)      */
+    SDL_GPUGraphicsPipeline* overlay_pipeline;/* tile-overlay decal          */
+    SDL_GPUGraphicsPipeline* text_pipeline;   /* glyph quads (3D labels)     */
     SDL_GPUGraphicsPipeline* particle_add;    /* additive particles (M6)     */
     SDL_GPUGraphicsPipeline* particle_alpha;  /* alpha particles (M6)        */
     SDL_GPUGraphicsPipeline* dof_pipeline;    /* depth-of-field post pass     */
     SDL_GPUGraphicsPipeline* card_pipeline;   /* flat card slab (3-sampler)   */
+    SDL_GPUGraphicsPipeline* shadow_pipeline;        /* depth-only, TesseraVertex   */
+    SDL_GPUGraphicsPipeline* shadow_skinned_pipeline;/* depth-only, TsSkinnedVertex */
+    SDL_GPUGraphicsPipeline* shadow_card_pipeline;   /* depth-only, TsCardVertex    */
+    SDL_GPUGraphicsPipeline* mask_pipeline;         /* flat silhouette, TesseraVertex   */
+    SDL_GPUGraphicsPipeline* mask_skinned_pipeline; /* flat silhouette, TsSkinnedVertex */
+    SDL_GPUGraphicsPipeline* mask_card_pipeline;    /* flat silhouette, TsCardVertex    */
+    SDL_GPUGraphicsPipeline* hl_outline_pipeline;   /* dilate mask -> crisp outline     */
+    SDL_GPUGraphicsPipeline* hl_glow_pipeline;      /* blur mask -> additive glow       */
     SDL_GPUSampler*          linear_sampler;
     SDL_GPUSampler*          point_sampler;   /* nearest, for depth sampling  */
+
+    /* Directional shadow map (TESSERA_SHADOW_MAP): a sampleable depth target
+     * rendered from the light each frame — same DEPTH_STENCIL|SAMPLER pattern
+     * as the DoF depth. `shadow_fallback` is a tiny always-valid depth texture
+     * bound at the shadow slot when mapping is off (never actually sampled). */
+    SDL_GPUTexture* shadow_map;
+    uint32_t        shadow_res;
+    SDL_GPUTexture* shadow_fallback;
+
+    /* Selection-highlight silhouette mask: a single-channel (R8 when the
+     * device supports it) offscreen color target, cached and resized with the
+     * frame like the DoF scene target. */
+    SDL_GPUTexture*      mask_tex;
+    uint32_t             mask_w, mask_h;
+    SDL_GPUTextureFormat mask_format;
 
     int   width, height;
     float pixel_density;
@@ -147,14 +190,38 @@ void ts_build_quad_xz(TesseraVertex** out_v, uint32_t* out_vc,
 /* ---- pipelines (gpu_pipeline.c) ---- */
 bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz);
 bool ts_gpu_create_blob_pipeline(TsGpu* g, char* err, size_t err_sz);       /* M7 */
+bool ts_gpu_create_overlay_pipeline(TsGpu* g, char* err, size_t err_sz);    /* tile decals */
+bool ts_gpu_create_text_pipeline(TsGpu* g, char* err, size_t err_sz);       /* 3D labels   */
 bool ts_gpu_create_particle_pipelines(TsGpu* g, char* err, size_t err_sz);  /* M6 */
 bool ts_gpu_create_skinned_pipeline(TsGpu* g, char* err, size_t err_sz);    /* M5 */
 bool ts_gpu_create_dof_pipeline(TsGpu* g, char* err, size_t err_sz);        /* DoF */
 bool ts_gpu_create_card_pipeline(TsGpu* g, char* err, size_t err_sz);       /* cards */
+bool ts_gpu_create_shadow_pipelines(TsGpu* g, char* err, size_t err_sz);    /* shadow map */
+bool ts_gpu_create_highlight_pipelines(TsGpu* g, char* err, size_t err_sz); /* outline/glow */
 void ts_gpu_release_pipelines(TsGpu* g);
 
 /* Ensure the offscreen scene color target matches (w,h). Returns false on fail. */
 bool ts_gpu_ensure_scene_target(TsGpu* g, uint32_t w, uint32_t h);
+
+/* Ensure the shadow map depth target exists at `res`×`res` (gpu_shadow.c). */
+bool ts_gpu_ensure_shadow_map(TsGpu* g, uint32_t res);
+
+/* Ensure the highlight silhouette mask target matches (w,h) (gpu_highlight.c). */
+bool ts_gpu_ensure_mask_target(TsGpu* g, uint32_t w, uint32_t h);
+
+/* One highlight composite resolved for the post pass (see gpu_highlight.c). */
+typedef struct {
+    float color[4];     /* rgb outline/glow color; a = base opacity (fade) */
+    float thickness_px; /* outline width / glow radius in pixels           */
+    float intensity;    /* pulse modulation (multiplies the alpha)         */
+    bool  glow;         /* true = additive glow, false = crisp outline     */
+} TsHighlightPost;
+
+/* Composite the silhouette `mask` over `dst` as an outline or glow: a
+ * fullscreen pass (dst is loaded, not cleared) that dilates/blurs the mask. */
+void ts_gpu_highlight_post(TsGpu* g, SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* mask,
+                           SDL_GPUTexture* dst, uint32_t w, uint32_t h,
+                           const TsHighlightPost* p);
 
 /* Depth-of-field parameters resolved for a frame (world units + clip planes). */
 typedef struct {

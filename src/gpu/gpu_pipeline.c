@@ -89,7 +89,8 @@ SDL_GPUShader* ts_gpu_load_shader(TsGpu* g, const char* name,
 
 bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz) {
     SDL_GPUShader* vs = ts_gpu_load_shader(g, "mesh", SDL_GPU_SHADERSTAGE_VERTEX, 0, 2);
-    SDL_GPUShader* fs = ts_gpu_load_shader(g, "mesh", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    /* fragment samplers: 0 = albedo, 1 = directional shadow map */
+    SDL_GPUShader* fs = ts_gpu_load_shader(g, "mesh", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
     if (!vs || !fs) {
         snprintf(err, err_sz, "failed to load mesh shaders");
         if (vs) SDL_ReleaseGPUShader(g->device, vs);
@@ -176,10 +177,14 @@ bool ts_gpu_create_pipelines(TsGpu* g, char* err, size_t err_sz) {
     }
 
     if (!ts_gpu_create_blob_pipeline(g, err, err_sz)) return false;
+    if (!ts_gpu_create_overlay_pipeline(g, err, err_sz)) return false;
+    if (!ts_gpu_create_text_pipeline(g, err, err_sz)) return false;
     if (!ts_gpu_create_particle_pipelines(g, err, err_sz)) return false;
     if (!ts_gpu_create_skinned_pipeline(g, err, err_sz)) return false;
     if (!ts_gpu_create_dof_pipeline(g, err, err_sz)) return false;
     if (!ts_gpu_create_card_pipeline(g, err, err_sz)) return false;
+    if (!ts_gpu_create_shadow_pipelines(g, err, err_sz)) return false;
+    if (!ts_gpu_create_highlight_pipelines(g, err, err_sz)) return false;
     return true;
 }
 
@@ -189,17 +194,36 @@ void ts_gpu_release_pipelines(TsGpu* g) {
     if (g->mesh_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->mesh_pipeline);
     if (g->skinned_pipeline)  SDL_ReleaseGPUGraphicsPipeline(g->device, g->skinned_pipeline);
     if (g->blob_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->blob_pipeline);
+    if (g->overlay_pipeline)  SDL_ReleaseGPUGraphicsPipeline(g->device, g->overlay_pipeline);
+    if (g->text_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->text_pipeline);
     if (g->particle_add)      SDL_ReleaseGPUGraphicsPipeline(g->device, g->particle_add);
     if (g->particle_alpha)    SDL_ReleaseGPUGraphicsPipeline(g->device, g->particle_alpha);
     if (g->dof_pipeline)      SDL_ReleaseGPUGraphicsPipeline(g->device, g->dof_pipeline);
     if (g->card_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->card_pipeline);
+    if (g->shadow_pipeline)         SDL_ReleaseGPUGraphicsPipeline(g->device, g->shadow_pipeline);
+    if (g->shadow_skinned_pipeline) SDL_ReleaseGPUGraphicsPipeline(g->device, g->shadow_skinned_pipeline);
+    if (g->shadow_card_pipeline)    SDL_ReleaseGPUGraphicsPipeline(g->device, g->shadow_card_pipeline);
+    if (g->mask_pipeline)           SDL_ReleaseGPUGraphicsPipeline(g->device, g->mask_pipeline);
+    if (g->mask_skinned_pipeline)   SDL_ReleaseGPUGraphicsPipeline(g->device, g->mask_skinned_pipeline);
+    if (g->mask_card_pipeline)      SDL_ReleaseGPUGraphicsPipeline(g->device, g->mask_card_pipeline);
+    if (g->hl_outline_pipeline)     SDL_ReleaseGPUGraphicsPipeline(g->device, g->hl_outline_pipeline);
+    if (g->hl_glow_pipeline)        SDL_ReleaseGPUGraphicsPipeline(g->device, g->hl_glow_pipeline);
     if (g->scene_color)       SDL_ReleaseGPUTexture(g->device, g->scene_color);
+    if (g->shadow_map)        SDL_ReleaseGPUTexture(g->device, g->shadow_map);
+    if (g->shadow_fallback)   SDL_ReleaseGPUTexture(g->device, g->shadow_fallback);
+    if (g->mask_tex)          SDL_ReleaseGPUTexture(g->device, g->mask_tex);
     if (g->linear_sampler)    SDL_ReleaseGPUSampler(g->device, g->linear_sampler);
     if (g->point_sampler)     SDL_ReleaseGPUSampler(g->device, g->point_sampler);
     g->mesh_pipeline = g->skinned_pipeline = g->blob_pipeline = NULL;
+    g->overlay_pipeline = g->text_pipeline = NULL;
     g->particle_add = g->particle_alpha = g->dof_pipeline = NULL;
     g->card_pipeline = NULL;
+    g->shadow_pipeline = g->shadow_skinned_pipeline = g->shadow_card_pipeline = NULL;
+    g->mask_pipeline = g->mask_skinned_pipeline = g->mask_card_pipeline = NULL;
+    g->hl_outline_pipeline = g->hl_glow_pipeline = NULL;
     g->scene_color = NULL; g->scene_w = g->scene_h = 0;
+    g->shadow_map = g->shadow_fallback = NULL; g->shadow_res = 0;
+    g->mask_tex = NULL; g->mask_w = g->mask_h = 0;
     g->linear_sampler = g->point_sampler = NULL;
 }
 
@@ -274,6 +298,131 @@ bool ts_gpu_create_blob_pipeline(TsGpu* g, char* err, size_t err_sz) {
     SDL_ReleaseGPUShader(g->device, fs);
     if (!g->blob_pipeline) {
         snprintf(err, err_sz, "blob pipeline create failed: %s", SDL_GetError());
+        return false;
+    }
+    return true;
+}
+
+/* Tile-overlay pipeline: a textured/tinted (or procedural disc/ring) decal on
+ * the tile top. Same depth discipline as blob shadows: depth-tested against
+ * geometry (pieces occlude it) but no depth write, alpha-blended. */
+bool ts_gpu_create_overlay_pipeline(TsGpu* g, char* err, size_t err_sz) {
+    SDL_GPUShader* vs = ts_gpu_load_shader(g, "overlay", SDL_GPU_SHADERSTAGE_VERTEX, 0, 2);
+    SDL_GPUShader* fs = ts_gpu_load_shader(g, "overlay", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    if (!vs || !fs) {
+        snprintf(err, err_sz, "failed to load overlay shaders");
+        if (vs) SDL_ReleaseGPUShader(g->device, vs);
+        if (fs) SDL_ReleaseGPUShader(g->device, fs);
+        return false;
+    }
+    SDL_GPUVertexBufferDescription vbdesc;
+    SDL_GPUVertexAttribute attrs[3];
+    fill_vertex_input(&vbdesc, attrs);
+
+    SDL_GPUColorTargetDescription color = {
+        .format = g->swapchain_format,
+        .blend_state = {
+            .enable_blend          = true,
+            .src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA,
+            .dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+            .color_blend_op        = SDL_GPU_BLENDOP_ADD,
+            .src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+            .dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE,
+            .alpha_blend_op        = SDL_GPU_BLENDOP_ADD,
+        },
+    };
+    SDL_GPUGraphicsPipelineCreateInfo pci = {
+        .vertex_shader = vs,
+        .fragment_shader = fs,
+        .vertex_input_state = {
+            .vertex_buffer_descriptions = &vbdesc, .num_vertex_buffers = 1,
+            .vertex_attributes = attrs, .num_vertex_attributes = 3,
+        },
+        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+        .rasterizer_state = {
+            .fill_mode = SDL_GPU_FILLMODE_FILL,
+            .cull_mode = SDL_GPU_CULLMODE_NONE,
+            .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
+        },
+        .depth_stencil_state = {
+            .compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL,
+            .enable_depth_test = true,
+            .enable_depth_write = false,
+        },
+        .target_info = {
+            .color_target_descriptions = &color, .num_color_targets = 1,
+            .depth_stencil_format = g->depth_format,
+            .has_depth_stencil_target = true,
+        },
+    };
+    g->overlay_pipeline = SDL_CreateGPUGraphicsPipeline(g->device, &pci);
+    SDL_ReleaseGPUShader(g->device, vs);
+    SDL_ReleaseGPUShader(g->device, fs);
+    if (!g->overlay_pipeline) {
+        snprintf(err, err_sz, "overlay pipeline create failed: %s", SDL_GetError());
+        return false;
+    }
+    return true;
+}
+
+/* Text-label pipeline: alpha-blended glyph quads sampled from a font atlas.
+ * Depth-tested against geometry (LEQUAL, drawn nudged toward the camera so a
+ * label over a piece stays readable) but no depth write; cull none so flat
+ * ground labels read from both sides. */
+bool ts_gpu_create_text_pipeline(TsGpu* g, char* err, size_t err_sz) {
+    SDL_GPUShader* vs = ts_gpu_load_shader(g, "text", SDL_GPU_SHADERSTAGE_VERTEX, 0, 2);
+    SDL_GPUShader* fs = ts_gpu_load_shader(g, "text", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    if (!vs || !fs) {
+        snprintf(err, err_sz, "failed to load text shaders");
+        if (vs) SDL_ReleaseGPUShader(g->device, vs);
+        if (fs) SDL_ReleaseGPUShader(g->device, fs);
+        return false;
+    }
+    SDL_GPUVertexBufferDescription vbdesc;
+    SDL_GPUVertexAttribute attrs[3];
+    fill_vertex_input(&vbdesc, attrs);
+
+    SDL_GPUColorTargetDescription color = {
+        .format = g->swapchain_format,
+        .blend_state = {
+            .enable_blend          = true,
+            .src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA,
+            .dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+            .color_blend_op        = SDL_GPU_BLENDOP_ADD,
+            .src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO,
+            .dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE,
+            .alpha_blend_op        = SDL_GPU_BLENDOP_ADD,
+        },
+    };
+    SDL_GPUGraphicsPipelineCreateInfo pci = {
+        .vertex_shader = vs,
+        .fragment_shader = fs,
+        .vertex_input_state = {
+            .vertex_buffer_descriptions = &vbdesc, .num_vertex_buffers = 1,
+            .vertex_attributes = attrs, .num_vertex_attributes = 3,
+        },
+        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+        .rasterizer_state = {
+            .fill_mode = SDL_GPU_FILLMODE_FILL,
+            .cull_mode = SDL_GPU_CULLMODE_NONE,
+            .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
+        },
+        .depth_stencil_state = {
+            .compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL,
+            .enable_depth_test = true,
+            .enable_depth_write = false,
+        },
+        .target_info = {
+            .color_target_descriptions = &color, .num_color_targets = 1,
+            .depth_stencil_format = g->depth_format,
+            .has_depth_stencil_target = true,
+        },
+    };
+    g->text_pipeline = SDL_CreateGPUGraphicsPipeline(g->device, &pci);
+    SDL_ReleaseGPUShader(g->device, vs);
+    SDL_ReleaseGPUShader(g->device, fs);
+    if (!g->text_pipeline) {
+        snprintf(err, err_sz, "text pipeline create failed: %s", SDL_GetError());
         return false;
     }
     return true;

@@ -82,6 +82,18 @@ structs live (no lock), call them from the render/tick thread — or, in an
 engine-driven setup, before starting the loop — rather than from an arbitrary
 thread; only `tessera_set_state` is safe to call concurrently with the tick.
 
+Shadow modes:
+
+- `TESSERA_SHADOW_NONE` — no contact shadows.
+- `TESSERA_SHADOW_BLOB` — a soft dark decal under each entity (cheapest).
+- `TESSERA_SHADOW_MAP` — a real directional shadow map: a depth-only pass
+  renders every caster (tiles, entities including skinned meshes, dice, cards)
+  from the light into an orthographic depth map fitted each frame to the
+  occupied scene bounds, and the main pass samples it with 3×3 PCF plus a
+  slope-scaled bias. Blob decals are suppressed in this mode (tile-overlay
+  decals are not). Map resolution follows the quality preset: 2048² by
+  default, 4096² when `msaa >= 4`, halved when `render_scale <= 0.75`.
+
 ## Packaging (intended)
 
 - **macOS / Linux** — shared + static `libtessera` and `tessera.h`.

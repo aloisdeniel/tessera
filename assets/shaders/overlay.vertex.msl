@@ -1,0 +1,43 @@
+#include <metal_stdlib>
+using namespace metal;
+
+struct FrameUniform {
+    float4x4 view_proj;
+    float4   light_dir;
+    float4   ambient;
+    float4   light_color;
+    float4   camera_pos;
+};
+struct OverlayUniform {
+    float4x4 model;
+    float4   tint;      // rgba; a already includes fade + pulse
+    float4   uv_rect;   // SPRITE atlas remap (u0,v0,u1,v1)
+    float4   params;    // x = shape (0 sprite, 1 disc, 2 ring)
+};
+
+struct VSIn {
+    float3 pos    [[attribute(0)]];
+    float3 normal [[attribute(1)]];
+    float2 uv     [[attribute(2)]];
+};
+struct VSOut {
+    float4 position [[position]];
+    float2 uv;        // atlas-remapped (sprite)
+    float2 local;     // raw 0..1 quad uv (procedural shapes)
+    float4 tint;
+    float  shape;
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant FrameUniform&   frame [[buffer(0)]],
+                     constant OverlayUniform& obj   [[buffer(1)]])
+{
+    VSOut out;
+    float4 world = obj.model * float4(in.pos, 1.0);
+    out.position = frame.view_proj * world;
+    out.local    = in.uv;
+    out.uv       = obj.uv_rect.xy + in.uv * (obj.uv_rect.zw - obj.uv_rect.xy);
+    out.tint     = obj.tint;
+    out.shape    = obj.params.x;
+    return out;
+}

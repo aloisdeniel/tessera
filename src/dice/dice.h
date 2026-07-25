@@ -71,8 +71,10 @@ void ts_dice_add(TsDice* d, TesseraEngine* e, const TsDiceThrow* spec);
 void ts_dice_remove(TsDice* d, TesseraDiceId id, float fade_s);
 /* Begin removing every live die. */
 void ts_dice_clear(TsDice* d, float fade_s);
-/* Advance all tumbles + fades by dt (already scaled by speed_multiplier). */
-void ts_dice_advance(TsDice* d, float dt);
+/* Advance all tumbles + fades by dt (already scaled by speed_multiplier).
+ * `e` receives the typed engine events (DICE_CONTACT per ground contact with
+ * the impact speed, DICE_SETTLED once a die comes to rest); may be NULL. */
+void ts_dice_advance(TsDice* d, TesseraEngine* e, float dt);
 
 /* Diff the dice placements in prev->next and drive throws/removals. `prev` may
  * be NULL (first state). Creates the live-set lazily on the engine. Called from

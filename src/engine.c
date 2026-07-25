@@ -19,6 +19,50 @@ void ts_engine_set_error(TesseraEngine* e, const char* fmt, ...) {
     TS_LOGE(&e->log, "%s", e->error);
 }
 
+/* ---- typed engine event stream ---------------------------------------- */
+/* Push one event into the poll ring (dropping the oldest on overflow) and
+ * stage it for the end-of-tick callback flush. Tick thread only; the ring
+ * bookkeeping is mutex-guarded because tessera_poll_events is any-thread. */
+void ts_engine_emit_event(TesseraEngine* e, uint32_t type, uint32_t subject,
+                          uint64_t subject_id, TesseraCoord coord, float value) {
+    TesseraEvent ev = {
+        .time = e->clock,
+        .subject_id = subject_id,
+        .type = type,
+        .subject = subject,
+        .coord = coord,
+        .value = value,
+        .reserved = 0,
+    };
+    SDL_LockMutex(e->state_mutex);
+    if (e->ev_len == TS_EVENT_CAP) {          /* full: drop the oldest */
+        e->ev_head = (e->ev_head + 1) % TS_EVENT_CAP;
+        e->ev_len--;
+        e->ev_dropped++;
+    }
+    e->ev_ring[(e->ev_head + e->ev_len) % TS_EVENT_CAP] = ev;
+    e->ev_len++;
+    SDL_UnlockMutex(e->state_mutex);
+
+    if (e->ev_stage_len < TS_EVENT_CAP)
+        e->ev_stage[e->ev_stage_len++] = ev;
+}
+
+/* Deliver this tick's staged events to the registered callback, in emission
+ * order, outside the state mutex (mirrors the op-completion callback). The
+ * callback slot is read AND invoked under cb_mutex so a concurrent
+ * tessera_set_event_callback(e, NULL, ...) cannot return while a delivery
+ * using the old fn is still in flight (see engine.h). */
+static void ts_engine_flush_events(TesseraEngine* e) {
+    uint32_t n = e->ev_stage_len;
+    e->ev_stage_len = 0;
+    if (n == 0) return;
+    SDL_LockMutex(e->cb_mutex);
+    if (e->ev_cb)
+        for (uint32_t i = 0; i < n; ++i) e->ev_cb(&e->ev_stage[i], e->ev_cb_user);
+    SDL_UnlockMutex(e->cb_mutex);
+}
+
 static void fill_frame_uniform(TesseraEngine* e, TsFrameUniform* u) {
     glm_mat4_copy(e->camera.view_proj, u->view_proj);
     glm_vec4(e->light.dir, 0.0f, u->light_dir);
@@ -34,6 +78,345 @@ static void fill_frame_uniform(TesseraEngine* e, TsFrameUniform* u) {
     u->camera_pos[1] = e->camera.eye[1];
     u->camera_pos[2] = e->camera.eye[2];
     u->camera_pos[3] = 1.0f;
+    if (e->shadow_active && e->gpu.shadow_res > 0) {
+        glm_mat4_copy(e->shadow_vp, u->light_vp);
+        u->shadow_params[0] = 1.0f;
+        u->shadow_params[1] = 1.0f / (float)e->gpu.shadow_res;
+        u->shadow_params[2] = e->shadow_bias_const;
+        u->shadow_params[3] = e->shadow_bias_slope;
+    } else {
+        glm_mat4_identity(u->light_vp);
+        glm_vec4_zero(u->shadow_params);
+    }
+}
+
+/* Shadow-map resolution from the quality settings: high presets (msaa 4) get a
+ * 4K map, reduced-resolution presets (render_scale <= 0.75, mobile) drop to
+ * half. Bounded-board fitting keeps texel density high at every size. */
+static uint32_t shadow_map_resolution(const TesseraQuality* q) {
+    uint32_t res = q->msaa >= 4 ? 4096 : 2048;
+    float rs = q->render_scale > 0.0f ? q->render_scale : 1.0f;
+    if (rs <= 0.75f) res /= 2;
+    if (res < 512) res = 512;
+    return res;
+}
+
+/* Conservative world-space bounding sphere of one draw item: translation plus
+ * a radius from the model's basis scale (unit meshes span roughly ±0.5..1). */
+static void item_bounds(const mat4 model, vec3 out_c, float* out_r) {
+    out_c[0] = model[3][0]; out_c[1] = model[3][1]; out_c[2] = model[3][2];
+    float sx = glm_vec3_norm((float*)model[0]);
+    float sy = glm_vec3_norm((float*)model[1]);
+    float sz = glm_vec3_norm((float*)model[2]);
+    float s = fmaxf(sx, fmaxf(sy, sz));
+    *out_r = 1.5f * (s > 1e-4f ? s : 1.0f);
+}
+
+static void aabb_add(vec3 lo, vec3 hi, const vec3 c, float r, bool* have) {
+    for (int i = 0; i < 3; ++i) {
+        float a = c[i] - r, b = c[i] + r;
+        if (!*have) { lo[i] = a; hi[i] = b; }
+        else { if (a < lo[i]) lo[i] = a; if (b > hi[i]) hi[i] = b; }
+    }
+    *have = true;
+}
+
+/* Build the light view-projection fitted to the world AABB [lo,hi]: an ortho
+ * frustum sized to the box's light-space extents so texel density stays high
+ * on bounded boards. Also outputs the light-space depth range (world units)
+ * so shader biases can be expressed in world units. */
+static void fit_light_matrix(const TesseraLight* light, const vec3 lo, const vec3 hi,
+                             mat4 out_vp, float* out_depth_range) {
+    vec3 L = { light->dir[0], light->dir[1], light->dir[2] };
+    if (glm_vec3_norm(L) < 1e-5f) { L[0] = -0.4f; L[1] = -1.0f; L[2] = -0.3f; }
+    glm_vec3_normalize(L);
+
+    vec3 center; glm_vec3_add((float*)lo, (float*)hi, center);
+    glm_vec3_scale(center, 0.5f, center);
+    vec3 half; glm_vec3_sub((float*)hi, (float*)lo, half);
+    glm_vec3_scale(half, 0.5f, half);
+    float radius = glm_vec3_norm(half);
+    if (radius < 1.0f) radius = 1.0f;
+
+    vec3 eye, back;
+    glm_vec3_scale(L, -(radius + 2.0f), back);
+    glm_vec3_add(center, back, eye);
+    vec3 up = { 0.0f, 1.0f, 0.0f };
+    if (fabsf(L[1]) > 0.95f) { up[1] = 0.0f; up[2] = 1.0f; }
+
+    mat4 view; ts_look_at(eye, center, up, view);
+
+    /* Tight light-space bounds of the 8 AABB corners. */
+    vec3 vlo = {0}, vhi = {0}; bool have = false;
+    for (int i = 0; i < 8; ++i) {
+        vec4 c = { (i & 1) ? hi[0] : lo[0],
+                   (i & 2) ? hi[1] : lo[1],
+                   (i & 4) ? hi[2] : lo[2], 1.0f };
+        vec4 v; glm_mat4_mulv(view, c, v);
+        aabb_add(vlo, vhi, v, 0.0f, &have);
+    }
+    const float pad = 0.05f;
+    /* RH view looks down -Z: points sit at negative z. Pull the near plane a
+     * little toward the light so casters right at the box edge still render. */
+    float znear = -vhi[2] - 1.0f;
+    float zfar  = -vlo[2] + 1.0f;
+    if (znear < 0.01f) znear = 0.01f;
+    mat4 proj;
+    glm_ortho_rh_zo(vlo[0] - pad, vhi[0] + pad, vlo[1] - pad, vhi[1] + pad,
+                    znear, zfar, proj);
+    glm_mat4_mul(proj, view, out_vp);
+    *out_depth_range = zfar - znear;
+}
+
+/* Render the directional shadow map: one depth-only pass from the light over
+ * every caster (tiles, entities incl. skinned, dice, cards), fitted each frame
+ * to the occupied scene bounds. Runs before the main pass on the same command
+ * buffer; the main pass then samples the map with PCF (mesh.fragment). */
+void ts_engine_shadow_pass(TesseraEngine* e, SDL_GPUCommandBuffer* cmd) {
+    TsGpu* g = &e->gpu;
+    /* tessera_set_quality is any-thread (writes under state_mutex); take the
+     * frame's one consistent copy here — this pass runs before every other
+     * quality consumer of the frame (record_blobs), which read the copy. */
+    SDL_LockMutex(e->state_mutex);
+    e->quality_frame = e->quality;
+    SDL_UnlockMutex(e->state_mutex);
+    e->shadow_active = false;
+    if (e->quality_frame.shadows != TESSERA_SHADOW_MAP) return;
+    if (!g->shadow_pipeline || !g->shadow_card_pipeline) return;
+
+    /* Casters: the opaque draw list (tiles/entities/dice) + card slabs. Built
+     * into the frame arena independently of the main pass's own lists. */
+    TsDrawItem* items = NULL;
+    size_t count = ts_scene_build_drawlist(e, &e->frame_arena, &items);
+    TsCardDrawItem* cards = NULL;
+    size_t ncards = e->orch ? ts_orch_build_cards(e->orch, e, &e->frame_arena, &cards) : 0;
+    if (count == 0 && ncards == 0) return;
+
+    vec3 lo = {0}, hi = {0}; bool have = false;
+    for (size_t i = 0; i < count; ++i) {
+        if (!items[i].mesh || !items[i].mesh->vbo) continue;
+        vec3 c; float r;
+        item_bounds(items[i].model, c, &r);
+        aabb_add(lo, hi, c, r, &have);
+    }
+    for (size_t i = 0; i < ncards; ++i) {
+        if (!cards[i].mesh || !cards[i].mesh->vbo) continue;
+        vec3 c; float r;
+        item_bounds(cards[i].model, c, &r);
+        aabb_add(lo, hi, c, r, &have);
+    }
+    if (!have) return;
+
+    float depth_range = 1.0f;
+    fit_light_matrix(&e->light, lo, hi, e->shadow_vp, &depth_range);
+    /* Sampling biases in normalized depth, from world-unit tuning at board
+     * scale (~0.02 units constant, ~0.10 slope-scaled) so they track the
+     * per-frame fitted depth range. */
+    e->shadow_bias_const = 0.02f / depth_range;
+    e->shadow_bias_slope = 0.10f / depth_range;
+
+    if (!ts_gpu_ensure_shadow_map(g, shadow_map_resolution(&e->quality_frame))) return;
+
+    SDL_GPUDepthStencilTargetInfo depth = {
+        .texture = g->shadow_map,
+        .clear_depth = 1.0f,
+        .load_op = SDL_GPU_LOADOP_CLEAR,
+        .store_op = SDL_GPU_STOREOP_STORE,   /* sampled by the main pass */
+        .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+        .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+    };
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, NULL, 0, &depth);
+
+    TsShadowFrameUniform sfu;
+    glm_mat4_copy(e->shadow_vp, sfu.light_vp);
+    SDL_PushGPUVertexUniformData(cmd, 0, &sfu, sizeof sfu);
+
+    /* 0=none, 1=static, 2=skinned, 3=card — lazy pipeline switching. */
+    int bound = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const TsDrawItem* it = &items[i];
+        if (!it->mesh || !it->mesh->vbo) continue;
+        if (it->skinned && (!it->joints || !g->shadow_skinned_pipeline)) continue;
+
+        int want = it->skinned ? 2 : 1;
+        if (want != bound) {
+            SDL_BindGPUGraphicsPipeline(pass, want == 2 ? g->shadow_skinned_pipeline
+                                                        : g->shadow_pipeline);
+            SDL_PushGPUVertexUniformData(cmd, 0, &sfu, sizeof sfu);
+            bound = want;
+        }
+
+        TsObjectUniform ou;
+        glm_mat4_copy((vec4*)it->model, ou.model);
+        glm_vec4_copy((float*)it->tint, ou.tint);
+        glm_vec4_copy((float*)it->uv_rect, ou.uv_rect);
+        SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+
+        if (it->skinned) {
+            mat4 palette[TS_MAX_JOINTS];
+            uint32_t jc = it->joint_count < TS_MAX_JOINTS ? it->joint_count : TS_MAX_JOINTS;
+            for (uint32_t j = 0; j < jc; ++j) glm_mat4_copy((vec4*)it->joints[j], palette[j]);
+            for (uint32_t j = jc; j < TS_MAX_JOINTS; ++j) glm_mat4_identity(palette[j]);
+            SDL_PushGPUVertexUniformData(cmd, 2, palette, sizeof palette);
+        }
+
+        SDL_GPUBufferBinding vb = { .buffer = it->mesh->vbo, .offset = 0 };
+        SDL_GPUBufferBinding ib = { .buffer = it->mesh->ibo, .offset = 0 };
+        SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+        SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+        SDL_DrawGPUIndexedPrimitives(pass, it->mesh->index_count, 1, 0, 0, 0);
+    }
+
+    for (size_t i = 0; i < ncards; ++i) {
+        const TsCardDrawItem* c = &cards[i];
+        if (!c->mesh || !c->mesh->vbo) continue;
+        if (bound != 3) {
+            SDL_BindGPUGraphicsPipeline(pass, g->shadow_card_pipeline);
+            SDL_PushGPUVertexUniformData(cmd, 0, &sfu, sizeof sfu);
+            bound = 3;
+        }
+        TsObjectUniform ou;
+        glm_mat4_copy((vec4*)c->model, ou.model);
+        glm_vec4_copy((float*)c->tint, ou.tint);
+        glm_vec4_copy((vec4){ 0.0f, 0.0f, 1.0f, 1.0f }, ou.uv_rect);
+        SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+        SDL_GPUBufferBinding vb = { .buffer = c->mesh->vbo, .offset = 0 };
+        SDL_GPUBufferBinding ib = { .buffer = c->mesh->ibo, .offset = 0 };
+        SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+        SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+        SDL_DrawGPUIndexedPrimitives(pass, c->mesh->index_count, 1, 0, 0, 0);
+    }
+
+    SDL_EndGPURenderPass(pass);
+    e->shadow_active = true;
+}
+
+/* Cap on distinct highlight composites per frame (each is a mask + fullscreen
+ * pass; selections are one or two objects in practice). */
+#define TS_MAX_HIGHLIGHT_PASSES 16
+
+/* Selection outline & glow post pass. For each live highlight the flagged
+ * object is re-rendered flat into the cached silhouette mask — reusing the
+ * frame drawlist (rebuilt into the frame arena like the shadow pass does),
+ * filtered by the (kind, id) tags, so highlighted objects are tracked at
+ * their live interpolated transforms, skinned pose included — then the mask
+ * is dilated (outline) or blurred (glow) over `dst` in a fullscreen pass.
+ * Runs after the main pass and after depth-of-field so the selection stays
+ * crisp over the blur. */
+void ts_engine_highlight_pass(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
+                              SDL_GPUTexture* dst, uint32_t w, uint32_t h) {
+    TsGpu* g = &e->gpu;
+    if (!e->orch) return;
+    if (!g->mask_pipeline || !g->hl_outline_pipeline || !g->hl_glow_pipeline) return;
+
+    TsHighlightItem* hls = NULL;
+    size_t nh = ts_orch_build_highlights(e->orch, &e->frame_arena, &hls);
+    if (nh == 0) return;
+    if (nh > TS_MAX_HIGHLIGHT_PASSES) nh = TS_MAX_HIGHLIGHT_PASSES;
+    if (!ts_gpu_ensure_mask_target(g, w, h)) return;
+
+    /* The same live drawlists the main pass consumed, rebuilt into the frame
+     * arena; matching draws are re-rendered flat into the silhouette mask. */
+    TsDrawItem* items = NULL;
+    size_t count = ts_scene_build_drawlist(e, &e->frame_arena, &items);
+    TsCardDrawItem* cards = NULL;
+    size_t ncards = ts_orch_build_cards(e->orch, e, &e->frame_arena, &cards);
+
+    TsShadowFrameUniform sfu;   /* view_proj in the shared position-only VS */
+    glm_mat4_copy(e->camera.view_proj, sfu.light_vp);
+
+    for (size_t hi = 0; hi < nh; ++hi) {
+        const TsHighlightItem* hl = &hls[hi];
+
+        /* Skip the whole mask + composite when nothing matches (target not
+         * live yet, or already fully faded). */
+        bool any = false;
+        for (size_t i = 0; i < count && !any; ++i)
+            any = items[i].hl_id != 0 && items[i].hl_id == hl->id &&
+                  items[i].hl_kind == hl->kind &&
+                  items[i].mesh && items[i].mesh->vbo;
+        if (!any && hl->kind == TESSERA_HIGHLIGHT_CARD)
+            for (size_t i = 0; i < ncards && !any; ++i)
+                any = cards[i].hl_id == hl->id && cards[i].mesh && cards[i].mesh->vbo;
+        if (!any) continue;
+
+        /* ---- silhouette mask: matching draws, flat, no depth ---- */
+        SDL_GPUColorTargetInfo mct = {
+            .texture = g->mask_tex,
+            .clear_color = (SDL_FColor){0.0f, 0.0f, 0.0f, 0.0f},
+            .load_op = SDL_GPU_LOADOP_CLEAR,
+            .store_op = SDL_GPU_STOREOP_STORE };
+        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &mct, 1, NULL);
+
+        /* 0=none, 1=static, 2=skinned, 3=card — lazy pipeline switching. */
+        int bound = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const TsDrawItem* it = &items[i];
+            if (it->hl_id == 0 || it->hl_id != hl->id || it->hl_kind != hl->kind) continue;
+            if (!it->mesh || !it->mesh->vbo) continue;
+            if (it->skinned && (!it->joints || !g->mask_skinned_pipeline)) continue;
+
+            int want = it->skinned ? 2 : 1;
+            if (want != bound) {
+                SDL_BindGPUGraphicsPipeline(pass, want == 2 ? g->mask_skinned_pipeline
+                                                            : g->mask_pipeline);
+                SDL_PushGPUVertexUniformData(cmd, 0, &sfu, sizeof sfu);
+                bound = want;
+            }
+
+            TsObjectUniform ou;
+            glm_mat4_copy((vec4*)it->model, ou.model);
+            glm_vec4_copy((float*)it->tint, ou.tint);
+            glm_vec4_copy((float*)it->uv_rect, ou.uv_rect);
+            SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+
+            if (it->skinned) {
+                mat4 palette[TS_MAX_JOINTS];
+                uint32_t jc = it->joint_count < TS_MAX_JOINTS ? it->joint_count : TS_MAX_JOINTS;
+                for (uint32_t j = 0; j < jc; ++j) glm_mat4_copy((vec4*)it->joints[j], palette[j]);
+                for (uint32_t j = jc; j < TS_MAX_JOINTS; ++j) glm_mat4_identity(palette[j]);
+                SDL_PushGPUVertexUniformData(cmd, 2, palette, sizeof palette);
+            }
+
+            SDL_GPUBufferBinding vb = { .buffer = it->mesh->vbo, .offset = 0 };
+            SDL_GPUBufferBinding ib = { .buffer = it->mesh->ibo, .offset = 0 };
+            SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+            SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+            SDL_DrawGPUIndexedPrimitives(pass, it->mesh->index_count, 1, 0, 0, 0);
+        }
+
+        if (hl->kind == TESSERA_HIGHLIGHT_CARD && g->mask_card_pipeline) {
+            for (size_t i = 0; i < ncards; ++i) {
+                const TsCardDrawItem* c = &cards[i];
+                if (c->hl_id != hl->id || !c->mesh || !c->mesh->vbo) continue;
+                if (bound != 3) {
+                    SDL_BindGPUGraphicsPipeline(pass, g->mask_card_pipeline);
+                    SDL_PushGPUVertexUniformData(cmd, 0, &sfu, sizeof sfu);
+                    bound = 3;
+                }
+                TsObjectUniform ou;
+                glm_mat4_copy((vec4*)c->model, ou.model);
+                glm_vec4_copy((float*)c->tint, ou.tint);
+                glm_vec4_copy((vec4){ 0.0f, 0.0f, 1.0f, 1.0f }, ou.uv_rect);
+                SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+                SDL_GPUBufferBinding vb = { .buffer = c->mesh->vbo, .offset = 0 };
+                SDL_GPUBufferBinding ib = { .buffer = c->mesh->ibo, .offset = 0 };
+                SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+                SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+                SDL_DrawGPUIndexedPrimitives(pass, c->mesh->index_count, 1, 0, 0, 0);
+            }
+        }
+        SDL_EndGPURenderPass(pass);
+
+        /* ---- fullscreen composite over the lit (post-DoF) scene ---- */
+        TsHighlightPost p = {
+            .color = { hl->color[0], hl->color[1], hl->color[2], hl->color[3] },
+            .thickness_px = hl->thickness,
+            .intensity = hl->intensity,
+            .glow = hl->style == TESSERA_HIGHLIGHT_GLOW,
+        };
+        ts_gpu_highlight_post(g, cmd, g->mask_tex, dst, w, h, &p);
+    }
 }
 
 /* Draw a blob shadow decal under each live entity (M7). Called after the opaque
@@ -42,8 +425,10 @@ static void record_blobs(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
                          SDL_GPURenderPass* pass, const TsFrameUniform* fu) {
     TsGpu* g = &e->gpu;
     if (!g->blob_pipeline || !e->orch) return;
-    if (e->quality.shadows != TESSERA_SHADOW_BLOB &&
-        e->quality.shadows != TESSERA_SHADOW_MAP) return;   /* MAP falls back to blob */
+    /* Blob decals only in BLOB mode: MAP renders a real depth-map shadow and
+     * suppresses the blobs (tile-overlay decals are unaffected). Reads the
+     * frame's quality copy taken by ts_engine_shadow_pass (same frame). */
+    if (e->quality_frame.shadows != TESSERA_SHADOW_BLOB) return;
 
     TsBlob* blobs = NULL;
     size_t nb = ts_orch_build_blobs(e->orch, e, &e->frame_arena, &blobs);
@@ -69,6 +454,51 @@ static void record_blobs(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
         glm_vec4_copy((vec4){ 0.0f, 0.0f, 0.0f, b->alpha }, ou.tint);
         glm_vec4_copy((vec4){ 0.0f, 0.0f, 1.0f, 1.0f }, ou.uv_rect);
         SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+        SDL_DrawGPUIndexedPrimitives(pass, quad->index_count, 1, 0, 0, 0);
+    }
+}
+
+/* Draw the state-driven tile-overlay decals (move-range fills, threat rings,
+ * drop-target highlights) on top of the tiles. Runs after the opaque pass so
+ * pieces occlude them; before the blob pass so shadows composite on top. Same
+ * no-depth-write discipline as blob shadows, so they never z-fight tile tops. */
+static void record_overlays(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
+                            SDL_GPURenderPass* pass, const TsFrameUniform* fu) {
+    TsGpu* g = &e->gpu;
+    if (!g->overlay_pipeline || !e->orch) return;
+
+    TsOverlayItem* items = NULL;
+    size_t n = ts_orch_build_overlays(e->orch, e, &e->frame_arena, &items);
+    if (n == 0) return;
+
+    const TsMesh* quad = &e->registry.quad_mesh;
+    if (!quad->vbo) return;
+
+    SDL_BindGPUGraphicsPipeline(pass, g->overlay_pipeline);
+    SDL_PushGPUVertexUniformData(cmd, 0, fu, sizeof *fu);
+    SDL_GPUBufferBinding vb = { .buffer = quad->vbo, .offset = 0 };
+    SDL_GPUBufferBinding ib = { .buffer = quad->ibo, .offset = 0 };
+    SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+    SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+
+    for (size_t i = 0; i < n; ++i) {
+        const TsOverlayItem* it = &items[i];
+        TsOverlayUniform ou;
+        mat4 m; glm_mat4_identity(m);
+        glm_translate(m, (vec3){ it->center[0], it->center[1], it->center[2] });
+        float s = TS_TILE_SIZE * it->scale;
+        glm_scale(m, (vec3){ s, 1.0f, s });
+        glm_mat4_copy(m, ou.model);
+        glm_vec4_copy((vec4){ it->color[0], it->color[1], it->color[2], it->color[3] }, ou.tint);
+        glm_vec4_copy((vec4){ it->uv.u0, it->uv.v0, it->uv.u1, it->uv.v1 }, ou.uv_rect);
+        glm_vec4_copy((vec4){ (float)it->shape, 0.0f, 0.0f, 0.0f }, ou.params);
+        SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+
+        SDL_GPUTexture* tex = ts_registry_atlas_texture(&e->registry, it->atlas);
+        SDL_GPUTextureSamplerBinding tsb = {
+            .texture = tex ? tex : e->registry.white.texture,
+            .sampler = g->linear_sampler };
+        SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
         SDL_DrawGPUIndexedPrimitives(pass, quad->index_count, 1, 0, 0, 0);
     }
 }
@@ -118,6 +548,124 @@ static void record_cards(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
     }
 }
 
+/* ---- 3D text labels --------------------------------------------------- */
+/* How far a flat (ground) label floats above the surface, and how far a
+ * billboard label is pulled toward the eye so it wins the depth test against
+ * the piece it hovers over (draw-order + camera nudge instead of polygon
+ * offset; the pipeline never writes depth). */
+#define TS_LABEL_LIFT  0.03f
+#define TS_LABEL_NUDGE 0.12f
+
+/* Draw one text run as per-glyph quads along `right`, rows toward `down`,
+ * centred on `pos`. The text pipeline + quad buffers are already bound; the
+ * font atlas is bound by the caller. */
+static void record_text_run(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass,
+                            const TsMesh* quad, const TsFontDef* font,
+                            const char* text, const vec3 pos, float size,
+                            const float color[4], const vec3 right, const vec3 down) {
+    float scale = size / font->pixel_height;
+    float width = ts_font_text_width(font, text);
+    float cursor = -0.5f * width;                       /* centre horizontally */
+    float voff = 0.5f * (font->ascent + font->descent); /* centre vertically   */
+
+    const char* p = text;
+    for (;;) {
+        uint32_t cp = ts_utf8_next(&p);
+        if (cp == 0) break;
+        const TsGlyph* gl = ts_font_glyph(font, cp);
+        if (!gl) continue;
+        float gw = (gl->x1 - gl->x0) * scale;
+        float gh = (gl->y1 - gl->y0) * scale;
+        if (gw > 0.0f && gh > 0.0f) {
+            float cx = (cursor + 0.5f * (gl->x0 + gl->x1)) * scale;
+            float cy = (voff + 0.5f * (gl->y0 + gl->y1)) * scale;
+
+            TsObjectUniform ou;
+            memset(&ou, 0, sizeof ou);
+            /* columns: local X -> right*gw, local Z -> down*gh, origin at the
+             * glyph centre (the quad mesh spans ±0.5 in X/Z with uv 0..1). */
+            for (int k = 0; k < 3; ++k) {
+                ou.model[0][k] = right[k] * gw;
+                ou.model[2][k] = down[k] * gh;
+                ou.model[3][k] = pos[k] + right[k] * cx + down[k] * cy;
+            }
+            ou.model[1][1] = 1.0f;
+            ou.model[3][3] = 1.0f;
+            glm_vec4_copy((float*)color, ou.tint);
+            glm_vec4_copy((vec4){ gl->u0, gl->v0, gl->u1, gl->v1 }, ou.uv_rect);
+            SDL_PushGPUVertexUniformData(cmd, 1, &ou, sizeof ou);
+            SDL_DrawGPUIndexedPrimitives(pass, quad->index_count, 1, 0, 0, 0);
+        }
+        cursor += gl->xadvance;
+    }
+}
+
+/* Draw the state-driven text labels. Runs last so glyphs composite over every
+ * translucent pass; depth-tested (LEQUAL) against geometry with a small nudge
+ * toward the camera so a label attached to a piece stays readable. */
+static void record_labels(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
+                          SDL_GPURenderPass* pass, const TsFrameUniform* fu) {
+    TsGpu* g = &e->gpu;
+    if (!g->text_pipeline || !e->orch) return;
+
+    TsLabelItem* items = NULL;
+    size_t n = ts_orch_build_labels(e->orch, e, &e->frame_arena, &items);
+    if (n == 0) return;
+
+    const TsMesh* quad = &e->registry.quad_mesh;
+    if (!quad->vbo) return;
+
+    /* camera basis (rows of the view rotation) for billboards */
+    vec3 cam_right = { e->camera.view[0][0], e->camera.view[1][0], e->camera.view[2][0] };
+    vec3 cam_up    = { e->camera.view[0][1], e->camera.view[1][1], e->camera.view[2][1] };
+
+    SDL_BindGPUGraphicsPipeline(pass, g->text_pipeline);
+    SDL_PushGPUVertexUniformData(cmd, 0, fu, sizeof *fu);
+    SDL_GPUBufferBinding vb = { .buffer = quad->vbo, .offset = 0 };
+    SDL_GPUBufferBinding ib = { .buffer = quad->ibo, .offset = 0 };
+    SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+    SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+
+    for (size_t i = 0; i < n; ++i) {
+        const TsLabelItem* it = &items[i];
+        TsDef* fd = ts_registry_get(&e->registry, it->font, TS_DEF_FONT);
+        if (!fd || !fd->as.font.valid) continue;
+        const TsFontDef* font = &fd->as.font;
+
+        vec3 right, down, pos;
+        glm_vec3_copy((float*)it->pos, pos);
+        if (it->billboard) {
+            glm_vec3_copy(cam_right, right);
+            glm_vec3_negate_to(cam_up, down);
+            vec3 to_eye;
+            glm_vec3_sub(e->camera.eye, pos, to_eye);
+            float d = glm_vec3_norm(to_eye);
+            if (d > 1e-4f) glm_vec3_muladds(to_eye, TS_LABEL_NUDGE / d, pos);
+        } else {
+            /* flat on the ground: +X right, top toward -Z (map convention) */
+            glm_vec3_copy((vec3){ 1.0f, 0.0f, 0.0f }, right);
+            glm_vec3_copy((vec3){ 0.0f, 0.0f, 1.0f }, down);
+            pos[1] += TS_LABEL_LIFT;
+        }
+
+        SDL_GPUTextureSamplerBinding tsb = {
+            .texture = font->tex.texture, .sampler = g->linear_sampler };
+        SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
+
+        /* crossfade: previous text fades out beneath the new text fading in */
+        if (it->prev_text) {
+            float c[4] = { it->color[0], it->color[1], it->color[2],
+                           it->color[3] * (1.0f - it->text_mix) };
+            record_text_run(cmd, pass, quad, font, it->prev_text, pos, it->size,
+                            c, right, down);
+        }
+        float c[4] = { it->color[0], it->color[1], it->color[2],
+                       it->color[3] * (it->prev_text ? it->text_mix : 1.0f) };
+        record_text_run(cmd, pass, quad, font, it->text, pos, it->size,
+                        c, right, down);
+    }
+}
+
 /* Depth-of-field is active only when enabled with a real blur and a pipeline. */
 bool ts_engine_dof_active(const TesseraEngine* e) {
     return e->focus.enabled && e->gpu.dof_pipeline && e->focus.blur_strength > 0.0f;
@@ -158,6 +706,9 @@ void ts_engine_render(TesseraEngine* e) {
     /* Build + upload particle geometry before the render pass (copy pass). */
     ts_fx_prepare(e, cmd);
 
+    /* Directional shadow map: its own depth-only pass before the main pass. */
+    ts_engine_shadow_pass(e, cmd);
+
     bool dof = ts_engine_dof_active(e) && ts_gpu_ensure_scene_target(g, sw, sh);
 
     SDL_GPUColorTargetInfo color = {
@@ -184,6 +735,9 @@ void ts_engine_render(TesseraEngine* e) {
         TsDofParams p; ts_engine_resolve_dof(e, &p);
         ts_gpu_dof_post(g, cmd, g->scene_color, swap, g->depth_texture, sw, sh, &p);
     }
+
+    /* Selection outline/glow: composited after DoF so it stays crisp. */
+    ts_engine_highlight_pass(e, cmd, swap, sw, sh);
 
     SDL_SubmitGPUCommandBuffer(cmd);
     e->have_rendered = true;
@@ -245,10 +799,17 @@ void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
         SDL_GPUBufferBinding ib = { .buffer = it->mesh->ibo, .offset = 0 };
         SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
         SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-        SDL_GPUTextureSamplerBinding tsb = {
-            .texture = it->texture ? it->texture : e->registry.white.texture,
-            .sampler = g->linear_sampler };
-        SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
+        /* slot 1: the shadow map (or the tiny fallback depth texture — the
+         * shader never samples it when shadow_params.x is 0, but Metal still
+         * needs a depth-typed texture bound at a depth2d slot). */
+        SDL_GPUTexture* smap = (e->shadow_active && g->shadow_map)
+                                   ? g->shadow_map : g->shadow_fallback;
+        SDL_GPUTextureSamplerBinding tsb[2] = {
+            { .texture = it->texture ? it->texture : e->registry.white.texture,
+              .sampler = g->linear_sampler },
+            { .texture = smap, .sampler = g->point_sampler },
+        };
+        SDL_BindGPUFragmentSamplers(pass, 0, tsb, 2);
         SDL_DrawGPUIndexedPrimitives(pass, it->mesh->index_count, 1, 0, 0, 0);
     }
 
@@ -256,9 +817,14 @@ void ts_engine_record_draws(TesseraEngine* e, SDL_GPUCommandBuffer* cmd,
      * translucent decal/particle passes. */
     record_cards(e, cmd, pass, &fu);
 
-    /* M7 blob shadows, M6 particles: translucent passes after opaque geometry. */
+    /* Tile-overlay decals, then M7 blob shadows, then M6 particles: translucent
+     * passes after opaque geometry (shadows composite on top of overlays). */
+    record_overlays(e, cmd, pass, &fu);
     record_blobs(e, cmd, pass, &fu);
     ts_fx_record(e, cmd, pass, &fu);
+
+    /* text labels last: they sit on top of every translucent pass */
+    record_labels(e, cmd, pass, &fu);
 }
 
 /* Apply a state camera onto the live camera. The camera is described by a
@@ -545,7 +1111,12 @@ static void advance_camera(TesseraEngine* e, float dt) {
         }
         /* Unresolved: hold the last pose but keep advancing the clock so the
          * tween can still complete. */
-        if (ts_tween_done(&e->cam_tween)) e->cam_active = false;
+        if (ts_tween_done(&e->cam_tween)) {
+            e->cam_active = false;
+            ts_engine_emit_event(e, TESSERA_EVENT_CAMERA_ARRIVED,
+                                 TESSERA_EVENT_SUBJECT_CAMERA, 0,
+                                 (TesseraCoord){0, 0}, 0.0f);
+        }
     } else if (resolved) {
         /* Idle-follow: lock the camera onto the live goal every tick — this is
          * what makes follow modes track after the tween ends. */
@@ -592,12 +1163,16 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
     }
 
     float mult = e->timing.speed_multiplier > 0.0f ? e->timing.speed_multiplier : 1.0f;
-    if (e->orch) ts_orch_advance(e->orch, (float)dt * mult);
+    if (e->orch) ts_orch_advance(e->orch, e, (float)dt * mult);
     if (e->fx) ts_fx_advance(e, (float)dt * mult);
-    if (e->dice) ts_dice_advance(e->dice, (float)dt * mult);
+    if (e->dice) ts_dice_advance(e->dice, e, (float)dt * mult);
     advance_camera(e, (float)dt * mult);
 
     ts_engine_settle_operation(e);
+
+    /* Deliver this tick's events to the callback, after everything (incl. the
+     * op settle above) has emitted, outside the state mutex. */
+    ts_engine_flush_events(e);
 }
 
 /* A promoted transition completes the tick it first has no animation left. Fire
@@ -616,5 +1191,14 @@ static void ts_engine_settle_operation(TesseraEngine* e) {
     SDL_LockMutex(e->state_mutex);
     if (done > e->op_completed) e->op_completed = done;
     SDL_UnlockMutex(e->state_mutex);
+    /* Bridge the completion into the typed event stream so hosts can consume
+     * one uniform ordering (every transition event precedes its op's settle). */
+    ts_engine_emit_event(e, TESSERA_EVENT_OP_COMPLETED,
+                         TESSERA_EVENT_SUBJECT_OPERATION, done,
+                         (TesseraCoord){0, 0}, 0.0f);
+    /* Invoked under cb_mutex so a concurrent clear cannot return while this
+     * delivery is still using the old fn (see engine.h). */
+    SDL_LockMutex(e->cb_mutex);
     if (e->op_cb) e->op_cb(done, e->op_cb_user);
+    SDL_UnlockMutex(e->cb_mutex);
 }

@@ -64,6 +64,9 @@ typedef struct {
     vec4            uv_visible, uv_hidden, uv_back;  /* u0,v0,u1,v1 */
     SDL_GPUTexture *tex_visible, *tex_hidden, *tex_back;
     float           mix;   /* 0 = front shows visible, 1 = front shows hidden */
+    /* selection-highlight source tag: the single card's id (0 for piles /
+     * anything not highlightable). Consumed by the highlight post pass. */
+    uint64_t        hl_id;
 } TsCardDrawItem;
 
 #endif /* TESSERA_CARD_H */

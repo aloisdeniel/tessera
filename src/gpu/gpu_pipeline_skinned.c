@@ -9,7 +9,7 @@
 
 bool ts_gpu_create_skinned_pipeline(TsGpu* g, char* err, size_t err_sz) {
     SDL_GPUShader* vs = ts_gpu_load_shader(g, "skinned", SDL_GPU_SHADERSTAGE_VERTEX, 0, 3);
-    SDL_GPUShader* fs = ts_gpu_load_shader(g, "mesh",    SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+    SDL_GPUShader* fs = ts_gpu_load_shader(g, "mesh",    SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
     if (!vs || !fs) {
         snprintf(err, err_sz, "failed to load skinned shaders");
         if (vs) SDL_ReleaseGPUShader(g->device, vs);

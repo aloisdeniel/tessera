@@ -33,8 +33,10 @@ TesseraEngine* tessera_create(const TesseraConfig* cfg) {
     e->quality.shadows = TESSERA_SHADOW_BLOB;
     e->quality.msaa = 1;
     e->quality.render_scale = 1.0f;
+    e->quality_frame = e->quality;
 
     e->state_mutex = SDL_CreateMutex();
+    e->cb_mutex = SDL_CreateMutex();
 
     char err[TS_ERR_CAP];
     if (!ts_gpu_init(&e->gpu, cfg, &e->log, err, sizeof err)) {
@@ -66,6 +68,7 @@ void tessera_destroy(TesseraEngine* e) {
     if (e->registry.defs.items) ts_registry_shutdown(&e->registry);
     ts_gpu_shutdown(&e->gpu);
     if (e->state_mutex) SDL_DestroyMutex(e->state_mutex);
+    if (e->cb_mutex) SDL_DestroyMutex(e->cb_mutex);
     ts_arena_destroy(&e->frame_arena);
     ts_arena_destroy(&e->perm_arena);
     free(e);
@@ -131,6 +134,16 @@ TesseraDefId tessera_register_card_def(TesseraEngine* e, const TesseraCardDef* d
     if (!e) return 0;
     char err[TS_ERR_CAP]; err[0] = 0;
     TesseraDefId id = ts_registry_add_card(&e->registry, def, err, sizeof err);
+    if (!id) ts_engine_set_error(e, "%s", err);
+    return id;
+}
+
+/* ---- fonts ---- */
+TesseraDefId tessera_register_font(TesseraEngine* e, const TesseraBytes* ttf,
+                                   float pixel_height) {
+    if (!e) return 0;
+    char err[TS_ERR_CAP]; err[0] = 0;
+    TesseraDefId id = ts_registry_add_font(&e->registry, ttf, pixel_height, err, sizeof err);
     if (!id) ts_engine_set_error(e, "%s", err);
     return id;
 }
@@ -204,14 +217,49 @@ TesseraOpId tessera_last_completed_operation(TesseraEngine* e) {
 
 void tessera_set_operation_callback(TesseraEngine* e, TesseraOpCompletedFn fn, void* user) {
     if (!e) return;
+    /* cb_mutex is held across delivery on the tick thread, so once this
+     * returns no in-flight invocation can still be using the old fn/user. */
+    SDL_LockMutex(e->cb_mutex);
     e->op_cb = fn;
     e->op_cb_user = user;
+    SDL_UnlockMutex(e->cb_mutex);
 }
 
-/* set_timing/set_quality/set_light write small POD structs the tick reads live
- * without a lock — call them on the tick/render thread (or before starting an
- * engine-driven loop), not concurrently with tick. Only set_state is any-thread.
- * See docs/platforms.md. */
+/* ---- typed engine event stream ---- */
+uint32_t tessera_poll_events(TesseraEngine* e, TesseraEvent* out, uint32_t cap) {
+    if (!e || !out || cap == 0) return 0;
+    SDL_LockMutex(e->state_mutex);
+    uint32_t n = e->ev_len < cap ? e->ev_len : cap;
+    for (uint32_t i = 0; i < n; ++i)
+        out[i] = e->ev_ring[(e->ev_head + i) % TS_EVENT_CAP];
+    e->ev_head = (e->ev_head + n) % TS_EVENT_CAP;
+    e->ev_len -= n;
+    SDL_UnlockMutex(e->state_mutex);
+    return n;
+}
+
+uint32_t tessera_events_dropped(TesseraEngine* e) {
+    if (!e) return 0;
+    SDL_LockMutex(e->state_mutex);
+    uint32_t n = e->ev_dropped;
+    SDL_UnlockMutex(e->state_mutex);
+    return n;
+}
+
+void tessera_set_event_callback(TesseraEngine* e, TesseraEventFn fn, void* user) {
+    if (!e) return;
+    /* cb_mutex is held across delivery on the tick thread, so once this
+     * returns no in-flight invocation can still be using the old fn/user. */
+    SDL_LockMutex(e->cb_mutex);
+    e->ev_cb = fn;
+    e->ev_cb_user = user;
+    SDL_UnlockMutex(e->cb_mutex);
+}
+
+/* set_timing/set_light write small POD structs the tick reads live without a
+ * lock — call them on the tick/render thread (or before starting an
+ * engine-driven loop), not concurrently with tick. set_state and set_quality
+ * are any-thread. See docs/platforms.md. */
 void tessera_set_timing(TesseraEngine* e, const TesseraTiming* t) {
     if (e && t) e->timing = *t;
 }
@@ -229,7 +277,12 @@ bool tessera_is_idle(TesseraEngine* e) {
     return !e->orch || ts_orch_is_idle(e->orch);
 }
 void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q) {
-    if (e && q) e->quality = *q;
+    /* Any-thread: written under the state mutex; the render thread takes one
+     * frame-consistent copy per frame (quality_frame) under the same mutex. */
+    if (!e || !q) return;
+    SDL_LockMutex(e->state_mutex);
+    e->quality = *q;
+    SDL_UnlockMutex(e->state_mutex);
 }
 void tessera_set_light(TesseraEngine* e, const TesseraLight* l) {
     if (e && l) e->light = *l;

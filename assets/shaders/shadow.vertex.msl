@@ -1,0 +1,30 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// Depth-only shadow-map pass: transform positions into light clip space.
+// Shared by the static-mesh, dice and card shadow pipelines (only location 0
+// is declared, so any vertex layout with pos at attribute 0 works).
+struct ShadowFrameUniform {
+    float4x4 light_vp;
+};
+struct ObjectUniform {
+    float4x4 model;
+    float4   tint;
+    float4   uv_rect;
+};
+
+struct VSIn {
+    float3 pos [[attribute(0)]];
+};
+struct VSOut {
+    float4 position [[position]];
+};
+
+vertex VSOut vs_main(VSIn in [[stage_in]],
+                     constant ShadowFrameUniform& frame [[buffer(0)]],
+                     constant ObjectUniform&      obj   [[buffer(1)]])
+{
+    VSOut out;
+    out.position = frame.light_vp * (obj.model * float4(in.pos, 1.0));
+    return out;
+}

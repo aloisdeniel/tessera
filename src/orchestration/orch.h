@@ -38,6 +38,7 @@ typedef struct {
     TsTween tween;
     bool    arc;        /* hop during a move */
     bool    removing;   /* fading out; cull when tween completes */
+    bool    spawning;   /* fading in; ENTITY_SPAWNED fires when it settles */
     bool    alive;
     /* multi-step move: `tween`/`from_pos`/`to_pos` drive one segment at a time;
      * seg_pts holds every segment endpoint (last = the layout target). */
@@ -107,11 +108,80 @@ typedef struct {
     vec3    pos; versor rot; float scale, alpha, mix, thick;
 } TsCardInst;
 
+/* Live per-overlay instance (keyed by coord, like tiles). The tween drives a
+ * fade (alpha) plus a tint crossfade; the pulse clock runs free (it never keeps
+ * the engine "busy"). */
+typedef struct {
+    TesseraCoord coord;
+    uint32_t     shape;      /* TesseraOverlayShape */
+    TesseraDefId atlas;
+    TesseraRect  uv;
+    float   from_tint[4], to_tint[4];
+    float   from_alpha, to_alpha;
+    TsTween tween;
+    /* pulse spec (from the placement) + free-running clock */
+    float   pulse_s;
+    float   pulse_alpha_min, pulse_alpha_max;
+    float   pulse_scale_min, pulse_scale_max;
+    float   pulse_t;
+    bool    removing;
+    bool    alive;
+    /* current interpolated */
+    float   tint[4]; float alpha;
+} TsOverlayInst;
+
+/* Live per-label instance (keyed by id). The tween drives the fade plus a
+ * color crossfade and an offset glide; a text change crossfades the previous
+ * string out while the new one fades in (text_tween). The anchor is resolved
+ * against the LIVE interpolated scene at drawlist-build time each frame. */
+typedef struct {
+    TesseraLabelId id;
+    TesseraDefId   font;
+    uint32_t       anchor;      /* TesseraLabelAnchor */
+    uint64_t       anchor_id;
+    bool           billboard;
+    float          size;        /* line height, world units */
+    char  text[TESSERA_LABEL_TEXT_CAP];
+    char  prev_text[TESSERA_LABEL_TEXT_CAP];  /* crossfade source */
+    TsTween text_tween;         /* prev_text -> text mix (0..1) */
+    vec3    from_off, to_off;   /* world point (WORLD) or anchor offset */
+    float   from_color[4], to_color[4];
+    float   from_alpha, to_alpha;
+    TsTween tween;
+    bool    removing;
+    bool    alive;
+    /* current interpolated */
+    vec3  off; float color[4]; float alpha; float text_mix;
+} TsLabelInst;
+
+/* Live per-highlight instance (keyed by kind + target id). The tween drives
+ * the fade plus a color crossfade; the pulse clock runs free (it never keeps
+ * the engine "busy"). Style/thickness swap immediately, like overlay shapes. */
+typedef struct {
+    uint32_t kind;        /* TesseraHighlightKind  */
+    uint64_t target_id;
+    uint32_t style;       /* TesseraHighlightStyle */
+    float    thickness;   /* px (<= 0 => default at build) */
+    float   from_color[4], to_color[4];
+    float   from_alpha, to_alpha;
+    TsTween tween;
+    /* pulse spec (from the placement) + free-running clock */
+    float   pulse_s, pulse_min, pulse_max;
+    float   pulse_t;
+    bool    removing;
+    bool    alive;
+    /* current interpolated */
+    float   color[4]; float alpha;
+} TsHighlightInst;
+
 struct TsOrch {
-    TsEntityInst* entities; size_t entity_count, entity_cap;
-    TsTileInst*   tiles;    size_t tile_count,   tile_cap;
-    TsCardInst*   cards;    size_t card_count,   card_cap;
-    bool          seeded;   /* first promotion snaps instead of animating */
+    TsEntityInst*  entities; size_t entity_count,  entity_cap;
+    TsTileInst*    tiles;    size_t tile_count,    tile_cap;
+    TsCardInst*    cards;    size_t card_count,    card_cap;
+    TsOverlayInst* overlays; size_t overlay_count, overlay_cap;
+    TsLabelInst*   labels;   size_t label_count,   label_cap;
+    TsHighlightInst* highlights; size_t highlight_count, highlight_cap;
+    bool           seeded;   /* first promotion snaps instead of animating */
 };
 
 struct TsOrch* ts_orch_create(void);
@@ -124,8 +194,10 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
                         const TsSnapshot* next, const TesseraTiming* timing);
 
 /* Advance all tweens by dt (already scaled by speed_multiplier by the caller)
- * and recompute interpolated transforms + animation clocks; cull removals. */
-void ts_orch_advance(struct TsOrch* o, float dt);
+ * and recompute interpolated transforms + animation clocks; cull removals.
+ * `e` receives the typed engine events emitted at animation moments (hop
+ * touchdowns, waypoint handoffs, spawn/removal completion). */
+void ts_orch_advance(struct TsOrch* o, TesseraEngine* e, float dt);
 
 /* True when no transitions are active. */
 bool ts_orch_is_idle(const struct TsOrch* o);
@@ -187,5 +259,54 @@ typedef struct {
 /* Emit one blob per live entity into `arena`. Returns count. */
 size_t ts_orch_build_blobs(struct TsOrch* o, TesseraEngine* e,
                            TsArena* arena, TsBlob** out);
+
+/* A tile-overlay decal draw request (textured/tinted quad on the tile top). */
+typedef struct {
+    vec3         center;   /* world position; y is the decal lift          */
+    float        scale;    /* footprint multiplier (pulse; 1 = full tile)  */
+    uint32_t     shape;    /* TesseraOverlayShape                          */
+    TesseraDefId atlas;    /* SPRITE atlas (0 = white)                     */
+    TesseraRect  uv;       /* SPRITE atlas sub-rect                        */
+    float        color[4]; /* tint × fade × pulse                          */
+} TsOverlayItem;
+
+/* Emit one item per live overlay into `arena` (pulse applied). Returns count. */
+size_t ts_orch_build_overlays(struct TsOrch* o, TesseraEngine* e,
+                              TsArena* arena, TsOverlayItem** out);
+
+/* A text-label draw request. `pos` is the label centre resolved against the
+ * LIVE interpolated anchor (entity/tile/die/card/pile) this frame; labels whose
+ * anchor is not live are not emitted. During a text crossfade `prev_text` is
+ * non-NULL and drawn at alpha*(1-mix) under the new text at alpha*mix. */
+typedef struct {
+    vec3         pos;
+    float        size;      /* line height, world units             */
+    float        color[4];  /* label color × fade (alpha premixed)  */
+    float        text_mix;  /* 0 = all prev_text, 1 = all text      */
+    const char*  text;      /* current UTF-8 text                   */
+    const char*  prev_text; /* crossfade source or NULL             */
+    TesseraDefId font;
+    bool         billboard;
+} TsLabelItem;
+
+/* Emit one item per live, anchored-and-resolvable label. Returns count. */
+size_t ts_orch_build_labels(struct TsOrch* o, TesseraEngine* e,
+                            TsArena* arena, TsLabelItem** out);
+
+/* A selection-highlight post-pass request: the object (kind, id) is rendered
+ * into the silhouette mask and composited with `style`. `color` carries the
+ * fade in its alpha; `intensity` is the free-running pulse modulation. */
+typedef struct {
+    uint32_t kind;       /* TesseraHighlightKind                  */
+    uint64_t id;
+    uint32_t style;      /* TesseraHighlightStyle                 */
+    float    color[4];   /* rgba, a includes the fade             */
+    float    thickness;  /* px, defaulted when the spec was <= 0  */
+    float    intensity;  /* pulse modulation (1 = steady)         */
+} TsHighlightItem;
+
+/* Emit one item per live highlight into `arena` (pulse applied). Returns count. */
+size_t ts_orch_build_highlights(struct TsOrch* o, TsArena* arena,
+                                TsHighlightItem** out);
 
 #endif /* TESSERA_ORCH_H */
