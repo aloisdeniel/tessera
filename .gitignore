@@ -21,3 +21,6 @@ compile_commands.json
 # Keep the checked-in SPIR-V shader artifacts despite the *.spv rule above
 !assets/shaders/*.spv
 !bindings/flutter_tessera/android/src/main/assets/shaders/*.spv
+
+# Editor / tooling caches
+.cache/
