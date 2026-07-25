@@ -47,4 +47,6 @@ jobs:
         run: ./build/example_hello --frames 3 --headless || true
 
       - name: Unit tests
-        run: ctest --test-dir build --output-on-failure || true
+        # Hard-fails: includes the FFI binding drift gate (ffi_binding_drift)
+        # and the layout self-test, so binding drift breaks CI.
+        run: ctest --test-dir build --output-on-failure

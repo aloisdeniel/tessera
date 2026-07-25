@@ -8,8 +8,10 @@
 -- Requires LuaJIT (uses the FFI library). The struct layout below MUST match
 -- include/tessera.h exactly. The canonical layout reference (sizeof of every
 -- struct + offsetof of every field, for the target ABI) is the C self-test
--- tests/test_ffi_layout.c; run it and cross-check if anything drifts. The ABI
--- in include/tessera.h is FROZEN and evolves append-only.
+-- tests/test_ffi_layout.c (`--dump` for the machine-readable table); the ctest
+-- gate `ffi_binding_drift` (tools/check_ffi_bindings.py) diffs this file
+-- against it and hard-fails on any drift. The ABI in include/tessera.h is
+-- FROZEN and evolves append-only.
 
 local ffi = require("ffi")
 
@@ -70,6 +72,7 @@ typedef uint64_t TesseraDiceId;
 typedef uint64_t TesseraCardId;
 typedef uint64_t TesseraCardDrawId;
 typedef uint64_t TesseraHandId;
+typedef uint64_t TesseraLabelId;
 typedef uint64_t TesseraOpId;
 typedef struct { TesseraBytes sprite; } TesseraDiceFace;
 typedef struct {
@@ -110,7 +113,43 @@ typedef struct {
     TesseraHandId id; float position[3]; float orientation[4];
     float spread_deg, radius, card_spacing;
 } TesseraHandPlacement;
-typedef struct { TesseraCoordF focus; float distance, yaw, pitch, fov; } TesseraCamera;
+typedef enum { TESSERA_OVERLAY_SPRITE = 0, TESSERA_OVERLAY_DISC = 1,
+               TESSERA_OVERLAY_RING = 2 } TesseraOverlayShape;
+typedef struct {
+    TesseraCoord coord; uint32_t shape; TesseraDefId atlas; TesseraRect uv;
+    float tint[4];
+    float pulse_s, pulse_alpha_min, pulse_alpha_max, pulse_scale_min, pulse_scale_max;
+} TesseraOverlayPlacement;
+typedef enum { TESSERA_LABEL_ANCHOR_WORLD = 0, TESSERA_LABEL_ANCHOR_ENTITY = 1,
+               TESSERA_LABEL_ANCHOR_TILE = 2, TESSERA_LABEL_ANCHOR_DICE = 3,
+               TESSERA_LABEL_ANCHOR_CARD = 4, TESSERA_LABEL_ANCHOR_DRAW = 5 } TesseraLabelAnchor;
+typedef struct {
+    TesseraLabelId id; TesseraDefId font;
+    char text[64];
+    uint32_t anchor; uint64_t anchor_id;
+    float position[3]; float size; float color[4];
+    bool billboard;
+} TesseraLabelPlacement;
+typedef enum { TESSERA_HIGHLIGHT_ENTITY = 0, TESSERA_HIGHLIGHT_TILE = 1,
+               TESSERA_HIGHLIGHT_DICE = 2, TESSERA_HIGHLIGHT_CARD = 3 } TesseraHighlightKind;
+typedef enum { TESSERA_HIGHLIGHT_OUTLINE = 0,
+               TESSERA_HIGHLIGHT_GLOW = 1 } TesseraHighlightStyle;
+typedef struct {
+    uint64_t target_id; uint32_t kind; uint32_t style;
+    float color[4]; float thickness;
+    float pulse_s, pulse_min, pulse_max;
+} TesseraHighlightPlacement;
+typedef struct {
+    uint32_t      mode;
+    TesseraCoordF focus;
+    float distance, yaw, pitch, fov;
+    float position[3];
+    float orientation[4];
+    float target[3];
+    uint64_t target_id;
+    uint64_t focus_card_id;
+    float fit_padding;
+} TesseraCamera;
 
 typedef struct {
     const TesseraTilePlacement*   tiles;    size_t tile_count;
@@ -122,6 +161,9 @@ typedef struct {
     const TesseraCardDrawPlacement* card_draws; size_t card_draw_count;
     const TesseraHandPlacement*     hands;      size_t hand_count;
     const TesseraDicePlacement*     dice;       size_t dice_count;
+    const TesseraOverlayPlacement*  overlays;   size_t overlay_count;
+    const TesseraLabelPlacement*    labels;     size_t label_count;
+    const TesseraHighlightPlacement* highlights; size_t highlight_count;
 } TesseraState;
 
 typedef struct {
@@ -143,6 +185,27 @@ typedef struct { float dir[3]; float color[3]; float intensity; float ambient[3]
 typedef enum { TESSERA_PROJECTION_PERSPECTIVE=0, TESSERA_PROJECTION_ISOMETRIC=1 } TesseraProjection;
 typedef struct { bool enabled; float focus_distance, focus_range, blur_strength; } TesseraFocus;
 
+typedef enum {
+    TESSERA_EVENT_NONE = 0, TESSERA_EVENT_DICE_CONTACT = 1, TESSERA_EVENT_DICE_SETTLED = 2,
+    TESSERA_EVENT_ENTITY_HOP_LANDED = 3, TESSERA_EVENT_ENTITY_WAYPOINT_REACHED = 4,
+    TESSERA_EVENT_ENTITY_SPAWNED = 5, TESSERA_EVENT_ENTITY_REMOVED = 6,
+    TESSERA_EVENT_CARD_FLIPPED = 7, TESSERA_EVENT_CARD_DEALT = 8,
+    TESSERA_EVENT_CAMERA_ARRIVED = 9, TESSERA_EVENT_OP_COMPLETED = 10
+} TesseraEventType;
+typedef enum {
+    TESSERA_EVENT_SUBJECT_NONE = 0, TESSERA_EVENT_SUBJECT_ENTITY = 1,
+    TESSERA_EVENT_SUBJECT_DICE = 2, TESSERA_EVENT_SUBJECT_CARD = 3,
+    TESSERA_EVENT_SUBJECT_DRAW = 4, TESSERA_EVENT_SUBJECT_CAMERA = 5,
+    TESSERA_EVENT_SUBJECT_OPERATION = 6
+} TesseraEventSubject;
+typedef struct {
+    double time;
+    uint64_t subject_id;
+    uint32_t type; uint32_t subject;
+    TesseraCoord coord;
+    float value; uint32_t reserved;
+} TesseraEvent;
+
 TesseraEngine* tessera_create(const TesseraConfig*);
 void           tessera_destroy(TesseraEngine*);
 void           tessera_resize(TesseraEngine*, int, int, float);
@@ -161,6 +224,8 @@ const char*  tessera_entity_def_anim_name(TesseraEngine*, TesseraDefId, uint32_t
 
 TesseraDefId tessera_register_card_def(TesseraEngine*, const TesseraCardDef*);
 
+TesseraDefId tessera_register_font(TesseraEngine*, const TesseraBytes*, float pixel_height);
+
 TesseraDefId tessera_register_dice_def(TesseraEngine*, const TesseraDiceDef*);
 uint32_t     tessera_dice_def_face_count(TesseraEngine*, TesseraDefId);
 uint32_t     tessera_dice_count(TesseraEngine*);
@@ -168,10 +233,25 @@ bool         tessera_dice_face(TesseraEngine*, TesseraDiceId, uint32_t* out_face
 bool         tessera_dice_all_idle(TesseraEngine*);
 
 TesseraOpId tessera_set_state(TesseraEngine*, const TesseraState*);
+size_t tessera_state_serialize(const TesseraState* state, void* buf, size_t cap);
+TesseraState* tessera_state_deserialize(const void* blob, size_t len);
+void tessera_state_free(TesseraState* state);
+typedef struct TesseraReplay TesseraReplay;
+TesseraReplay* tessera_replay_create(void);
+TesseraReplay* tessera_replay_open(const void* data, size_t len);
+void tessera_replay_free(TesseraReplay*);
+bool tessera_replay_append(TesseraReplay*, uint64_t timestamp_ms, const TesseraState*);
+uint32_t tessera_replay_count(const TesseraReplay*);
+TesseraState* tessera_replay_get(const TesseraReplay*, uint32_t index, uint64_t* out_timestamp_ms);
+size_t tessera_replay_serialize(const TesseraReplay*, void* buf, size_t cap);
 bool        tessera_operation_completed(TesseraEngine*, TesseraOpId op);
 TesseraOpId tessera_last_completed_operation(TesseraEngine*);
 typedef void (*TesseraOpCompletedFn)(TesseraOpId op, void* user);
 void        tessera_set_operation_callback(TesseraEngine*, TesseraOpCompletedFn fn, void* user);
+uint32_t    tessera_poll_events(TesseraEngine*, TesseraEvent* out, uint32_t cap);
+uint32_t    tessera_events_dropped(TesseraEngine*);
+typedef void (*TesseraEventFn)(const TesseraEvent* ev, void* user);
+void        tessera_set_event_callback(TesseraEngine*, TesseraEventFn fn, void* user);
 bool tessera_pick(TesseraEngine*, float screen_x, float screen_y, TesseraPick* out);
 bool tessera_world_to_screen(TesseraEngine*, const float world[3], TesseraScreenPos* out);
 bool tessera_entity_screen_position(TesseraEngine*, TesseraEntityId id, TesseraScreenPos* out);
@@ -206,6 +286,65 @@ function M.create(cfg)
     local e = lib.tessera_create(c)
     if e == nil then error("tessera_create failed") end
     return e
+end
+
+-- Drain pending engine events into a Lua array of TesseraEvent cdata copies
+-- (oldest first). `cap` bounds one drain (default 64).
+function M.poll_events(e, cap)
+    cap = cap or 64
+    local buf = ffi.new("TesseraEvent[?]", cap)
+    local n = tonumber(lib.tessera_poll_events(e, buf, cap))
+    local out = {}
+    for i = 0, n - 1 do out[i + 1] = ffi.new("TesseraEvent", buf[i]) end
+    return out
+end
+
+-- Serialize a TesseraState cdata to a Lua binary string (versioned LE blob,
+-- see tessera_state_serialize). Returns nil for a nil state.
+function M.serialize_state(state)
+    if state == nil then return nil end
+    local n = tonumber(lib.tessera_state_serialize(state, nil, 0))
+    if n == 0 then return nil end
+    local buf = ffi.new("uint8_t[?]", n)
+    lib.tessera_state_serialize(state, buf, n)
+    return ffi.string(buf, n)
+end
+
+-- Reconstruct a TesseraState from a blob string. The result is a single native
+-- allocation, garbage-collected via tessera_state_free; push it straight
+-- through lib.tessera_set_state. Returns nil on malformed input.
+function M.deserialize_state(blob)
+    if type(blob) ~= "string" then return nil end
+    local st = lib.tessera_state_deserialize(blob, #blob)
+    if st == nil then return nil end
+    return ffi.gc(st, lib.tessera_state_free)
+end
+
+-- Serialize a TesseraReplay cdata (see tessera_replay_*) to a binary string.
+function M.serialize_replay(replay)
+    if replay == nil then return nil end
+    local n = tonumber(lib.tessera_replay_serialize(replay, nil, 0))
+    if n == 0 then return nil end
+    local buf = ffi.new("uint8_t[?]", n)
+    lib.tessera_replay_serialize(replay, buf, n)
+    return ffi.string(buf, n)
+end
+
+-- Parse a replay container string; the handle is garbage-collected. Use
+-- lib.tessera_replay_count / M.replay_get to walk the records.
+function M.open_replay(blob)
+    if type(blob) ~= "string" then return nil end
+    local r = lib.tessera_replay_open(blob, #blob)
+    if r == nil then return nil end
+    return ffi.gc(r, lib.tessera_replay_free)
+end
+
+-- Record `index` (0-based) of a replay: returns state (GC-managed), timestamp_ms.
+function M.replay_get(replay, index)
+    local ts = ffi.new("uint64_t[1]")
+    local st = lib.tessera_replay_get(replay, index, ts)
+    if st == nil then return nil end
+    return ffi.gc(st, lib.tessera_state_free), tonumber(ts[0])
 end
 
 return M

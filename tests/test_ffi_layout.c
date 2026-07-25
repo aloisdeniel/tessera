@@ -14,6 +14,7 @@
 #include "tessera.h"
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 /* ---- helpers ---------------------------------------------------------- */
 #define SA(cond, msg) _Static_assert(cond, msg)
@@ -121,6 +122,10 @@ SIZE_IS(TesseraCoord, 8);
 OFF_IS(TesseraCoord, x, 0);
 OFF_IS(TesseraCoord, y, 4);
 
+SIZE_IS(TesseraCoordF, 8);
+OFF_IS(TesseraCoordF, x, 0);
+OFF_IS(TesseraCoordF, y, 4);
+
 SIZE_IS(TesseraTilePlacement, 24);
 OFF_IS(TesseraTilePlacement, coord, 0);
 OFF_IS(TesseraTilePlacement, tile_def, 8);
@@ -178,6 +183,39 @@ OFF_IS(TesseraHandPlacement, spread_deg, 36);
 OFF_IS(TesseraHandPlacement, radius, 40);
 OFF_IS(TesseraHandPlacement, card_spacing, 44);
 
+SIZE_IS(TesseraOverlayPlacement, 68);
+OFF_IS(TesseraOverlayPlacement, coord, 0);
+OFF_IS(TesseraOverlayPlacement, shape, 8);
+OFF_IS(TesseraOverlayPlacement, atlas, 12);
+OFF_IS(TesseraOverlayPlacement, uv, 16);
+OFF_IS(TesseraOverlayPlacement, tint, 32);
+OFF_IS(TesseraOverlayPlacement, pulse_s, 48);
+OFF_IS(TesseraOverlayPlacement, pulse_alpha_min, 52);
+OFF_IS(TesseraOverlayPlacement, pulse_alpha_max, 56);
+OFF_IS(TesseraOverlayPlacement, pulse_scale_min, 60);
+OFF_IS(TesseraOverlayPlacement, pulse_scale_max, 64);
+
+SIZE_IS(TesseraLabelPlacement, 128);
+OFF_IS(TesseraLabelPlacement, id, 0);
+OFF_IS(TesseraLabelPlacement, font, 8);
+OFF_IS(TesseraLabelPlacement, text, 12);
+OFF_IS(TesseraLabelPlacement, anchor, 76);
+OFF_IS(TesseraLabelPlacement, anchor_id, 80);
+OFF_IS(TesseraLabelPlacement, position, 88);
+OFF_IS(TesseraLabelPlacement, size, 100);
+OFF_IS(TesseraLabelPlacement, color, 104);
+OFF_IS(TesseraLabelPlacement, billboard, 120);
+
+SIZE_IS(TesseraHighlightPlacement, 48);
+OFF_IS(TesseraHighlightPlacement, target_id, 0);
+OFF_IS(TesseraHighlightPlacement, kind, 8);
+OFF_IS(TesseraHighlightPlacement, style, 12);
+OFF_IS(TesseraHighlightPlacement, color, 16);
+OFF_IS(TesseraHighlightPlacement, thickness, 32);
+OFF_IS(TesseraHighlightPlacement, pulse_s, 36);
+OFF_IS(TesseraHighlightPlacement, pulse_min, 40);
+OFF_IS(TesseraHighlightPlacement, pulse_max, 44);
+
 SIZE_IS(TesseraCamera, 96);
 OFF_IS(TesseraCamera, mode, 0);
 OFF_IS(TesseraCamera, focus, 4);
@@ -192,7 +230,7 @@ OFF_IS(TesseraCamera, target_id, 72);
 OFF_IS(TesseraCamera, focus_card_id, 80);
 OFF_IS(TesseraCamera, fit_padding, 88);
 
-SIZE_IS(TesseraState, 216);
+SIZE_IS(TesseraState, 264);
 OFF_IS(TesseraState, tiles, 0);
 OFF_IS(TesseraState, tile_count, 8);
 OFF_IS(TesseraState, entities, 16);
@@ -209,6 +247,24 @@ OFF_IS(TesseraState, hands, 184);
 OFF_IS(TesseraState, hand_count, 192);
 OFF_IS(TesseraState, dice, 200);
 OFF_IS(TesseraState, dice_count, 208);
+OFF_IS(TesseraState, overlays, 216);
+OFF_IS(TesseraState, overlay_count, 224);
+OFF_IS(TesseraState, labels, 232);
+OFF_IS(TesseraState, label_count, 240);
+OFF_IS(TesseraState, highlights, 248);
+OFF_IS(TesseraState, highlight_count, 256);
+
+/* ======================================================================= *
+ *  Engine events
+ * ======================================================================= */
+SIZE_IS(TesseraEvent, 40);
+OFF_IS(TesseraEvent, time, 0);
+OFF_IS(TesseraEvent, subject_id, 8);
+OFF_IS(TesseraEvent, type, 16);
+OFF_IS(TesseraEvent, subject, 20);
+OFF_IS(TesseraEvent, coord, 24);
+OFF_IS(TesseraEvent, value, 32);
+OFF_IS(TesseraEvent, reserved, 36);
 
 /* ======================================================================= *
  *  Picking
@@ -272,6 +328,12 @@ SIZE_IS(TesseraBlendMode, 4);
 SIZE_IS(TesseraShadowMode, 4);
 SIZE_IS(TesseraProjection, 4);
 SIZE_IS(TesseraLogLevel, 4);
+SIZE_IS(TesseraOverlayShape, 4);
+SIZE_IS(TesseraLabelAnchor, 4);
+SIZE_IS(TesseraHighlightKind, 4);
+SIZE_IS(TesseraHighlightStyle, 4);
+SIZE_IS(TesseraEventType, 4);
+SIZE_IS(TesseraEventSubject, 4);
 
 /* Scalar handle types the bindings depend on. */
 SIZE_IS(TesseraDefId, 4);
@@ -279,12 +341,333 @@ SIZE_IS(TesseraEntityId, 8);
 SIZE_IS(TesseraTileId, 8);
 
 /* ======================================================================= *
+ *  Machine-readable dump (`--dump`) — the canonical layout reference that
+ *  tools/check_ffi_bindings.py diffs the Lua/Dart binding structs against.
+ *  One line per record:
+ *    struct <name> size=<n> align=<n>
+ *    field <struct> <name> off=<n> size=<n>
+ *    scalar <name> size=<n>
+ * ======================================================================= */
+#define D_STRUCT(T)   printf("struct %s size=%zu align=%zu\n", #T, sizeof(T), _Alignof(T))
+#define D_FIELD(T, f) printf("field %s %s off=%zu size=%zu\n", #T, #f, \
+                             offsetof(T, f), sizeof(((T*)0)->f))
+#define D_SCALAR(T)   printf("scalar %s size=%zu\n", #T, sizeof(T))
+
+static void dump_layout(void) {
+    D_STRUCT(TesseraConfig);
+    D_FIELD(TesseraConfig, native_window);
+    D_FIELD(TesseraConfig, width);
+    D_FIELD(TesseraConfig, height);
+    D_FIELD(TesseraConfig, pixel_density);
+    D_FIELD(TesseraConfig, engine_driven_loop);
+    D_FIELD(TesseraConfig, debug);
+    D_FIELD(TesseraConfig, log);
+    D_FIELD(TesseraConfig, log_userdata);
+
+    D_STRUCT(TesseraBytes);
+    D_FIELD(TesseraBytes, data);
+    D_FIELD(TesseraBytes, size);
+    D_FIELD(TesseraBytes, path);
+    D_FIELD(TesseraBytes, debug_name);
+
+    D_STRUCT(TesseraRect);
+    D_FIELD(TesseraRect, u0);
+    D_FIELD(TesseraRect, v0);
+    D_FIELD(TesseraRect, u1);
+    D_FIELD(TesseraRect, v1);
+
+    D_STRUCT(TesseraTileDef);
+    D_FIELD(TesseraTileDef, atlas);
+    D_FIELD(TesseraTileDef, top);
+    D_FIELD(TesseraTileDef, side);
+    D_FIELD(TesseraTileDef, bottom);
+    D_FIELD(TesseraTileDef, tint);
+    D_FIELD(TesseraTileDef, thickness);
+
+    D_STRUCT(TesseraEntityDef);
+    D_FIELD(TesseraEntityDef, gltf);
+    D_FIELD(TesseraEntityDef, atlas);
+    D_FIELD(TesseraEntityDef, scale);
+    D_FIELD(TesseraEntityDef, pivot);
+    D_FIELD(TesseraEntityDef, default_anim);
+    D_FIELD(TesseraEntityDef, move_anim);
+    D_FIELD(TesseraEntityDef, spawn_anim);
+    D_FIELD(TesseraEntityDef, despawn_anim);
+    D_FIELD(TesseraEntityDef, on_spawn_effect);
+    D_FIELD(TesseraEntityDef, on_despawn_effect);
+
+    D_STRUCT(TesseraParticleSpec);
+    D_FIELD(TesseraParticleSpec, atlas);
+    D_FIELD(TesseraParticleSpec, sprite);
+    D_FIELD(TesseraParticleSpec, mode);
+    D_FIELD(TesseraParticleSpec, count);
+    D_FIELD(TesseraParticleSpec, lifetime_s);
+    D_FIELD(TesseraParticleSpec, lifetime_var);
+    D_FIELD(TesseraParticleSpec, speed);
+    D_FIELD(TesseraParticleSpec, speed_var);
+    D_FIELD(TesseraParticleSpec, spread_deg);
+    D_FIELD(TesseraParticleSpec, gravity);
+    D_FIELD(TesseraParticleSpec, size_start);
+    D_FIELD(TesseraParticleSpec, size_end);
+    D_FIELD(TesseraParticleSpec, color_start);
+    D_FIELD(TesseraParticleSpec, color_end);
+    D_FIELD(TesseraParticleSpec, blend);
+    D_FIELD(TesseraParticleSpec, duration_s);
+
+    D_STRUCT(TesseraEffectDef);
+    D_FIELD(TesseraEffectDef, on_add);
+    D_FIELD(TesseraEffectDef, on_remove);
+
+    D_STRUCT(TesseraDiceFace);
+    D_FIELD(TesseraDiceFace, sprite);
+
+    D_STRUCT(TesseraDiceDef);
+    D_FIELD(TesseraDiceDef, faces);
+    D_FIELD(TesseraDiceDef, face_count);
+    D_FIELD(TesseraDiceDef, size);
+    D_FIELD(TesseraDiceDef, tint);
+
+    D_STRUCT(TesseraCardDef);
+    D_FIELD(TesseraCardDef, visible_atlas);
+    D_FIELD(TesseraCardDef, visible_uv);
+    D_FIELD(TesseraCardDef, hidden_atlas);
+    D_FIELD(TesseraCardDef, hidden_uv);
+    D_FIELD(TesseraCardDef, back_atlas);
+    D_FIELD(TesseraCardDef, back_uv);
+    D_FIELD(TesseraCardDef, width);
+    D_FIELD(TesseraCardDef, height);
+    D_FIELD(TesseraCardDef, thickness);
+    D_FIELD(TesseraCardDef, corner_radius);
+    D_FIELD(TesseraCardDef, tint);
+
+    D_STRUCT(TesseraCoord);
+    D_FIELD(TesseraCoord, x);
+    D_FIELD(TesseraCoord, y);
+
+    D_STRUCT(TesseraCoordF);
+    D_FIELD(TesseraCoordF, x);
+    D_FIELD(TesseraCoordF, y);
+
+    D_STRUCT(TesseraTilePlacement);
+    D_FIELD(TesseraTilePlacement, coord);
+    D_FIELD(TesseraTilePlacement, tile_def);
+    D_FIELD(TesseraTilePlacement, variant);
+    D_FIELD(TesseraTilePlacement, id);
+
+    D_STRUCT(TesseraEntityPlacement);
+    D_FIELD(TesseraEntityPlacement, id);
+    D_FIELD(TesseraEntityPlacement, def);
+    D_FIELD(TesseraEntityPlacement, coord);
+    D_FIELD(TesseraEntityPlacement, facing);
+    D_FIELD(TesseraEntityPlacement, anim);
+    D_FIELD(TesseraEntityPlacement, path);
+    D_FIELD(TesseraEntityPlacement, path_count);
+
+    D_STRUCT(TesseraEffectPlacement);
+    D_FIELD(TesseraEffectPlacement, id);
+    D_FIELD(TesseraEffectPlacement, def);
+    D_FIELD(TesseraEffectPlacement, coord);
+    D_FIELD(TesseraEffectPlacement, attach_entity_id);
+
+    D_STRUCT(TesseraDicePlacement);
+    D_FIELD(TesseraDicePlacement, id);
+    D_FIELD(TesseraDicePlacement, def);
+    D_FIELD(TesseraDicePlacement, face);
+    D_FIELD(TesseraDicePlacement, position);
+    D_FIELD(TesseraDicePlacement, seed);
+    D_FIELD(TesseraDicePlacement, throw_s);
+
+    D_STRUCT(TesseraCardPlacement);
+    D_FIELD(TesseraCardPlacement, id);
+    D_FIELD(TesseraCardPlacement, def);
+    D_FIELD(TesseraCardPlacement, position);
+    D_FIELD(TesseraCardPlacement, orientation);
+    D_FIELD(TesseraCardPlacement, hidden);
+    D_FIELD(TesseraCardPlacement, hand);
+    D_FIELD(TesseraCardPlacement, hand_slot);
+    D_FIELD(TesseraCardPlacement, source_draw);
+    D_FIELD(TesseraCardPlacement, path);
+    D_FIELD(TesseraCardPlacement, path_count);
+
+    D_STRUCT(TesseraCardDrawPlacement);
+    D_FIELD(TesseraCardDrawPlacement, id);
+    D_FIELD(TesseraCardDrawPlacement, def);
+    D_FIELD(TesseraCardDrawPlacement, position);
+    D_FIELD(TesseraCardDrawPlacement, orientation);
+    D_FIELD(TesseraCardDrawPlacement, count);
+    D_FIELD(TesseraCardDrawPlacement, top_hidden);
+
+    D_STRUCT(TesseraHandPlacement);
+    D_FIELD(TesseraHandPlacement, id);
+    D_FIELD(TesseraHandPlacement, position);
+    D_FIELD(TesseraHandPlacement, orientation);
+    D_FIELD(TesseraHandPlacement, spread_deg);
+    D_FIELD(TesseraHandPlacement, radius);
+    D_FIELD(TesseraHandPlacement, card_spacing);
+
+    D_STRUCT(TesseraOverlayPlacement);
+    D_FIELD(TesseraOverlayPlacement, coord);
+    D_FIELD(TesseraOverlayPlacement, shape);
+    D_FIELD(TesseraOverlayPlacement, atlas);
+    D_FIELD(TesseraOverlayPlacement, uv);
+    D_FIELD(TesseraOverlayPlacement, tint);
+    D_FIELD(TesseraOverlayPlacement, pulse_s);
+    D_FIELD(TesseraOverlayPlacement, pulse_alpha_min);
+    D_FIELD(TesseraOverlayPlacement, pulse_alpha_max);
+    D_FIELD(TesseraOverlayPlacement, pulse_scale_min);
+    D_FIELD(TesseraOverlayPlacement, pulse_scale_max);
+
+    D_STRUCT(TesseraLabelPlacement);
+    D_FIELD(TesseraLabelPlacement, id);
+    D_FIELD(TesseraLabelPlacement, font);
+    D_FIELD(TesseraLabelPlacement, text);
+    D_FIELD(TesseraLabelPlacement, anchor);
+    D_FIELD(TesseraLabelPlacement, anchor_id);
+    D_FIELD(TesseraLabelPlacement, position);
+    D_FIELD(TesseraLabelPlacement, size);
+    D_FIELD(TesseraLabelPlacement, color);
+    D_FIELD(TesseraLabelPlacement, billboard);
+
+    D_STRUCT(TesseraHighlightPlacement);
+    D_FIELD(TesseraHighlightPlacement, target_id);
+    D_FIELD(TesseraHighlightPlacement, kind);
+    D_FIELD(TesseraHighlightPlacement, style);
+    D_FIELD(TesseraHighlightPlacement, color);
+    D_FIELD(TesseraHighlightPlacement, thickness);
+    D_FIELD(TesseraHighlightPlacement, pulse_s);
+    D_FIELD(TesseraHighlightPlacement, pulse_min);
+    D_FIELD(TesseraHighlightPlacement, pulse_max);
+
+    D_STRUCT(TesseraCamera);
+    D_FIELD(TesseraCamera, mode);
+    D_FIELD(TesseraCamera, focus);
+    D_FIELD(TesseraCamera, distance);
+    D_FIELD(TesseraCamera, yaw);
+    D_FIELD(TesseraCamera, pitch);
+    D_FIELD(TesseraCamera, fov);
+    D_FIELD(TesseraCamera, position);
+    D_FIELD(TesseraCamera, orientation);
+    D_FIELD(TesseraCamera, target);
+    D_FIELD(TesseraCamera, target_id);
+    D_FIELD(TesseraCamera, focus_card_id);
+    D_FIELD(TesseraCamera, fit_padding);
+
+    D_STRUCT(TesseraState);
+    D_FIELD(TesseraState, tiles);
+    D_FIELD(TesseraState, tile_count);
+    D_FIELD(TesseraState, entities);
+    D_FIELD(TesseraState, entity_count);
+    D_FIELD(TesseraState, effects);
+    D_FIELD(TesseraState, effect_count);
+    D_FIELD(TesseraState, camera);
+    D_FIELD(TesseraState, epoch);
+    D_FIELD(TesseraState, cards);
+    D_FIELD(TesseraState, card_count);
+    D_FIELD(TesseraState, card_draws);
+    D_FIELD(TesseraState, card_draw_count);
+    D_FIELD(TesseraState, hands);
+    D_FIELD(TesseraState, hand_count);
+    D_FIELD(TesseraState, dice);
+    D_FIELD(TesseraState, dice_count);
+    D_FIELD(TesseraState, overlays);
+    D_FIELD(TesseraState, overlay_count);
+    D_FIELD(TesseraState, labels);
+    D_FIELD(TesseraState, label_count);
+    D_FIELD(TesseraState, highlights);
+    D_FIELD(TesseraState, highlight_count);
+
+    D_STRUCT(TesseraEvent);
+    D_FIELD(TesseraEvent, time);
+    D_FIELD(TesseraEvent, subject_id);
+    D_FIELD(TesseraEvent, type);
+    D_FIELD(TesseraEvent, subject);
+    D_FIELD(TesseraEvent, coord);
+    D_FIELD(TesseraEvent, value);
+    D_FIELD(TesseraEvent, reserved);
+
+    D_STRUCT(TesseraPick);
+    D_FIELD(TesseraPick, hit_tile);
+    D_FIELD(TesseraPick, tile);
+    D_FIELD(TesseraPick, tile_distance);
+    D_FIELD(TesseraPick, hit_entity);
+    D_FIELD(TesseraPick, entity);
+    D_FIELD(TesseraPick, entity_distance);
+    D_FIELD(TesseraPick, ray_origin);
+    D_FIELD(TesseraPick, ray_dir);
+    D_FIELD(TesseraPick, point);
+    D_FIELD(TesseraPick, hit_dice);
+    D_FIELD(TesseraPick, dice);
+    D_FIELD(TesseraPick, dice_distance);
+    D_FIELD(TesseraPick, hit_card);
+    D_FIELD(TesseraPick, card);
+    D_FIELD(TesseraPick, card_distance);
+
+    D_STRUCT(TesseraScreenPos);
+    D_FIELD(TesseraScreenPos, onscreen);
+    D_FIELD(TesseraScreenPos, x);
+    D_FIELD(TesseraScreenPos, y);
+    D_FIELD(TesseraScreenPos, depth);
+    D_FIELD(TesseraScreenPos, world);
+
+    D_STRUCT(TesseraTiming);
+    D_FIELD(TesseraTiming, move_s);
+    D_FIELD(TesseraTiming, add_s);
+    D_FIELD(TesseraTiming, remove_s);
+    D_FIELD(TesseraTiming, tile_s);
+    D_FIELD(TesseraTiming, reflow_s);
+    D_FIELD(TesseraTiming, camera_s);
+    D_FIELD(TesseraTiming, speed_multiplier);
+
+    D_STRUCT(TesseraQuality);
+    D_FIELD(TesseraQuality, shadows);
+    D_FIELD(TesseraQuality, msaa);
+    D_FIELD(TesseraQuality, render_scale);
+
+    D_STRUCT(TesseraLight);
+    D_FIELD(TesseraLight, dir);
+    D_FIELD(TesseraLight, color);
+    D_FIELD(TesseraLight, intensity);
+    D_FIELD(TesseraLight, ambient);
+
+    D_STRUCT(TesseraFocus);
+    D_FIELD(TesseraFocus, enabled);
+    D_FIELD(TesseraFocus, focus_distance);
+    D_FIELD(TesseraFocus, focus_range);
+    D_FIELD(TesseraFocus, blur_strength);
+
+    D_SCALAR(TesseraDefId);
+    D_SCALAR(TesseraEntityId);
+    D_SCALAR(TesseraTileId);
+    D_SCALAR(TesseraCardId);
+    D_SCALAR(TesseraCardDrawId);
+    D_SCALAR(TesseraHandId);
+    D_SCALAR(TesseraDiceId);
+    D_SCALAR(TesseraOpId);
+    D_SCALAR(TesseraLogLevel);
+    D_SCALAR(TesseraEmitMode);
+    D_SCALAR(TesseraBlendMode);
+    D_SCALAR(TesseraShadowMode);
+    D_SCALAR(TesseraProjection);
+    D_SCALAR(TesseraOverlayShape);
+    D_SCALAR(TesseraLabelId);
+    D_SCALAR(TesseraLabelAnchor);
+    D_SCALAR(TesseraHighlightKind);
+    D_SCALAR(TesseraHighlightStyle);
+    D_SCALAR(TesseraEventType);
+    D_SCALAR(TesseraEventSubject);
+}
+
+/* ======================================================================= *
  *  Runtime dump — the canonical reference table for binding authors.
  * ======================================================================= */
 #define P_SIZE(T)     printf("  sizeof(%-24s) = %3zu  align %zu\n", #T, sizeof(T), _Alignof(T))
 #define P_OFF(T, f)   printf("    %-20s @ %3zu\n", #f, offsetof(T, f))
 
-int main(void) {
+int main(int argc, char** argv) {
+    if (argc > 1 && strcmp(argv[1], "--dump") == 0) {
+        dump_layout();
+        return 0;
+    }
     printf("== Tessera FFI struct layout (target ABI) ==\n\n");
 
     P_SIZE(TesseraConfig);

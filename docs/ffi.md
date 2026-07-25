@@ -18,31 +18,115 @@ resize existing fields. The classic FFI bug is struct-layout drift between C and
 a binding, so the exact layout is pinned by a canonical self-test:
 
 **`tests/test_ffi_layout.c`** locks the `sizeof` of every public struct and the
-`offsetof` of every field with `_Static_assert` (fails to compile on drift) and
-also prints the whole table at runtime for binding authors to cross-check:
+`offsetof` of every field with `_Static_assert` (fails to compile on drift),
+prints the whole table at runtime for binding authors, and — with `--dump` —
+emits a machine-readable layout (`struct`/`field`/`scalar` lines) straight from
+the C compiler:
 
 ```sh
-cmake --build build-m8 --target test_ffi_layout
-DYLD_LIBRARY_PATH=/opt/homebrew/lib ./build-m8/test_ffi_layout
+cmake --build build --target test_ffi_layout
+./build/test_ffi_layout            # human-readable table
+./build/test_ffi_layout --dump     # machine-readable canonical layout
 ```
 
-The reference layout it produces (target LP64 ABI: pointer/`size_t` = 8, enum =
-4, `bool` = 1, `float` = 4):
+**`tools/check_ffi_bindings.py`** is the drift *gate*: it recomputes the struct
+layouts declared in `bindings/lua/tessera.lua` (LuaJIT cdef) and
+`bindings/dart/lib/src/ffi.dart` (`dart:ffi`) under the target ABI rules and
+diffs them field-by-field (name, offset, size, total sizeof) against the
+`--dump` output. Any mismatch is a hard failure. It runs under ctest as
+`ffi_binding_drift` (and therefore in CI):
+
+```sh
+ctest --test-dir build -R ffi_binding_drift --output-on-failure
+```
+
+The reference layout (target LP64 ABI: pointer/`size_t` = 8, enum = 4,
+`bool` = 1, `float` = 4):
 
 | Struct | size / align | Struct | size / align |
 |---|---|---|---|
-| `TesseraConfig` | 40 / 8 | `TesseraEntityPlacement` | 32 / 8 |
-| `TesseraBytes` | 32 / 8 | `TesseraEffectPlacement` | 32 / 8 |
-| `TesseraRect` | 16 / 4 | `TesseraCamera` | 24 / 4 |
-| `TesseraTileDef` | 72 / 4 | `TesseraState` | 80 / 8 |
-| `TesseraEntityDef` | 80 / 8 | `TesseraTiming` | 28 / 4 |
-| `TesseraParticleSpec` | 100 / 4 | `TesseraQuality` | 12 / 4 |
-| `TesseraEffectDef` | 200 / 4 | `TesseraLight` | 40 / 4 |
-| `TesseraCoord` | 8 / 4 | `TesseraTilePlacement` | 16 / 4 |
+| `TesseraConfig` | 40 / 8 | `TesseraTilePlacement` | 24 / 8 |
+| `TesseraBytes` | 32 / 8 | `TesseraEntityPlacement` | 48 / 8 |
+| `TesseraRect` | 16 / 4 | `TesseraEffectPlacement` | 32 / 8 |
+| `TesseraTileDef` | 72 / 4 | `TesseraDicePlacement` | 40 / 8 |
+| `TesseraEntityDef` | 80 / 8 | `TesseraCardPlacement` | 88 / 8 |
+| `TesseraParticleSpec` | 100 / 4 | `TesseraCardDrawPlacement` | 48 / 8 |
+| `TesseraEffectDef` | 200 / 4 | `TesseraHandPlacement` | 48 / 8 |
+| `TesseraDiceFace` | 32 / 8 | `TesseraCamera` | 96 / 8 |
+| `TesseraDiceDef` | 40 / 8 | `TesseraState` | 264 / 8 |
+| `TesseraCardDef` | 92 / 4 | `TesseraPick` | 112 / 8 |
+| `TesseraCoord` | 8 / 4 | `TesseraScreenPos` | 28 / 4 |
+| `TesseraCoordF` | 8 / 4 | `TesseraTiming` | 28 / 4 |
+| `TesseraQuality` | 12 / 4 | `TesseraLight` | 40 / 4 |
+| `TesseraFocus` | 16 / 4 | `TesseraOverlayPlacement` | 68 / 4 |
+| `TesseraLabelPlacement` | 128 / 8 | `TesseraHighlightPlacement` | 48 / 8 |
+| `TesseraEvent` | 40 / 8 | | |
 
 Both bindings mirror this layout field-for-field:
 `bindings/dart/lib/src/ffi.dart` (`dart:ffi`) and `bindings/lua/tessera.lua`
-(LuaJIT FFI). Both carry a header comment pointing back at this self-test.
+(LuaJIT FFI). Both carry a header comment pointing back at this self-test, and
+the `ffi_binding_drift` gate keeps them honest.
+
+## Engine event stream
+
+As transitions animate, the engine emits typed `TesseraEvent`s — a die
+striking the felt (`DICE_CONTACT`, `value` = impact speed) and coming to rest
+(`DICE_SETTLED`, `value` = face), hop touchdowns (`ENTITY_HOP_LANDED`),
+multi-step waypoint handoffs (`ENTITY_WAYPOINT_REACHED`, `value` = step
+number; also emitted for card paths with a CARD/DRAW subject), spawn/removal
+completion (`ENTITY_SPAWNED`/`ENTITY_REMOVED`), card flips and deals
+(`CARD_FLIPPED`/`CARD_DEALT`), camera settles (`CAMERA_ARRIVED`), and every
+operation settle (`OP_COMPLETED`, `subject_id` = the op id) bridged into the
+same stream so a host can consume one uniform ordering. Each event carries the
+engine tick time, a subject kind + id, the nearest board coord where
+meaningful, and a small float payload — everything a host needs to fire
+sounds, haptics, or FX in sync.
+
+Delivery is double-tracked, both allocation-free:
+
+- **Poll**: `tessera_poll_events(e, out, cap)` drains the engine's
+  fixed-capacity ring (256 events), oldest first, from any thread. On
+  overflow the *oldest* events are dropped and the cumulative
+  `tessera_events_dropped(e)` counter grows — drain at least once a frame-ish.
+- **Callback**: `tessera_set_event_callback(e, fn, user)` fires once per
+  event, in order, on the tick thread at the end of the tick that emitted it
+  (outside the engine mutex) — same contract as
+  `tessera_set_operation_callback`. The `TesseraEvent*` is only valid during
+  the call; async marshalling layers must treat it as a wake-up and poll.
+
+The Dart package exposes the poll API (`pollEvents`/`drainEvents`/
+`eventsDropped`) plus a broadcast `Stream<TesseraEngineEvent>`
+(`Tessera.events`) built on `NativeCallable.listener`: the native callback is
+the wake-up, the ring is the source of truth, so no pointer outlives its
+validity and nothing races. The Lua cdef exposes the poll API
+(`M.poll_events(e)` convenience included).
+
+## State serialization & replay
+
+`tessera_state_serialize(state, buf, cap)` flattens a whole `TesseraState`
+(every array, including entity/card multi-step move paths, overlays, labels,
+highlights, camera, epoch) into a self-contained **little-endian** blob with a
+versioned header — magic `"TSST"`, format version, total size, then the
+state's `epoch` as the caller's sequence number. Two-call sizing: call with
+`buf = NULL` to measure, allocate, call again. `tessera_state_deserialize`
+reconstructs a state (the struct and all arrays are ONE allocation, freed
+with `tessera_state_free`) and rejects malformed input — wrong magic/version,
+truncation, corrupt counts — by returning NULL, never crashing. The
+reconstruction pushes straight through `tessera_set_state`, and re-serializing
+it yields a byte-identical blob.
+
+`tessera_replay_*` wraps a sequence of `(timestamp_ms, state blob)` records
+(container magic `"TSRP"`): `create` + `append` while recording,
+`serialize` to bytes (same two-call sizing), `open` + `count` + `get` to play
+records back through `set_state`. See `examples/replay/` for the full
+record-to-file-to-playback loop.
+
+These calls are pure data — no engine, any thread. The Dart binding exposes
+them as `Uint8List`-based methods (`serializeState`/`deserializeState`/
+`freeState` and `createReplay`/`openReplay`/`replayAppend`/`replayCount`/
+`replayGet`/`serializeReplay`); the Lua binding as string-based helpers
+(`M.serialize_state`/`M.deserialize_state`, `M.serialize_replay`/
+`M.open_replay`/`M.replay_get`, GC-managed).
 
 ## Threading contract
 

@@ -2,17 +2,20 @@
 //
 // Struct layouts mirror include/tessera.h EXACTLY. The canonical layout
 // reference (sizeof of every struct + offsetof of every field) is the C
-// self-test tests/test_ffi_layout.c; run it and cross-check if you touch
-// anything here. The ABI in include/tessera.h is FROZEN — evolution is
-// append-only, so appending new trailing fields is safe but reordering /
-// resizing existing ones is not.
+// self-test tests/test_ffi_layout.c (`--dump` for the machine-readable table);
+// the ctest gate `ffi_binding_drift` (tools/check_ffi_bindings.py) diffs this
+// file against it and hard-fails on any drift. The ABI in include/tessera.h is
+// FROZEN — evolution is append-only, so appending new trailing fields is safe
+// but reordering / resizing existing ones is not.
 //
 // dart:ffi lays structs out with the platform C ABI (natural alignment, LP64:
 // pointers/IntPtr/Size = 8 bytes, enums = Int32, bool = 1 byte, float = 4),
 // so declaring the fields in header order reproduces the C layout without
 // manual padding.
 
+import 'dart:async';
 import 'dart:ffi';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -22,6 +25,10 @@ import 'library.dart';
 //  Handles & enums
 // ======================================================================
 final class TesseraEngine extends Opaque {}
+
+/// Opaque replay handle (a timestamped sequence of serialized state blobs);
+/// see `tessera_replay_*` in include/tessera.h.
+final class TesseraReplay extends Opaque {}
 
 // TesseraDefId is uint32 (0 = invalid/none); TesseraEntityId is uint64.
 // Represented as plain Dart ints at the call sites.
@@ -345,6 +352,124 @@ final class TesseraHandPlacement extends Struct {
   external double cardSpacing;
 }
 
+/// enum TesseraOverlayShape: SPRITE samples atlas/uv across the tile (atlas 0
+/// => solid tinted quad); DISC and RING are procedural fills.
+abstract final class TesseraOverlayShape {
+  static const int sprite = 0;
+  static const int disc = 1;
+  static const int ring = 2;
+}
+
+/// A flat decal rendered on top of the tile at [coord] (move-range fills,
+/// threat rings, drop-target highlights). Keyed by coord when diffing: a coord
+/// that newly appears fades in, one that vanishes fades out, and a tint change
+/// crossfades from the currently displayed tint. At most one overlay per coord.
+/// When [pulseS] > 0 the overlay breathes: alpha between
+/// [pulseAlphaMin]..[pulseAlphaMax] (when max > 0) and/or footprint scale
+/// between [pulseScaleMin]..[pulseScaleMax] (when max > 0).
+final class TesseraOverlayPlacement extends Struct {
+  external TesseraCoord coord;
+  @Uint32()
+  external int shape; // TesseraOverlayShape
+  @Uint32()
+  external int atlas; // SPRITE source atlas (0 = untextured/white)
+  external TesseraRect uv; // SPRITE sub-rect of atlas
+  @Array(4)
+  external Array<Float> tint; // RGBA multiply (all-zero => white)
+  @Float()
+  external double pulseS; // breathe period seconds (<= 0 => steady)
+  @Float()
+  external double pulseAlphaMin;
+  @Float()
+  external double pulseAlphaMax;
+  @Float()
+  external double pulseScaleMin;
+  @Float()
+  external double pulseScaleMax;
+}
+
+/// enum TesseraLabelAnchor: what a text label is glued to. WORLD anchors at
+/// `position` directly; the other modes anchor to a live object by id and
+/// treat `position` as an offset from its LIVE animating transform.
+abstract final class TesseraLabelAnchor {
+  static const int world = 0;
+  static const int entity = 1;
+  static const int tile = 2;
+  static const int dice = 3;
+  static const int card = 4;
+  static const int draw = 5;
+}
+
+/// A 3D text label (scores, HP, dice totals, board coordinates). Keyed by
+/// [id] when diffing: a new id fades in, a vanished one fades out, and a text
+/// or color change crossfades from what is currently displayed. [text] is a
+/// bounded inline UTF-8 array (64 bytes incl. NUL); [size] is the line height
+/// in world units (<=0 => 0.5); [color] multiplies the glyphs (all-zero =>
+/// white). With [billboard] the label always faces the camera; otherwise it
+/// lies flat on the ground plane.
+final class TesseraLabelPlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int font; // registered font def id (0 => label skipped)
+  @Array(64)
+  external Array<Uint8> text; // UTF-8, NUL-terminated
+  @Uint32()
+  external int anchor; // TesseraLabelAnchor
+  @Uint64()
+  external int anchorId; // live object id (anchor != world)
+  @Array(3)
+  external Array<Float> position; // world point (world) or anchor offset
+  @Float()
+  external double size; // line height, world units (<=0 => 0.5)
+  @Array(4)
+  external Array<Float> color; // RGBA multiply (all-zero => white)
+  @Bool()
+  external bool billboard; // face the camera each frame
+}
+
+/// enum TesseraHighlightKind: what a selection highlight is attached to —
+/// a live object kind plus its instance id, mirroring the camera FOCUS_* /
+/// label anchor conventions.
+abstract final class TesseraHighlightKind {
+  static const int entity = 0;
+  static const int tile = 1;
+  static const int dice = 2;
+  static const int card = 3;
+}
+
+/// enum TesseraHighlightStyle: crisp colored outline or soft additive glow.
+abstract final class TesseraHighlightStyle {
+  static const int outline = 0;
+  static const int glow = 1;
+}
+
+/// A screen-space selection highlight on one live object, keyed by
+/// ([kind], [targetId]) when diffing: a new one fades in, a vanished one
+/// fades out, and a color change crossfades. The object is re-rendered into
+/// a silhouette mask at its LIVE animating transform and composited over the
+/// lit scene (after depth-of-field) as an outline or glow. [thickness] is in
+/// pixels (<=0 => default); when [pulseS] > 0 the intensity breathes between
+/// [pulseMin]..[pulseMax] (used when max > 0).
+final class TesseraHighlightPlacement extends Struct {
+  @Uint64()
+  external int targetId; // live object id, interpreted per kind (diff key)
+  @Uint32()
+  external int kind; // TesseraHighlightKind
+  @Uint32()
+  external int style; // TesseraHighlightStyle
+  @Array(4)
+  external Array<Float> color; // RGBA (all-zero => white)
+  @Float()
+  external double thickness; // outline width / glow radius, px (<=0 => default)
+  @Float()
+  external double pulseS; // breathe period seconds (<=0 => steady)
+  @Float()
+  external double pulseMin;
+  @Float()
+  external double pulseMax; // intensity range (used when max > 0)
+}
+
 /// enum TesseraCameraMode: how the camera is positioned. 0 = ORBIT (default,
 /// reproduces the classic board camera when the whole struct is left zeroed).
 abstract final class TesseraCameraMode {
@@ -417,6 +542,15 @@ final class TesseraState extends Struct {
   external Pointer<TesseraDicePlacement> dice;
   @Size()
   external int diceCount;
+  external Pointer<TesseraOverlayPlacement> overlays;
+  @Size()
+  external int overlayCount;
+  external Pointer<TesseraLabelPlacement> labels;
+  @Size()
+  external int labelCount;
+  external Pointer<TesseraHighlightPlacement> highlights;
+  @Size()
+  external int highlightCount;
 }
 
 // ======================================================================
@@ -526,6 +660,79 @@ final class TesseraFocus extends Struct {
 }
 
 // ======================================================================
+//  Engine event stream (sound / haptics / FX sync)
+// ======================================================================
+
+/// enum TesseraEventType — the moments the engine surfaces as events.
+abstract final class TesseraEventType {
+  static const int none = 0;
+  static const int diceContact = 1; // value = impact speed
+  static const int diceSettled = 2; // value = face index
+  static const int entityHopLanded = 3;
+  static const int entityWaypointReached = 4; // value = step number
+  static const int entitySpawned = 5;
+  static const int entityRemoved = 6;
+  static const int cardFlipped = 7; // value = 1 when now hidden
+  static const int cardDealt = 8;
+  static const int cameraArrived = 9;
+  static const int opCompleted = 10; // subjectId = the operation id
+}
+
+/// enum TesseraEventSubject — what `subjectId` refers to.
+abstract final class TesseraEventSubject {
+  static const int none = 0;
+  static const int entity = 1;
+  static const int dice = 2;
+  static const int card = 3;
+  static const int draw = 4;
+  static const int camera = 5;
+  static const int operation = 6;
+}
+
+/// One typed engine event (mirrors the C `TesseraEvent`, 40 bytes).
+final class TesseraEvent extends Struct {
+  @Double()
+  external double time; // engine tick time (s)
+  @Uint64()
+  external int subjectId; // object id, interpreted per `subject`
+  @Uint32()
+  external int type; // TesseraEventType
+  @Uint32()
+  external int subject; // TesseraEventSubject
+  external TesseraCoord coord; // board coord where meaningful, else (0,0)
+  @Float()
+  external double value; // small payload (impact speed, face, step...)
+  @Uint32()
+  external int reserved; // always 0
+}
+
+/// A materialized (pure-Dart) copy of a [TesseraEvent], safe to hold after the
+/// native ring slot has been reused. Emitted by [Tessera.events] /
+/// [Tessera.drainEvents].
+class TesseraEngineEvent {
+  final int type; // TesseraEventType
+  final int subject; // TesseraEventSubject
+  final int subjectId;
+  final double time; // engine tick time (s)
+  final int coordX, coordY; // board coord where meaningful, else (0,0)
+  final double value; // small payload (impact speed, face, step...)
+  const TesseraEngineEvent({
+    required this.type,
+    required this.subject,
+    required this.subjectId,
+    required this.time,
+    required this.coordX,
+    required this.coordY,
+    required this.value,
+  });
+
+  @override
+  String toString() =>
+      'TesseraEngineEvent(type: $type, subject: $subject/$subjectId, '
+      't: $time, coord: ($coordX,$coordY), value: $value)';
+}
+
+// ======================================================================
 //  Function typedefs (C signature / Dart signature pairs)
 // ======================================================================
 typedef _CreateC = Pointer<TesseraEngine> Function(Pointer<TesseraConfig>);
@@ -558,6 +765,8 @@ typedef _AnimNameD = Pointer<Utf8> Function(Pointer<TesseraEngine>, int, int);
 
 typedef _RegCardC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraCardDef>);
 typedef _RegCardD = int Function(Pointer<TesseraEngine>, Pointer<TesseraCardDef>);
+typedef _RegFontC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>, Float);
+typedef _RegFontD = int Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>, double);
 typedef _RegDiceC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
 typedef _RegDiceD = int Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
 typedef _DiceFaceCountC = Uint32 Function(Pointer<TesseraEngine>, Uint32);
@@ -571,6 +780,28 @@ typedef _DiceAllIdleD = bool Function(Pointer<TesseraEngine>);
 
 typedef _SetStateC = Uint64 Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
 typedef _SetStateD = int Function(Pointer<TesseraEngine>, Pointer<TesseraState>);
+typedef _StateSerializeC = Size Function(Pointer<TesseraState>, Pointer<Void>, Size);
+typedef _StateSerializeD = int Function(Pointer<TesseraState>, Pointer<Void>, int);
+typedef _StateDeserializeC = Pointer<TesseraState> Function(Pointer<Void>, Size);
+typedef _StateDeserializeD = Pointer<TesseraState> Function(Pointer<Void>, int);
+typedef _StateFreeC = Void Function(Pointer<TesseraState>);
+typedef _StateFreeD = void Function(Pointer<TesseraState>);
+typedef _ReplayCreateC = Pointer<TesseraReplay> Function();
+typedef _ReplayCreateD = Pointer<TesseraReplay> Function();
+typedef _ReplayOpenC = Pointer<TesseraReplay> Function(Pointer<Void>, Size);
+typedef _ReplayOpenD = Pointer<TesseraReplay> Function(Pointer<Void>, int);
+typedef _ReplayFreeC = Void Function(Pointer<TesseraReplay>);
+typedef _ReplayFreeD = void Function(Pointer<TesseraReplay>);
+typedef _ReplayAppendC = Bool Function(Pointer<TesseraReplay>, Uint64, Pointer<TesseraState>);
+typedef _ReplayAppendD = bool Function(Pointer<TesseraReplay>, int, Pointer<TesseraState>);
+typedef _ReplayCountC = Uint32 Function(Pointer<TesseraReplay>);
+typedef _ReplayCountD = int Function(Pointer<TesseraReplay>);
+typedef _ReplayGetC =
+    Pointer<TesseraState> Function(Pointer<TesseraReplay>, Uint32, Pointer<Uint64>);
+typedef _ReplayGetD =
+    Pointer<TesseraState> Function(Pointer<TesseraReplay>, int, Pointer<Uint64>);
+typedef _ReplaySerializeC = Size Function(Pointer<TesseraReplay>, Pointer<Void>, Size);
+typedef _ReplaySerializeD = int Function(Pointer<TesseraReplay>, Pointer<Void>, int);
 typedef _OpCompletedC = Bool Function(Pointer<TesseraEngine>, Uint64);
 typedef _OpCompletedD = bool Function(Pointer<TesseraEngine>, int);
 typedef _LastOpC = Uint64 Function(Pointer<TesseraEngine>);
@@ -583,6 +814,21 @@ typedef _SetOpCallbackC = Void Function(
     Pointer<TesseraEngine>, Pointer<NativeFunction<TesseraOpCompletedNative>>, Pointer<Void>);
 typedef _SetOpCallbackD = void Function(
     Pointer<TesseraEngine>, Pointer<NativeFunction<TesseraOpCompletedNative>>, Pointer<Void>);
+typedef _PollEventsC = Uint32 Function(
+    Pointer<TesseraEngine>, Pointer<TesseraEvent>, Uint32);
+typedef _PollEventsD = int Function(
+    Pointer<TesseraEngine>, Pointer<TesseraEvent>, int);
+typedef _EventsDroppedC = Uint32 Function(Pointer<TesseraEngine>);
+typedef _EventsDroppedD = int Function(Pointer<TesseraEngine>);
+/// Native signature of the engine-event callback: `void(const TesseraEvent*,
+/// void* user)`. Fired on the tick thread; with `NativeCallable.listener` the
+/// invocation is delivered asynchronously, so the pointer must be treated as a
+/// wake-up signal only (drain via [Tessera.pollEvents], never dereference it).
+typedef TesseraEventNative = Void Function(Pointer<TesseraEvent>, Pointer<Void>);
+typedef _SetEventCallbackC = Void Function(
+    Pointer<TesseraEngine>, Pointer<NativeFunction<TesseraEventNative>>, Pointer<Void>);
+typedef _SetEventCallbackD = void Function(
+    Pointer<TesseraEngine>, Pointer<NativeFunction<TesseraEventNative>>, Pointer<Void>);
 typedef _PickC = Bool Function(Pointer<TesseraEngine>, Float, Float, Pointer<TesseraPick>);
 typedef _PickD = bool Function(Pointer<TesseraEngine>, double, double, Pointer<TesseraPick>);
 typedef _WorldToScreenC =
@@ -682,6 +928,8 @@ class Tessera {
 
   late final _RegCardD _registerCardDef =
       _lib.lookupFunction<_RegCardC, _RegCardD>('tessera_register_card_def');
+  late final _RegFontD _registerFont =
+      _lib.lookupFunction<_RegFontC, _RegFontD>('tessera_register_font');
   late final _RegDiceD _registerDiceDef =
       _lib.lookupFunction<_RegDiceC, _RegDiceD>('tessera_register_dice_def');
   late final _DiceFaceCountD _diceDefFaceCount = _lib
@@ -695,12 +943,38 @@ class Tessera {
 
   late final _SetStateD _setState =
       _lib.lookupFunction<_SetStateC, _SetStateD>('tessera_set_state');
+  late final _StateSerializeD _stateSerialize = _lib
+      .lookupFunction<_StateSerializeC, _StateSerializeD>('tessera_state_serialize');
+  late final _StateDeserializeD _stateDeserialize = _lib
+      .lookupFunction<_StateDeserializeC, _StateDeserializeD>('tessera_state_deserialize');
+  late final _StateFreeD _stateFree =
+      _lib.lookupFunction<_StateFreeC, _StateFreeD>('tessera_state_free');
+  late final _ReplayCreateD _replayCreate =
+      _lib.lookupFunction<_ReplayCreateC, _ReplayCreateD>('tessera_replay_create');
+  late final _ReplayOpenD _replayOpen =
+      _lib.lookupFunction<_ReplayOpenC, _ReplayOpenD>('tessera_replay_open');
+  late final _ReplayFreeD _replayFree =
+      _lib.lookupFunction<_ReplayFreeC, _ReplayFreeD>('tessera_replay_free');
+  late final _ReplayAppendD _replayAppend =
+      _lib.lookupFunction<_ReplayAppendC, _ReplayAppendD>('tessera_replay_append');
+  late final _ReplayCountD _replayCount =
+      _lib.lookupFunction<_ReplayCountC, _ReplayCountD>('tessera_replay_count');
+  late final _ReplayGetD _replayGet =
+      _lib.lookupFunction<_ReplayGetC, _ReplayGetD>('tessera_replay_get');
+  late final _ReplaySerializeD _replaySerialize = _lib
+      .lookupFunction<_ReplaySerializeC, _ReplaySerializeD>('tessera_replay_serialize');
   late final _OpCompletedD _operationCompleted = _lib
       .lookupFunction<_OpCompletedC, _OpCompletedD>('tessera_operation_completed');
   late final _LastOpD _lastCompletedOperation = _lib
       .lookupFunction<_LastOpC, _LastOpD>('tessera_last_completed_operation');
   late final _SetOpCallbackD _setOperationCallback = _lib
       .lookupFunction<_SetOpCallbackC, _SetOpCallbackD>('tessera_set_operation_callback');
+  late final _PollEventsD _pollEvents =
+      _lib.lookupFunction<_PollEventsC, _PollEventsD>('tessera_poll_events');
+  late final _EventsDroppedD _eventsDropped = _lib
+      .lookupFunction<_EventsDroppedC, _EventsDroppedD>('tessera_events_dropped');
+  late final _SetEventCallbackD _setEventCallback = _lib
+      .lookupFunction<_SetEventCallbackC, _SetEventCallbackD>('tessera_set_event_callback');
   late final _PickD _pick = _lib.lookupFunction<_PickC, _PickD>('tessera_pick');
   late final _WorldToScreenD _worldToScreen =
       _lib.lookupFunction<_WorldToScreenC, _WorldToScreenD>('tessera_world_to_screen');
@@ -813,6 +1087,14 @@ class Tessera {
   /// TesseraDefId (0 = fail). Place cards/piles/hands via [setState].
   int registerCardDef(Pointer<TesseraCardDef> def) => _registerCardDef(_engine, def);
 
+  // ---- fonts ----
+  /// Register a TrueType/OpenType font (file bytes or a path, like an atlas);
+  /// bakes ASCII + Latin-1 glyphs at [pixelHeight] texels into a GPU atlas.
+  /// Returns a TesseraDefId (0 = fail). Labels reference it via
+  /// [TesseraLabelPlacement.font] in [setState].
+  int registerFont(Pointer<TesseraBytes> ttf, double pixelHeight) =>
+      _registerFont(_engine, ttf, pixelHeight);
+
   // ---- dice (state-driven: place dice via setState / TesseraDicePlacement) ----
   /// Register a dice def (per-face sprites); returns a TesseraDefId (0 = fail).
   int registerDiceDef(Pointer<TesseraDiceDef> def) => _registerDiceDef(_engine, def);
@@ -842,6 +1124,90 @@ class Tessera {
   /// [lastCompletedOperation] reaches it / the operation callback fires with it.
   int setState(Pointer<TesseraState> s) => _setState(_engine, s);
 
+  // ---- state serialization / save / undo / replay ----
+  // Pure-data calls (no engine involved, any-thread); they live here because
+  // the class already owns the loaded native library.
+
+  /// Serialize a native state into a self-contained, versioned little-endian
+  /// blob (`tessera_state_serialize`, two-call sizing) — the building block
+  /// for saves, undo stacks and replays. Returns an empty list for nullptr.
+  Uint8List serializeState(Pointer<TesseraState> s) {
+    final n = _stateSerialize(s, nullptr, 0);
+    if (n == 0) return Uint8List(0);
+    final buf = calloc<Uint8>(n);
+    try {
+      _stateSerialize(s, buf.cast(), n);
+      return Uint8List.fromList(buf.asTypedList(n));
+    } finally {
+      calloc.free(buf);
+    }
+  }
+
+  /// Reconstruct a state from a [serializeState] blob. The state and all its
+  /// arrays are ONE native allocation — free it with [freeState] (only).
+  /// Returns nullptr on malformed input (bad magic/version/truncation).
+  /// Push it straight through [setState].
+  Pointer<TesseraState> deserializeState(Uint8List blob) {
+    if (blob.isEmpty) return nullptr;
+    final buf = calloc<Uint8>(blob.length);
+    try {
+      buf.asTypedList(blob.length).setAll(0, blob);
+      return _stateDeserialize(buf.cast(), blob.length);
+    } finally {
+      calloc.free(buf);
+    }
+  }
+
+  /// Free a state returned by [deserializeState] / [replayGet].
+  void freeState(Pointer<TesseraState> s) => _stateFree(s);
+
+  /// New empty replay recorder (`tessera_replay_create`); free with
+  /// [freeReplay].
+  Pointer<TesseraReplay> createReplay() => _replayCreate();
+
+  /// Parse a serialized replay container ([serializeReplay] bytes). Returns
+  /// nullptr on malformed input. Free with [freeReplay].
+  Pointer<TesseraReplay> openReplay(Uint8List data) {
+    if (data.isEmpty) return nullptr;
+    final buf = calloc<Uint8>(data.length);
+    try {
+      buf.asTypedList(data.length).setAll(0, data);
+      return _replayOpen(buf.cast(), data.length);
+    } finally {
+      calloc.free(buf);
+    }
+  }
+
+  void freeReplay(Pointer<TesseraReplay> r) => _replayFree(r);
+
+  /// Append one (timestampMs, state) record; the state is serialized
+  /// immediately, so the caller keeps ownership of [s].
+  bool replayAppend(Pointer<TesseraReplay> r, int timestampMs, Pointer<TesseraState> s) =>
+      _replayAppend(r, timestampMs, s);
+
+  /// Number of records in a replay.
+  int replayCount(Pointer<TesseraReplay> r) => _replayCount(r);
+
+  /// Reconstruct record [index] (0-based, append order); the record's
+  /// timestamp is returned through [outTimestampMs] when non-null. Free the
+  /// state with [freeState]; nullptr on a bad index / corrupt record.
+  Pointer<TesseraState> replayGet(Pointer<TesseraReplay> r, int index,
+          [Pointer<Uint64>? outTimestampMs]) =>
+      _replayGet(r, index, outTimestampMs ?? nullptr);
+
+  /// Flatten a replay container to bytes (write them to a file, ship them...).
+  Uint8List serializeReplay(Pointer<TesseraReplay> r) {
+    final n = _replaySerialize(r, nullptr, 0);
+    if (n == 0) return Uint8List(0);
+    final buf = calloc<Uint8>(n);
+    try {
+      _replaySerialize(r, buf.cast(), n);
+      return Uint8List.fromList(buf.asTypedList(n));
+    } finally {
+      calloc.free(buf);
+    }
+  }
+
   /// True once operation [op] has fully animated. `op == 0` is always true.
   bool operationCompleted(int op) => _operationCompleted(_engine, op);
 
@@ -857,6 +1223,131 @@ class Tessera {
     Pointer<Void> user,
   ) =>
       _setOperationCallback(_engine, fn, user);
+
+  // ---- typed engine event stream ----
+  /// Drain up to [cap] pending engine events into [out] (a
+  /// `calloc<TesseraEvent>(cap)` buffer), oldest first; returns how many were
+  /// written. Consumes what it returns. Any-thread. Prefer [drainEvents] or
+  /// the broadcast [events] stream unless you need zero-copy access.
+  int pollEvents(Pointer<TesseraEvent> out, int cap) =>
+      _pollEvents(_engine, out, cap);
+
+  /// Total events dropped to ring overflow since engine creation (0 when the
+  /// host keeps up — poll or listen at least once a frame-ish).
+  int get eventsDropped => _eventsDropped(_engine);
+
+  /// Register a raw native event callback fired once per event on the engine
+  /// tick thread (see `tessera_set_event_callback`). Pass nullptr to clear.
+  ///
+  /// The engine has ONE callback slot, and the broadcast [events] stream is
+  /// built on it too: while that stream has listeners the slot belongs to it,
+  /// and this method throws [StateError] instead of silently clobbering it
+  /// (and vice versa — see [events]). A non-null [fn] claims the slot for the
+  /// external owner; passing nullptr releases it.
+  void setEventCallback(
+    Pointer<NativeFunction<TesseraEventNative>> fn,
+    Pointer<Void> user,
+  ) {
+    if (_eventCallable != null) {
+      throw StateError(
+          'tessera: the events stream owns the engine event callback; cancel '
+          'its listeners before installing an external callback');
+    }
+    _externalEventCallback = fn != nullptr;
+    _setEventCallback(_engine, fn, user);
+  }
+
+  bool _externalEventCallback = false;
+  NativeCallable<TesseraEventNative>? _eventCallable;
+  StreamController<TesseraEngineEvent>? _eventController;
+  Pointer<TesseraEvent> _eventBuf = nullptr;
+  static const int _eventBufCap = 64;
+
+  /// Drain every pending engine event into materialized Dart objects (oldest
+  /// first). Complements the [events] stream for poll-style hosts; do not mix
+  /// the two (both consume the same ring).
+  List<TesseraEngineEvent> drainEvents() {
+    if (_eventBuf == nullptr) _eventBuf = calloc<TesseraEvent>(_eventBufCap);
+    final out = <TesseraEngineEvent>[];
+    for (;;) {
+      final n = _pollEvents(_engine, _eventBuf, _eventBufCap);
+      for (var i = 0; i < n; i++) {
+        final ev = (_eventBuf + i).ref;
+        out.add(TesseraEngineEvent(
+          type: ev.type,
+          subject: ev.subject,
+          subjectId: ev.subjectId,
+          time: ev.time,
+          coordX: ev.coord.x,
+          coordY: ev.coord.y,
+          value: ev.value,
+        ));
+      }
+      if (n < _eventBufCap) break;
+    }
+    return out;
+  }
+
+  /// Broadcast stream of engine events (dice contacts, hop landings, card
+  /// flips, camera arrival, op completion, ...) for sound/haptics/FX sync.
+  ///
+  /// Built on `NativeCallable.listener`: the engine's tick-thread callback is
+  /// used purely as a wake-up marshalled onto this isolate, and the ring is
+  /// then drained with `tessera_poll_events` — so no native pointer outlives
+  /// its validity and nothing is lost between wake-ups. The native callback is
+  /// installed on first listen and removed when the last listener cancels.
+  /// Don't combine with manual [pollEvents]/[drainEvents] while listening
+  /// (both consume the same ring).
+  ///
+  /// The engine has ONE callback slot: while an external callback installed
+  /// via [setEventCallback] is registered (e.g. a higher-level host such as
+  /// flutter_tessera's TesseraController — use its own events stream instead),
+  /// listening here throws [StateError] rather than silently stealing the
+  /// slot and the ring from that owner.
+  Stream<TesseraEngineEvent> get events {
+    final ctl = _eventController ??= StreamController<TesseraEngineEvent>.broadcast(
+      onListen: _startEventStream,
+      onCancel: _stopEventStream,
+    );
+    return ctl.stream;
+  }
+
+  void _startEventStream() {
+    if (_eventCallable != null) return;
+    if (_externalEventCallback) {
+      throw StateError(
+          'tessera: an external event callback owns the engine callback slot '
+          '(setEventCallback); use that owner\'s event surface instead of '
+          'Tessera.events, or clear it first');
+    }
+    final cb = NativeCallable<TesseraEventNative>.listener(_onEventWakeup);
+    _eventCallable = cb;
+    _setEventCallback(_engine, cb.nativeFunction, nullptr);
+    _pumpEventStream(); // catch up on anything already buffered
+  }
+
+  void _onEventWakeup(Pointer<TesseraEvent> ev, Pointer<Void> user) {
+    // Delivered asynchronously: `ev` may already point at a recycled slot.
+    // Never dereference it — drain the ring instead.
+    _pumpEventStream();
+  }
+
+  void _pumpEventStream() {
+    final ctl = _eventController;
+    if (ctl == null || ctl.isClosed) return;
+    for (final ev in drainEvents()) {
+      ctl.add(ev);
+    }
+  }
+
+  void _stopEventStream() {
+    final cb = _eventCallable;
+    _eventCallable = null;
+    if (cb != null) {
+      _setEventCallback(_engine, nullptr, nullptr);
+      cb.close();
+    }
+  }
 
   /// Ray-pick the tile/entity under a logical window pixel (SDL input space).
   bool pick(double screenX, double screenY, Pointer<TesseraPick> out) =>
@@ -919,8 +1410,16 @@ class Tessera {
       _renderRgba(_engine, dt, w, h, outRgba, outSize);
 
   /// Destroy the engine and release its window/GPU resources (owning wrappers
-  /// only). A no-op for [Tessera.fromHandle], whose host owns the lifecycle.
+  /// only). For [Tessera.fromHandle] the host owns the engine lifecycle, but
+  /// this still tears down the Dart-side event stream plumbing.
   void dispose() {
+    _stopEventStream();
+    _eventController?.close();
+    _eventController = null;
+    if (_eventBuf != nullptr) {
+      calloc.free(_eventBuf);
+      _eventBuf = nullptr;
+    }
     if (_ownsEngine) _destroy(_engine);
   }
 }
