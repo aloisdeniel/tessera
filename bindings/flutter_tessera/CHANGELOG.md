@@ -19,6 +19,13 @@
   `Iterable<TesseraScene>`, so games can project a state change into its
   visual beat sequence with a `sync*` generator (Duel yields lunge → settle
   lazily) — existing `List`-returning games are unaffected.
+- **View mode (example app).** Every example game's navigation bar gained a
+  shared free-look toggle (`example/lib/view_mode.dart`, hosted by
+  `GameScreen`): while armed, dragging orbits the camera around the centre of
+  the board and pinching zooms, with a snappy camera tween so the pose tracks
+  the finger; the game itself is frozen. Leaving the mode — the toggle again,
+  or any other interaction — restores the game's timing and glides the camera
+  back to where the game had it.
 - **Sound effects.** `TesseraController.registerSound` (WAV bytes — e.g. a
   Flutter asset via `rootBundle`) and `playSound` (any-thread, fire-and-forget,
   clips mix) expose the engine's new SDL-audio API, typically triggered off the

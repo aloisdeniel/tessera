@@ -21,6 +21,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_tessera/flutter_tessera.dart';
 
+import 'view_mode.dart';
+
 /// The shared shadow mode applied to every game's engine. `GameScreen` merges
 /// it over each game's own [GameController.quality] (which keeps its msaa /
 /// renderScale) and re-applies it live when the app-bar toggle flips it.
@@ -155,6 +157,8 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   Timer? _loop;
   final _queue = <TesseraScene>[];
   final _rng = math.Random(0x51E5A);
+  final _viewMode = ViewModeController(); // shared drag-to-orbit control
+  TesseraScene? _lastScene; // the last scene pushed (view mode's home)
   late S _state;
   bool _autoplay = false;
   bool _ready = false;
@@ -171,15 +175,21 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
     super.initState();
     _state = game.initial();
     sharedShadowMode.addListener(_onShadowModeChanged);
+    _viewMode.addListener(_onViewModeChanged);
   }
 
   @override
   void dispose() {
     sharedShadowMode.removeListener(_onShadowModeChanged);
+    _viewMode.dispose();
     _loop?.cancel();
     _hold?.cancel();
     _controller?.dispose();
     super.dispose();
+  }
+
+  void _onViewModeChanged() {
+    if (mounted) setState(() {});
   }
 
   /// The game's quality knobs with the shared shadow mode merged over them.
@@ -228,6 +238,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
       _controller == null ||
       _playing ||
       _hold != null ||
+      _viewMode.active ||
       !_controller!.isIdle ||
       _queue.isNotEmpty;
 
@@ -240,6 +251,12 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   void _pump() {
     final c = _controller;
     if (c == null || _playing) return;
+    if (_viewMode.active) {
+      // The game is frozen while the player looks around; anything queued
+      // (e.g. an onResize refit) plays once view mode is left.
+      _syncBusy();
+      return;
+    }
     if (_queue.isNotEmpty) {
       _playNext(c);
       return;
@@ -292,7 +309,9 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   Future<void> _playNext(TesseraController c) async {
     _playing = true;
     _syncBusy();
-    await c.setScene(_queue.removeAt(0)); // resolves when the transition is idle
+    final scene = _queue.removeAt(0);
+    _lastScene = scene; // view mode's home: the game's latest scene + camera
+    await c.setScene(scene); // resolves when the transition is idle
     if (!mounted) return;
     _playing = false;
     _syncBusy();
@@ -308,6 +327,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
   }
 
   void _dispatch(A action) {
+    _viewMode.exit(); // any game action leaves view mode first
     _hold?.cancel();
     _hold = null;
     _state = game.update(_state, action);
@@ -318,6 +338,13 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
 
   Future<void> _onTapDown(TapDownDetails d) async {
     final c = _controller;
+    if (_viewMode.active) {
+      // Any other interaction leaves view mode: the tap just brings the
+      // camera home, it never reaches the game.
+      _viewMode.exit();
+      _pump();
+      return;
+    }
     if (c == null || _animating) return;
     final pick = await c.pick(d.localPosition.dx, d.localPosition.dy);
     final a = game.onTap(_state, pick, local: d.localPosition, view: _viewSize);
@@ -332,6 +359,26 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
       appBar: AppBar(
         title: Text(game.title),
         actions: [
+          IconButton(
+            tooltip: _viewMode.active
+                ? 'Exit view mode (the camera returns home)'
+                : 'View mode — drag to orbit the board, pinch to zoom',
+            icon: Icon(Icons.threed_rotation,
+                color: _viewMode.active ? Colors.amberAccent : null),
+            onPressed: !_ready || (!_viewMode.active && _animating)
+                ? null
+                : () {
+                    final c = _controller;
+                    final scene = _lastScene;
+                    if (_viewMode.active) {
+                      _viewMode.exit();
+                      _pump();
+                    } else if (c != null && scene != null) {
+                      _viewMode.enter(
+                          tessera: c, scene: scene, timing: game.timing);
+                    }
+                  },
+          ),
           IconButton(
             tooltip: sharedShadowMode.value == TesseraShadowMode.map
                 ? 'Shadow-mapped (tap for blob shadows)'
@@ -371,6 +418,13 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
                 _viewSize = constraints.biggest;
                 return GestureDetector(
                   onTapDown: _onTapDown,
+                  // View-mode free look. A scale gesture subsumes a drag, so
+                  // one recognizer covers both: the focal point's movement
+                  // orbits the camera, the pinch factor zooms it. Inert
+                  // while view mode is off.
+                  onScaleStart: (_) => _viewMode.beginGesture(),
+                  onScaleUpdate: (d) =>
+                      _viewMode.gesture(d.focalPointDelta, d.scale),
                   child: TesseraView(onCreated: _onCreated),
                 );
               },
@@ -400,7 +454,12 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    _ready ? game.status(_state) : 'starting…',
+                    !_ready
+                        ? 'starting…'
+                        : _viewMode.active
+                            ? 'View mode — drag to orbit, pinch to zoom · '
+                                'tap the board to return'
+                            : game.status(_state),
                     style: const TextStyle(fontSize: 13),
                   ),
                   if (buttons.isNotEmpty) ...[
