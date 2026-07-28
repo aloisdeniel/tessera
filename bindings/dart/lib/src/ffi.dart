@@ -271,6 +271,8 @@ final class TesseraEffectPlacement extends Struct {
   external TesseraCoord coord;
   @Uint64()
   external int attachEntityId; // 0 = anchored to tile coord
+  @Uint64()
+  external int attachCardId; // 0 = none; anchors to a live card (wins)
 }
 
 /// A die in the scene. A placement that newly appears (by id) is thrown; one

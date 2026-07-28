@@ -2,10 +2,34 @@
 
 ## Unreleased
 
+- **Scene effects & card-attached effects.** `TesseraScene.effects`
+  (`TesseraEffect`) finally exposes the engine's particle-effect placements to
+  Flutter: an effect id that newly appears plays its def's `onAdd` burst, a
+  vanished one plays `onRemove`. An effect anchors to a tile, or attaches to a
+  live entity — or, new engine-wide, to a live *card* via
+  `TesseraEffect.attachCard`: the emitter sits just above the card's displayed
+  face and follows it through deals, lunges, flips and hand reflows. Duel
+  plays an attack spark-trail on the lunging card and a defensive shield
+  burst on the struck target with it. Duel also marks a creature that has
+  attacked as *engaged*: its card tweens to a sideways quarter-turn (the
+  classic "tapped" cue) as it slides home, standing back up when it readies
+  next round.
+- **`GameController.render` is now an `Iterable`.** The example framework's
+  render contract loosened from `List<TesseraScene>` to
+  `Iterable<TesseraScene>`, so games can project a state change into its
+  visual beat sequence with a `sync*` generator (Duel yields lunge → settle
+  lazily) — existing `List`-returning games are unaffected.
 - **Sound effects.** `TesseraController.registerSound` (WAV bytes — e.g. a
   Flutter asset via `rootBundle`) and `playSound` (any-thread, fire-and-forget,
   clips mix) expose the engine's new SDL-audio API, typically triggered off the
   `events` stream so audio lands on the engine's beats.
+- **Physical card flips.** Toggling `TesseraCard.hidden` now turns the card
+  over for real — a tweened half-turn about its long axis (free cards arc up
+  clear of the table) — so face-down cards show their genuinely textured back.
+  The def's hidden texture becomes an anti-peek concealer worn by the front
+  face only while it points away (swapped when the flip is edge-on). Piles
+  read as physical stacks: a face-down deck's top shows the card back, and
+  only its underside wears the concealing texture.
 - **Point lights.** `TesseraScene.pointLights` (`TesseraPointLight`: position,
   color, intensity, radius) adds positional sphere lights on top of the global
   directional + ambient light — braziers, lanterns, spell glows. Diffed by id:

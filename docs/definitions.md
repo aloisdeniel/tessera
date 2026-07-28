@@ -122,9 +122,13 @@ typedef struct { TesseraParticleSpec on_add; TesseraParticleSpec on_remove; } Te
 | `duration_s` | `0` = one-shot burst; `>0` = continuous emission window |
 
 Effects appear in a state through `TesseraEffectPlacement`, anchored to a tile
-`coord` or attached to an entity via `attach_entity_id` (`0` = tile-anchored).
-An entity def's `on_spawn_effect` / `on_despawn_effect` fire the linked effect
-automatically when that entity is added or removed.
+`coord`, attached to an entity via `attach_entity_id`, or attached to a single
+card via `attach_card_id` (`0` = tile-anchored; the card wins when both attach
+ids are set). A card-attached emitter sits just above the card's displayed
+face and follows the card's live animating position — deals, lunges, flips,
+hand reflows — so a continuous effect trails a moving card. An entity def's
+`on_spawn_effect` / `on_despawn_effect` fire the linked effect automatically
+when that entity is added or removed.
 
 ## Dice — procedural polyhedral dice with per-face sprites
 
@@ -269,13 +273,21 @@ typedef struct {
 
 Behaviour, all driven by the state diff:
 
-- **Flip** — toggling `hidden` crossfades the front between the visible and
-  hidden textures. A card's `position`/`orientation` change **tweens** like an
-  entity.
+- **Flip** — a card's two sides are both genuinely textured (the real face on
+  the front, `back_atlas` on the back), and toggling `hidden` turns the card
+  over PHYSICALLY: a half-turn about its long axis is folded into the target
+  orientation and tweened, so a face-down card shows the viewer its back. An
+  in-place flip of a free card arcs up over half its width so it turns above
+  the table rather than through it. **Anti-peek:** while the card is
+  face-down its front face wears the concealing `hidden_atlas` (swapped while
+  the flip is edge-on), so no camera angle can read the face of a face-down
+  card. A card's `position`/`orientation` change **tweens** like an entity.
 - **Pile (`TesseraCardDrawPlacement`)** — one slab whose **thickness tracks
-  `count`** (tweens when it changes), resting on the ground at `position`. The
-  top face shows the top card (visible, or the hidden front when `top_hidden`);
-  the bottom face always shows the def's **hidden** texture.
+  `count`** (tweens when it changes), resting on the ground at `position`. A
+  pile is a physical stack: face-up (`top_hidden` false) the top shows the top
+  card's **visible** face and the underside a card **back**; face-down the top
+  shows a **back** (crossfading when toggled) and only the underside — a face
+  pointing at the floor — wears the concealing **hidden** texture.
 - **Hand (`TesseraHandPlacement`)** — a world-space anchor that **overrides the
   positions** of the cards whose `hand` equals its id, fanning them in an arc
   that follows the hand's transform (cards tween into their fan slots; `hand_slot`

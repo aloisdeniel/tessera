@@ -4,7 +4,8 @@
  * Effects have no persistent geometry: a state's EFFECT_ADD spawns an `on_add`
  * emitter, EFFECT_REMOVE spawns `on_remove`, and each emitter lives only until
  * its particles expire. Emitters may be anchored to a tile coord or attached to
- * a live entity (aura that follows a moving unit).
+ * a live entity (aura that follows a moving unit) or a live single card (a
+ * burst riding the card's displayed face through deals, lunges and flips).
  */
 #ifndef TESSERA_FX_H
 #define TESSERA_FX_H
@@ -32,6 +33,7 @@ typedef struct {
     SDL_GPUTexture*     texture;      /* resolved atlas or white */
     vec3                anchor;       /* world emission point */
     TesseraEntityId     attach;       /* 0 = static anchor, else follow entity */
+    TesseraCardId       attach_card;  /* 0 = none, else follow card (wins) */
     float               age;          /* emitter age (s) */
     float               emit_accum;   /* fractional continuous emission */
     bool                additive;
@@ -61,10 +63,11 @@ struct TsFx {
 struct TsFx* ts_fx_create(void);
 void ts_fx_destroy(struct TsFx* fx, TsGpu* gpu);
 
-/* Spawn an emitter from a spec at a world anchor (attach=0) or following an
- * entity (attach!=0). No-op if the spec would emit nothing. */
+/* Spawn an emitter from a spec at a world anchor (attach=attach_card=0) or
+ * following an entity / a single card (the card wins when both are set).
+ * No-op if the spec would emit nothing. */
 void ts_fx_spawn(struct TsFx* fx, TesseraEngine* e, const TesseraParticleSpec* spec,
-                 const vec3 anchor, TesseraEntityId attach);
+                 const vec3 anchor, TesseraEntityId attach, TesseraCardId attach_card);
 
 /* Diff effects/entities between snapshots and spawn the matching emitters. */
 void ts_fx_on_promote(TesseraEngine* e, const struct TsSnapshot* prev,

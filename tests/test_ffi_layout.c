@@ -141,11 +141,12 @@ OFF_IS(TesseraEntityPlacement, anim, 24);
 OFF_IS(TesseraEntityPlacement, path, 32);
 OFF_IS(TesseraEntityPlacement, path_count, 40);
 
-SIZE_IS(TesseraEffectPlacement, 32);
+SIZE_IS(TesseraEffectPlacement, 40);
 OFF_IS(TesseraEffectPlacement, id, 0);
 OFF_IS(TesseraEffectPlacement, def, 8);
 OFF_IS(TesseraEffectPlacement, coord, 12);
 OFF_IS(TesseraEffectPlacement, attach_entity_id, 24);
+OFF_IS(TesseraEffectPlacement, attach_card_id, 32);
 
 SIZE_IS(TesseraDicePlacement, 40);
 OFF_IS(TesseraDicePlacement, id, 0);
@@ -487,6 +488,7 @@ static void dump_layout(void) {
     D_FIELD(TesseraEffectPlacement, def);
     D_FIELD(TesseraEffectPlacement, coord);
     D_FIELD(TesseraEffectPlacement, attach_entity_id);
+    D_FIELD(TesseraEffectPlacement, attach_card_id);
 
     D_STRUCT(TesseraDicePlacement);
     D_FIELD(TesseraDicePlacement, id);
@@ -823,6 +825,7 @@ int main(int argc, char** argv) {
     P_OFF(TesseraEffectPlacement, def);
     P_OFF(TesseraEffectPlacement, coord);
     P_OFF(TesseraEffectPlacement, attach_entity_id);
+    P_OFF(TesseraEffectPlacement, attach_card_id);
 
     P_SIZE(TesseraCamera);
     P_OFF(TesseraCamera, focus);

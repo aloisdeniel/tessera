@@ -89,7 +89,10 @@ abstract class GameController<S, A> {
   /// Project [state] to one — or a sequence of — visual scenes. The host plays
   /// them in order, waiting for the renderer to go idle between frames, so a
   /// multi-element result animates step by step (e.g. a dealer revealing cards).
-  List<TesseraScene> render(S state);
+  /// Returning an `Iterable` lets a game express the sequence as a `sync*`
+  /// generator, yielding one beat at a time straight from the state change
+  /// (see Duel's lunge-then-settle attack); returning a plain `List` is fine.
+  Iterable<TesseraScene> render(S state);
 
   /// An *intrinsic* step that always advances [state] when the host goes idle,
   /// regardless of the auto-play toggle — for animations the game drives itself

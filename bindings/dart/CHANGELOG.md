@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `TesseraEffectPlacement` gained `attachCardId` (0 = none): the effect anchors
+  just above a live single card's displayed face and follows it through deals,
+  moves and flips (wins over `attachEntityId`). State blob format version
+  bumped to 3.
 - Add the sound API: `Tessera.registerSound` (WAV file bytes or a path, like an
   atlas) and `Tessera.playSound` (any-thread, fire-and-forget; clips mix and a
   re-trigger restarts). Mirrors the new C `tessera_register_sound` /

@@ -546,6 +546,20 @@ static void hand_approach_target(const TesseraHandPlacement* h, const vec3 final
     out[2] = final_pos[2] + front[2] * TS_HAND_APPROACH_FRONT;
 }
 
+/* A hidden single card physically lies FACE-DOWN: fold a half-turn about its
+ * local long axis into the target orientation, so toggling `hidden` animates
+ * as a real flip (the ordinary rotation tween) and the model's genuinely
+ * textured back is what the viewer sees. The front face meanwhile swaps to
+ * the def's concealing `hidden` texture at the flip midpoint (see
+ * card_conceal_swap), so no camera angle can read the face of a face-down
+ * card. */
+static void card_apply_flip(versor rot, bool hidden) {
+    if (!hidden) return;
+    versor flip; glm_quatv(flip, GLM_PIf, (vec3){0.0f, 0.0f, 1.0f});
+    versor out; glm_quat_mul(rot, flip, out);   /* post-multiply: local axis */
+    glm_quat_copy(out, rot);
+}
+
 /* Target transform for card index `i` in `next` (free placement or hand fan). */
 static void card_target(const TsSnapshot* next, size_t i, vec3 out_pos, versor out_rot) {
     const TesseraCardPlacement* cp = &next->cards[i];
@@ -577,12 +591,30 @@ static void card_target(const TsSnapshot* next, size_t i, vec3 out_pos, versor o
         }
         if (n == 0) n = 1;
         hand_fan_target(h, r, n, sel_r, out_pos, out_rot);
+        card_apply_flip(out_rot, cp->hidden);
         return;
     }
     out_pos[0] = cp->position[0];
     out_pos[1] = cp->position[1];
     out_pos[2] = cp->position[2];
     placement_quat(cp->orientation, out_rot);
+    card_apply_flip(out_rot, cp->hidden);
+}
+
+/* Start the front-face conceal crossfade for a single card mid-flip: a short
+ * swap centred on the rotation's midpoint (the card is edge-on there), over a
+ * rotation that plays out in `rot_s` seconds. */
+static void card_conceal_swap(TsCardInst* c, bool hidden, float rot_s) {
+    c->from_mix = c->mix;
+    c->to_mix = hidden ? 1.0f : 0.0f;
+    if (rot_s <= 0.0f) {              /* snapped flip: swap immediately */
+        c->mix = c->to_mix;
+        c->from_mix = c->to_mix;
+        ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+        return;
+    }
+    ts_tween_start(&c->mix_tween, 0.25f * rot_s, 0.375f * rot_s,
+                   TS_EASE_IN_OUT_CUBIC);
 }
 
 /* Pile thickness (world units) for a card count. */
@@ -613,6 +645,7 @@ static void card_snap(TsCardInst* c, uint64_t id, TesseraDefId def, bool is_draw
     c->count = count;
     c->removing = false; c->alive = true;
     c->seg_count = 1; c->seg_index = 0;
+    c->flip_arc = false; c->flip_lift = 0.0f;
     glm_vec3_copy((float*)pos, c->pos); glm_quat_copy((float*)rot, c->rot);
     c->scale = 1.0f; c->alpha = 1.0f; c->mix = c->to_mix; c->thick = thick;
     ts_tween_start(&c->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
@@ -671,24 +704,26 @@ static void card_spawn_from(TsCardInst* c, uint64_t id, TesseraDefId def,
                             float thick, const vec3 src_pos, const versor src_rot,
                             bool src_hidden, const float* approach, float move_s) {
     card_snap(c, id, def, false, pos, rot, hidden, thick, 1);
-    /* current pose = the pile top; rotation converges toward `rot` over seg 0 */
-    glm_vec3_copy((float*)src_pos, c->pos); glm_quat_copy((float*)src_rot, c->rot);
-    glm_quat_copy((float*)src_rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
-    float flight = move_s;
+    /* Current pose = the pile top — physically face-down (flipped) when the
+     * pile top is; rotation converges toward `rot` (which carries the card's
+     * own flip state) over segment 0, playing the turn-over in flight. */
+    versor srot; glm_quat_copy((float*)src_rot, srot);
+    card_apply_flip(srot, src_hidden);
+    glm_vec3_copy((float*)src_pos, c->pos); glm_quat_copy(srot, c->rot);
+    glm_quat_copy(srot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
     if (approach) {                             /* fly up over the hand, then drop */
         float path2[6] = { approach[0], approach[1], approach[2],
                            pos[0], pos[1], pos[2] };
         card_set_journey(c, path2, 2, pos, 2.0f * move_s);
-        flight = 2.0f * move_s;
     } else {
         glm_vec3_copy((float*)src_pos, c->from_pos); glm_vec3_copy((float*)pos, c->to_pos);
         ts_tween_start(&c->tween, move_s, 0.0f, TS_EASE_OUT_CUBIC);
     }
-    if (src_hidden != hidden) {                 /* reveal: crossfade during flight */
-        c->from_mix = src_hidden ? 1.0f : 0.0f;
-        c->to_mix   = hidden ? 1.0f : 0.0f;
-        c->mix      = c->from_mix;
-        ts_tween_start(&c->mix_tween, flight, 0.0f, TS_EASE_IN_OUT_CUBIC);
+    if (src_hidden != hidden) {   /* a reveal: conceal-swap while edge-on.
+                                   * The rotation spans the first segment,
+                                   * which is move_s in both branches. */
+        c->mix = c->from_mix = src_hidden ? 1.0f : 0.0f;
+        card_conceal_swap(c, hidden, move_s);
     }
 }
 
@@ -718,16 +753,19 @@ static void card_set_journey(TsCardInst* c, const float* path, uint32_t path_cou
 }
 
 /* Retarget a live card toward a new target, tweening from the current pose.
- * `path`/`path_count` (free cards only) walk it through intermediate waypoints. */
+ * `path`/`path_count` (free cards only) walk it through intermediate waypoints.
+ * `flip_lift` (> 0, in-place flips of free cards) arcs the card up by that
+ * much at the flip's apex so it turns above the table instead of through it. */
 static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
                           const versor rot, bool hidden, float thick, uint32_t count,
                           const float* path, uint32_t path_count,
-                          const TesseraTiming* timing) {
+                          const TesseraTiming* timing, float flip_lift) {
     c->def = def;
     glm_quat_copy(c->rot, c->from_rot); glm_quat_copy((float*)rot, c->to_rot);
     c->from_scale = c->scale; c->to_scale = 1.0f;
     c->from_alpha = c->alpha; c->to_alpha = 1.0f;
     c->removing = false; c->alive = true;
+    c->flip_arc = false; c->flip_lift = 0.0f;   /* re-armed below on a flip */
     /* A real multi-step move takes twice a single move (matches entities). */
     bool multi = path && path_count > 1;
     float total = multi ? 2.0f * timing->move_s : timing->move_s;
@@ -741,12 +779,22 @@ static void card_retarget(TsCardInst* c, TesseraDefId def, const vec3 pos,
     }
     card_set_journey(c, path, path_count, pos, total);
 
-    /* Only (re)start the flip crossfade when the target state actually changed;
-     * otherwise leave any in-flight flip running so it completes (restarting a
-     * zero-duration tween here would freeze it at its current blended value). */
-    if (hidden != c->hidden) {                     /* flip: crossfade the front */
-        c->from_mix = c->mix; c->to_mix = hidden ? 1.0f : 0.0f;
-        ts_tween_start(&c->mix_tween, TS_CARD_FLIP_S, 0.0f, TS_EASE_IN_OUT_CUBIC);
+    /* Only (re)start the flip transition when the target state actually
+     * changed; otherwise leave any in-flight one running so it completes. */
+    if (hidden != c->hidden) {
+        if (c->is_draw) {
+            /* Piles don't rotate: the top face simply crossfades. */
+            c->from_mix = c->mix; c->to_mix = hidden ? 1.0f : 0.0f;
+            ts_tween_start(&c->mix_tween, TS_CARD_FLIP_S, 0.0f, TS_EASE_IN_OUT_CUBIC);
+        } else {
+            /* A single card flips PHYSICALLY (the flipped target rotation is
+             * already folded into `rot`, so the main tween turns it over); the
+             * front swaps to/from the concealing texture while edge-on. The
+             * rotation plays out over the journey's first segment. */
+            card_conceal_swap(c, hidden, total / (float)c->seg_count);
+            c->flip_arc = flip_lift > 0.0f;
+            c->flip_lift = flip_lift;
+        }
         c->hidden = hidden;
     }
     /* Likewise for pile thickness: only restart when the target count changed,
@@ -766,6 +814,7 @@ static void card_remove(TsCardInst* c, float remove_s) {
     c->from_mix = c->to_mix = c->mix;
     c->from_thick = c->to_thick = c->thick;
     c->removing = true;
+    c->flip_arc = false; c->flip_lift = 0.0f;
     c->seg_count = 1; c->seg_index = 0;   /* drop any in-flight multi-step path */
     ts_tween_start(&c->tween, remove_s, 0.0f, TS_EASE_IN_CUBIC);
     ts_tween_start(&c->mix_tween, 0.0f, 0.0f, TS_EASE_LINEAR);
@@ -808,12 +857,23 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
                  * fanned out. Two waypoints: staging point, then the fan slot. */
                 vec3 wp; hand_approach_target(nh, pos, wp);
                 float path2[6] = { wp[0], wp[1], wp[2], pos[0], pos[1], pos[2] };
-                card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, path2, 2, timing);
+                card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, path2, 2,
+                              timing, 0.0f);
             } else {
                 /* A hand card is placed by the fan, so its path (if any) is ignored. */
                 const float* cpath = (cp->hand == 0) ? cp->path : NULL;
                 uint32_t cpc = (cp->hand == 0) ? cp->path_count : 0;
-                card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, cpath, cpc, timing);
+                /* An in-place flip of a free card arcs up over half its width
+                 * (it turns about its long axis) so it clears the table. */
+                float lift = 0.0f;
+                if (cp->hand == 0 && c->hidden != cp->hidden) {
+                    TsDef* cd = ts_registry_get(&e->registry, cp->def, TS_DEF_CARD);
+                    float wdt = (cd && cd->as.card.valid && cd->as.card.width > 0.0f)
+                                    ? cd->as.card.width : 1.84f;
+                    lift = 0.55f * wdt;
+                }
+                card_retarget(c, cp->def, pos, rot, cp->hidden, thick, 1, cpath, cpc,
+                              timing, lift);
             }
             c->hand = cp->hand;
             continue;
@@ -857,7 +917,8 @@ static void card_diff(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* next
                                      TESSERA_EVENT_SUBJECT_DRAW, dp->id,
                                      orch_event_coord(c->pos),
                                      dp->top_hidden ? 1.0f : 0.0f);
-            card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, NULL, 0, timing);
+            card_retarget(c, dp->def, pos, rot, dp->top_hidden, thick, dp->count, NULL, 0,
+                          timing, 0.0f);
         } else {
             card_spawn(orch_add_card(o), dp->id, dp->def, true, pos, rot,
                        dp->top_hidden, thick, dp->count, timing->add_s);
@@ -1710,6 +1771,8 @@ void ts_orch_advance(struct TsOrch* o, TesseraEngine* e, float dt) {
         }
         float p = ts_tween_value01(&c->tween);
         glm_vec3_lerp(c->from_pos, c->to_pos, p, c->pos);
+        if (c->flip_arc)   /* in-place flip: turn above the table, not through it */
+            c->pos[1] += c->flip_lift * ts_arc(p);
         glm_quat_slerp(c->from_rot, c->to_rot, p, c->rot);
         c->scale = ts_lerpf(c->from_scale, c->to_scale, p);
         c->alpha = ts_lerpf(c->from_alpha, c->to_alpha, p);
@@ -2192,14 +2255,31 @@ size_t ts_orch_build_cards(struct TsOrch* o, TesseraEngine* e,
         it->mix = c->mix;
 
         glm_vec4_copy((float*)&cm->visible_uv, it->uv_visible);
-        glm_vec4_copy((float*)&cm->hidden_uv,  it->uv_hidden);
-        it->tex_visible = ts_registry_atlas_texture(&e->registry, cm->visible_atlas);
-        it->tex_hidden  = ts_registry_atlas_texture(&e->registry, cm->hidden_atlas);
-        /* a pile's bottom face always shows the hidden texture */
         if (c->is_draw) {
-            glm_vec4_copy((float*)&cm->hidden_uv, it->uv_back);
-            it->tex_back = ts_registry_atlas_texture(&e->registry, cm->hidden_atlas);
+            /* A pile is a physical stack. Face-up (top_hidden false): the top
+             * shows the top card's face, the underside shows a card BACK.
+             * Face-down: the top shows a BACK (mix drives the crossfade when
+             * it toggles), and only the underside — a face pointing at the
+             * floor — wears the concealing hidden texture. */
+            it->tex_visible = ts_registry_atlas_texture(&e->registry, cm->visible_atlas);
+            glm_vec4_copy((float*)&cm->back_uv, it->uv_hidden);
+            it->tex_hidden = ts_registry_atlas_texture(&e->registry, cm->back_atlas);
+            if (c->hidden) {
+                glm_vec4_copy((float*)&cm->hidden_uv, it->uv_back);
+                it->tex_back = ts_registry_atlas_texture(&e->registry, cm->hidden_atlas);
+            } else {
+                glm_vec4_copy((float*)&cm->back_uv, it->uv_back);
+                it->tex_back = ts_registry_atlas_texture(&e->registry, cm->back_atlas);
+            }
         } else {
+            /* A single card: both sides genuinely textured — the real face on
+             * the front, the card back on the back. While the card is face-down
+             * (physically flipped) the front wears the concealing hidden
+             * texture (mix, swapped when the flip passes edge-on), so no
+             * camera angle can peek the face. */
+            glm_vec4_copy((float*)&cm->hidden_uv,  it->uv_hidden);
+            it->tex_visible = ts_registry_atlas_texture(&e->registry, cm->visible_atlas);
+            it->tex_hidden  = ts_registry_atlas_texture(&e->registry, cm->hidden_atlas);
             glm_vec4_copy((float*)&cm->back_uv, it->uv_back);
             it->tex_back = ts_registry_atlas_texture(&e->registry, cm->back_atlas);
         }

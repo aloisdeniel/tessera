@@ -25,7 +25,7 @@ _Static_assert(sizeof(TesseraState)              == 296, "TesseraState" TS_SER_M
 _Static_assert(sizeof(TesseraCamera)             ==  96, "TesseraCamera" TS_SER_MSG);
 _Static_assert(sizeof(TesseraTilePlacement)      ==  24, "TesseraTilePlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraEntityPlacement)    ==  48, "TesseraEntityPlacement" TS_SER_MSG);
-_Static_assert(sizeof(TesseraEffectPlacement)    ==  32, "TesseraEffectPlacement" TS_SER_MSG);
+_Static_assert(sizeof(TesseraEffectPlacement)    ==  40, "TesseraEffectPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCardPlacement)      ==  88, "TesseraCardPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCardDrawPlacement)  ==  48, "TesseraCardDrawPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraHandPlacement)      ==  56, "TesseraHandPlacement" TS_SER_MSG);
@@ -43,7 +43,7 @@ _Static_assert(sizeof(TesseraWorldModelPlacement) == 48, "TesseraWorldModelPlace
 #define TS_SER_CAMERA   88u
 #define TS_SER_TILE     24u
 #define TS_SER_ENTITY   30u   /* + path_count * 8  */
-#define TS_SER_EFFECT   28u
+#define TS_SER_EFFECT   36u
 #define TS_SER_CARD     65u   /* + path_count * 12 */
 #define TS_SER_DRAW     45u
 #define TS_SER_HAND     56u
@@ -221,6 +221,7 @@ size_t tessera_state_serialize(const TesseraState* state, void* buf, size_t cap)
         wr_u32(&w, p->def);
         wr_coord(&w, p->coord);
         wr_u64(&w, p->attach_entity_id);
+        wr_u64(&w, p->attach_card_id);
     }
 
     wr_u64(&w, nc);
@@ -509,6 +510,7 @@ TesseraState* tessera_state_deserialize(const void* blob, size_t len) {
             a[i].def = rd_u32(&r);
             a[i].coord = rd_coord(&r);
             a[i].attach_entity_id = rd_u64(&r);
+            a[i].attach_card_id = rd_u64(&r);
         }
         st->effects = a; st->effect_count = c.nf;
     }

@@ -88,7 +88,7 @@ static void emit_one(TsEmitter* em, uint32_t* seed) {
 }
 
 void ts_fx_spawn(struct TsFx* fx, TesseraEngine* e, const TesseraParticleSpec* spec,
-                 const vec3 anchor, TesseraEntityId attach) {
+                 const vec3 anchor, TesseraEntityId attach, TesseraCardId attach_card) {
     if (!fx || !spec) return;
     if (spec->count == 0 && spec->mode == TESSERA_EMIT_BURST) return;
 
@@ -98,6 +98,7 @@ void ts_fx_spawn(struct TsFx* fx, TesseraEngine* e, const TesseraParticleSpec* s
     em->texture = ts_registry_particle_texture(&e->registry, spec->atlas);
     glm_vec3_copy((float*)anchor, em->anchor);
     em->attach = attach;
+    em->attach_card = attach_card;
     em->age = 0.0f;
     em->emit_accum = 0.0f;
     em->additive = (spec->blend == TESSERA_BLEND_ADD);
@@ -120,8 +121,14 @@ void ts_fx_advance(TesseraEngine* e, float dt) {
     for (size_t i = 0; i < fx->count;) {
         TsEmitter* em = &fx->emitters[i];
 
-        /* follow an attached entity */
-        if (em->attach && e->orch) {
+        /* follow an attached card (wins over the entity) or entity */
+        if (em->attach_card && e->orch) {
+            vec3 p;
+            if (ts_orch_card_pos(e->orch, em->attach_card, p)) {
+                p[1] += 0.05f; /* just clear of the displayed face */
+                glm_vec3_copy(p, em->anchor);
+            }
+        } else if (em->attach && e->orch) {
             vec3 p;
             if (ts_orch_entity_pos(e->orch, em->attach, p)) {
                 p[1] += 0.5f;  /* aura sits around the body, not the feet */
@@ -193,8 +200,14 @@ static bool snapshot_has_entity_id(const struct TsSnapshot* s, TesseraEntityId i
     return false;
 }
 
-/* Resolve an effect placement's world anchor (tile centre, or its attach entity). */
+/* Resolve an effect placement's world anchor: its attach card's displayed
+ * face, its attach entity, or the tile centre. */
 static void effect_anchor(TesseraEngine* e, const TesseraEffectPlacement* ep, vec3 out) {
+    if (ep->attach_card_id && e->orch &&
+        ts_orch_card_pos(e->orch, ep->attach_card_id, out)) {
+        out[1] += 0.05f; /* just clear of the displayed face */
+        return;
+    }
     if (ep->attach_entity_id && e->orch &&
         ts_orch_entity_pos(e->orch, ep->attach_entity_id, out))
         return;
@@ -213,7 +226,8 @@ void ts_fx_on_promote(TesseraEngine* e, const struct TsSnapshot* prev,
             TsDef* d = ts_registry_get(&e->registry, ep->def, TS_DEF_EFFECT);
             if (!d) continue;
             vec3 a; effect_anchor(e, ep, a);
-            ts_fx_spawn(e->fx, e, &d->as.effect.spec.on_add, a, ep->attach_entity_id);
+            ts_fx_spawn(e->fx, e, &d->as.effect.spec.on_add, a,
+                        ep->attach_entity_id, ep->attach_card_id);
         }
     }
     if (prev) {
@@ -223,7 +237,7 @@ void ts_fx_on_promote(TesseraEngine* e, const struct TsSnapshot* prev,
             TsDef* d = ts_registry_get(&e->registry, ep->def, TS_DEF_EFFECT);
             if (!d) continue;
             vec3 a; effect_anchor(e, ep, a);
-            ts_fx_spawn(e->fx, e, &d->as.effect.spec.on_remove, a, 0);
+            ts_fx_spawn(e->fx, e, &d->as.effect.spec.on_remove, a, 0, 0);
         }
     }
 
@@ -237,7 +251,7 @@ void ts_fx_on_promote(TesseraEngine* e, const struct TsSnapshot* prev,
             TsDef* ed = ts_registry_get(&e->registry, d->as.entity.spec.on_spawn_effect, TS_DEF_EFFECT);
             if (!ed) continue;
             vec3 a; ts_grid_to_world(np->coord.x, np->coord.y, a);
-            ts_fx_spawn(e->fx, e, &ed->as.effect.spec.on_add, a, np->id);
+            ts_fx_spawn(e->fx, e, &ed->as.effect.spec.on_add, a, np->id, 0);
         }
     }
     if (prev) {
@@ -249,7 +263,7 @@ void ts_fx_on_promote(TesseraEngine* e, const struct TsSnapshot* prev,
             TsDef* ed = ts_registry_get(&e->registry, d->as.entity.spec.on_despawn_effect, TS_DEF_EFFECT);
             if (!ed) continue;
             vec3 a; ts_grid_to_world(pp->coord.x, pp->coord.y, a);
-            ts_fx_spawn(e->fx, e, &ed->as.effect.spec.on_remove, a, 0);
+            ts_fx_spawn(e->fx, e, &ed->as.effect.spec.on_remove, a, 0, 0);
         }
     }
 }

@@ -104,6 +104,10 @@ typedef struct {
     uint32_t seg_count;      /* number of segments (>=1) */
     uint32_t seg_index;      /* segment currently animating */
     float    seg_dur;        /* per-segment duration */
+    /* in-place physical flip: arc the card up by flip_lift at the turn's apex
+     * so it rotates above the table instead of through it */
+    bool     flip_arc;
+    float    flip_lift;
     /* current interpolated */
     vec3    pos; versor rot; float scale, alpha, mix, thick;
 } TsCardInst;

@@ -74,7 +74,8 @@ static void build_maximal(MaxArrays* a, TesseraState* st, DefIds ids) {
         .id = 2, .def = ids.entity, .coord = {0, 1}, .facing = 1 };
 
     a->fx[0] = (TesseraEffectPlacement){
-        .id = 900, .def = 0, .coord = {0, 0}, .attach_entity_id = 1 };
+        .id = 900, .def = 0, .coord = {0, 0}, .attach_entity_id = 1,
+        .attach_card_id = 20 };
 
     a->cards[0] = (TesseraCardPlacement){
         .id = 20, .def = ids.card, .position = {2.0f, 0.9f, -1.5f},
@@ -182,7 +183,8 @@ static void test_roundtrip(void) {
         CHECK(d->entities[0].path != g_epath);   /* owned copy */
         CHECK(d->entities[0].path[2].x == 1 && d->entities[0].path[2].y == 1);
         CHECK(d->entities[1].path == NULL && d->entities[1].path_count == 0);
-        CHECK(d->effect_count == 1 && d->effects[0].attach_entity_id == 1);
+        CHECK(d->effect_count == 1 && d->effects[0].attach_entity_id == 1
+              && d->effects[0].attach_card_id == 20);
         CHECK(d->card_count == 2 && d->cards[0].hidden == true);
         CHECK(d->cards[0].path_count == 2 && d->cards[0].path != NULL);
         CHECK(fabsf(d->cards[0].path[4] - 0.9f) < 1e-6f);

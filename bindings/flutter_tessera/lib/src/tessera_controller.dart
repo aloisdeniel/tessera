@@ -439,6 +439,8 @@ class TesseraController {
         scene.tiles.isEmpty ? 1 : scene.tiles.length);
     final ents = calloc<t.TesseraEntityPlacement>(
         scene.entities.isEmpty ? 1 : scene.entities.length);
+    final effects = calloc<t.TesseraEffectPlacement>(
+        scene.effects.isEmpty ? 1 : scene.effects.length);
     final cards = calloc<t.TesseraCardPlacement>(
         scene.cards.isEmpty ? 1 : scene.cards.length);
     final draws = calloc<t.TesseraCardDrawPlacement>(
@@ -494,6 +496,18 @@ class TesseraController {
           ..pathCount = s.path.length;
         pathPtrs.add(pp);
       }
+    }
+    for (var i = 0; i < scene.effects.length; ++i) {
+      final s = scene.effects[i];
+      final p = effects[i];
+      p
+        ..id = s.id
+        ..def = s.def
+        ..attachEntityId = s.attachEntity
+        ..attachCardId = s.attachCard;
+      p.coord
+        ..x = s.x
+        ..y = s.y;
     }
     for (var i = 0; i < scene.cards.length; ++i) {
       final s = scene.cards[i];
@@ -663,8 +677,8 @@ class TesseraController {
       ..tileCount = scene.tiles.length
       ..entities = ents
       ..entityCount = scene.entities.length
-      ..effects = nullptr
-      ..effectCount = 0
+      ..effects = effects
+      ..effectCount = scene.effects.length
       ..epoch = scene.epoch
       ..cards = cards
       ..cardCount = scene.cards.length
@@ -769,6 +783,7 @@ class TesseraController {
     calloc.free(st);
     calloc.free(tiles);
     calloc.free(ents);
+    calloc.free(effects);
     calloc.free(cards);
     calloc.free(draws);
     calloc.free(hands);

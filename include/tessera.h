@@ -220,6 +220,9 @@ typedef struct {
     TesseraDefId    def;
     TesseraCoord    coord;
     TesseraEntityId attach_entity_id; /* 0 = anchored to tile coord (M6) */
+    TesseraCardId   attach_card_id;   /* 0 = none; anchors to a live single
+                                       * card's displayed face and follows it
+                                       * (takes precedence over the entity) */
 } TesseraEffectPlacement;
 
 /* A die in the scene. A placement that newly appears (by id) is thrown: it
@@ -634,7 +637,7 @@ TESSERA_API void tessera_set_event_callback(TesseraEngine* e,
 /* State blob header constants: magic ("TSST" as stored little-endian) +
  * format version. tessera_state_deserialize rejects unknown values cleanly. */
 #define TESSERA_STATE_BLOB_MAGIC   0x54535354u  /* bytes "TSST" on disk */
-#define TESSERA_STATE_BLOB_VERSION 2u  /* 2: hands carry selected_card */
+#define TESSERA_STATE_BLOB_VERSION 3u  /* 3: effects carry attach_card_id */
 
 /* Serialize `state` into `buf` and return the REQUIRED byte size. Two-call
  * sizing: call with buf=NULL (or cap=0) to measure, allocate, then call again

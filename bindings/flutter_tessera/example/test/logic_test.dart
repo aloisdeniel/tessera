@@ -4,7 +4,12 @@ import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_tessera/flutter_tessera.dart'
-    show TesseraCameraFocusCard, TesseraCameraFocusHand, TesseraCameraPose;
+    show
+        TesseraCameraFocusCard,
+        TesseraCameraFocusHand,
+        TesseraCameraPose,
+        TesseraCard,
+        TesseraScene;
 
 import 'package:flutter_tessera_example/blackjack.dart';
 import 'package:flutter_tessera_example/chess.dart';
@@ -363,6 +368,93 @@ void main() {
       // and the strike beat always pulls back to the table overview
       final strike = duelUpdate(board, const DlAttack(500, 0));
       expect(ctl.render(strike).first.camera, isA<TesseraCameraPose>());
+    });
+
+    test('render yields the attack/defense card effects across a strike', () {
+      final s = dealt();
+      final board = DuelYourTurn(
+          you: s.you.copy(slots: [
+            const DuelCreature(500, 4, 3, ready: true), null, null, null,
+          ]),
+          foe: s.foe.copy(slots: [
+            const DuelCreature(501, 2, 3, ready: true), null, null, null,
+          ]),
+          turn: s.turn,
+          nextId: 600,
+          seed: s.seed);
+      final ctl = DuelController();
+
+      // Creature strike: the sync* render yields lunge then settle — the lunge
+      // trails the attack effect on the attacker card, the settle flashes the
+      // defense effect on the struck card.
+      final strike = duelUpdate(board, const DlAttack(500, 501));
+      final beats = ctl.render(strike).toList();
+      expect(beats, hasLength(2));
+      expect(beats[0].effects.single.attachCard, 500);
+      expect(beats[1].effects.single.attachCard, 501);
+
+      // Hero strike: no card to attach the defense burst to — it falls back to
+      // the tile at the foe hero's table edge.
+      final face = duelUpdate(board, const DlAttack(500, 0));
+      final faceBeats = ctl.render(face).toList();
+      expect(faceBeats[1].effects.single.attachCard, 0);
+      expect(faceBeats[1].effects.single.x, 0);
+      expect(faceBeats[1].effects.single.y, -4);
+
+      // No strike on the state: no battle effects linger.
+      expect(ctl.render(board).single.effects, isEmpty);
+    });
+
+    test('attacking engages the creature: its card lies sideways until it '
+        'readies next round', () {
+      final s = dealt();
+      final board = DuelYourTurn(
+          you: s.you.copy(slots: [
+            const DuelCreature(500, 7, 5, ready: true), null, null, null,
+          ]),
+          foe: s.foe.copy(hand: [], deck: []),
+          turn: s.turn,
+          nextId: 600,
+          seed: s.seed);
+      final after = duelUpdate(board, const DlAttack(500, 0)) as DuelYourTurn;
+      final c = after.you.creatures.single;
+      expect(c.engaged, isTrue);
+      expect(c.ready, isFalse);
+
+      // The lunge beat keeps the attacker upright; the settle beat lays it
+      // sideways (a quarter-turn quaternion, not the all-zero identity).
+      final ctl = DuelController();
+      final beats = ctl.render(after).toList();
+      TesseraCard cardIn(TesseraScene sc) =>
+          sc.cards.firstWhere((k) => k.id == 500);
+      expect(cardIn(beats[0]).orientation, everyElement(0));
+      expect(cardIn(beats[1]).orientation.any((v) => v.abs() > 0.1), isTrue);
+
+      // A fresh (resting, never-attacked) creature is NOT rotated.
+      expect(after.you.slots[0]!.engaged, isTrue);
+      final fresh = DuelYourTurn(
+          you: s.you.copy(slots: [
+            const DuelCreature(502, 1, 2, ready: false), null, null, null,
+          ]),
+          foe: s.foe,
+          turn: s.turn,
+          nextId: 600,
+          seed: s.seed);
+      final freshCard =
+          ctl.render(fresh).single.cards.firstWhere((k) => k.id == 502);
+      expect(freshCard.orientation, everyElement(0));
+
+      // The round passing readies it and stands the card back up.
+      DuelState round = duelUpdate(after, const DlEndTurn());
+      while (round is DuelFoeTurn) {
+        round = duelUpdate(round, const DlFoeStep());
+      }
+      final readied = (round as DuelYourTurn).you.creatures.single;
+      expect(readied.engaged, isFalse);
+      expect(readied.ready, isTrue);
+      final upright =
+          ctl.render(round).single.cards.firstWhere((k) => k.id == 500);
+      expect(upright.orientation, everyElement(0));
     });
 
     test('mana ramps with the round and caps at $duelManaCap', () {

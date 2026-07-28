@@ -3,6 +3,7 @@
  * Headless captures:
  *   fx_burst.png   — an on_add burst firing where an effect was just added
  *   fx_aura.png    — a continuous aura attached to a moving entity
+ *   fx_card.png    — a continuous trail attached to a sliding card
  *   fx_removed.png — an on_remove poof after the effect is dropped
  *
  * Run:  example_fx <out_dir>
@@ -17,6 +18,20 @@ static void logfn(void* ud, int level, const char* msg) {
 static void settle(TesseraEngine* e, double secs) {
     const double step = 1.0 / 120.0;
     for (double t = 0; t < secs; t += step) tessera_tick(e, step);
+}
+
+/* Register a solid-colour 16x16 atlas (32-bit TGA built in memory). */
+static TesseraDefId make_atlas(TesseraEngine* e, unsigned char r, unsigned char g,
+                               unsigned char b) {
+    enum { P = 16, SZ = 18 + P * P * 4 };
+    unsigned char d[SZ];
+    memset(d, 0, 18);
+    d[2] = 2; d[12] = P & 0xFF; d[14] = P & 0xFF; d[16] = 32; d[17] = 0x28;
+    for (int i = 0; i < P * P; ++i) {
+        d[18+i*4+0] = b; d[18+i*4+1] = g; d[18+i*4+2] = r; d[18+i*4+3] = 255;
+    }
+    TesseraBytes by = { .data = d, .size = SZ };
+    return tessera_register_atlas(e, &by);
 }
 
 int main(int argc, char** argv) {
@@ -105,11 +120,35 @@ int main(int argc, char** argv) {
     snprintf(path, sizeof path, "%s/fx_aura.png", dir);
     printf("aura:   %s -> %s\n", tessera_capture_png(e, 1280, 720, path) ? "OK" : "FAIL", path);
 
-    /* State 2: drop the aura effect -> on_remove poof; board otherwise unchanged. */
+    /* State 2: a card with the aura ATTACHED TO IT (attach_card_id): the
+     * emitter rides the card's displayed face as it slides across the board. */
     settle(e, 0.8);
+    TesseraCardDef cdz = { .visible_atlas = make_atlas(e, 235, 230, 210),
+                           .hidden_atlas  = make_atlas(e, 60, 60, 70),
+                           .back_atlas    = make_atlas(e, 140, 40, 40) };
+    TesseraDefId d_card = tessera_register_card_def(e, &cdz);
+    TesseraCardPlacement card = { .id = 7, .def = d_card, .position = {-2, 0.02f, 0} };
+    TesseraEffectPlacement fx2[] = {
+        { .id = 102, .def = d_aura, .coord = {0, 0}, .attach_card_id = 7 },
+    };
     TesseraState s2 = { .tiles = tiles, .tile_count = nt, .entities = ents, .entity_count = 2,
-                        .effects = NULL, .effect_count = 0, .camera = cam, .epoch = 3 };
+                        .cards = &card, .card_count = 1,
+                        .effects = fx2, .effect_count = 1, .camera = cam, .epoch = 3 };
     tessera_set_state(e, &s2);
+    settle(e, 0.6);                       /* let the trail build on the card */
+    card.position[0] = 2.0f; card.position[2] = 1.0f;
+    s2.epoch = 4;
+    tessera_set_state(e, &s2);
+    settle(e, 0.2);                       /* catch it mid-slide, trailing motes */
+    snprintf(path, sizeof path, "%s/fx_card.png", dir);
+    printf("card:   %s -> %s\n", tessera_capture_png(e, 1280, 720, path) ? "OK" : "FAIL", path);
+
+    /* State 3: drop every effect -> on_remove poof; board otherwise unchanged. */
+    settle(e, 0.8);
+    TesseraState s3 = { .tiles = tiles, .tile_count = nt, .entities = ents, .entity_count = 2,
+                        .cards = &card, .card_count = 1,
+                        .effects = NULL, .effect_count = 0, .camera = cam, .epoch = 5 };
+    tessera_set_state(e, &s3);
     settle(e, 0.2);
     snprintf(path, sizeof path, "%s/fx_removed.png", dir);
     printf("remove: %s -> %s idle=%d\n",

@@ -8,6 +8,7 @@
  * animated state a public query can't observe. */
 #include "tessera.h"
 #include "engine.h"
+#include "fx/fx.h"
 #include "orchestration/orch.h"
 #include <math.h>
 #include <stdio.h>
@@ -49,6 +50,15 @@ static TesseraDefId make_atlas(TesseraEngine* e, unsigned char r, unsigned char 
 static void log_fn(void* ud, int level, const char* msg) {
     (void)ud;
     if (level >= TESSERA_LOG_ERROR) printf("[engine] %s\n", msg);
+}
+
+/* Find a live emitter by the card it is attached to (the emitter array
+ * compacts as emitters retire, so re-find after every advance). */
+static TsEmitter* find_emitter(TesseraEngine* e, TesseraCardId card) {
+    if (!e->fx) return NULL;
+    for (size_t i = 0; i < e->fx->count; ++i)
+        if (e->fx->emitters[i].attach_card == card) return &e->fx->emitters[i];
+    return NULL;
 }
 
 /* Find a live card/pile instance by id + kind in the orchestrator. */
@@ -181,15 +191,29 @@ int main(void) {
     CHECK(dpile && thick5 > 0.03f);
     CHECK(dpile && dpile->count == 5);
 
-    /* ---- flip the free card face up: the front must crossfade to visible ---- */
+    /* ---- flip the free card face up: a PHYSICAL turn-over ---- */
+    /* Settled hidden: the card lies face-down — its front normal points at the
+     * floor (the viewer sees the genuinely textured back) and the front wears
+     * the concealing texture so no angle can peek the face. */
+    c1 = find_inst(e, 1, false);
+    if (c1) {
+        vec3 wn; glm_quat_rotatev(c1->rot, (vec3){0.0f, 1.0f, 0.0f}, wn);
+        CHECK(wn[1] < -0.9f);
+    }
+
     cards[0].hidden = false;
     tessera_set_state(e, &st);
-    advance(e, buf, 8);                   /* let the (eased) crossfade get going */
+    advance(e, buf, 4);                   /* early in the turn-over */
     c1 = find_inst(e, 1, false);
-    CHECK(c1 && c1->mix > 0.0f && c1->mix < 0.99f);   /* mid crossfade */
+    if (c1) {
+        vec3 wn; glm_quat_rotatev(c1->rot, (vec3){0.0f, 1.0f, 0.0f}, wn);
+        CHECK(wn[1] > -0.95f && wn[1] < 0.95f);  /* mid-rotation, edge-on-ish */
+        CHECK(c1->pos[1] > 0.1f);       /* arced up clear of the table        */
+        CHECK(c1->mix > 0.9f);          /* front still concealed pre-midpoint */
+    }
 
-    /* re-push an UNCHANGED state mid-flip: the crossfade must keep running, not
-     * freeze at its current blended value (regression for the interrupted-flip
+    /* re-push an UNCHANGED state mid-flip: the transition must keep running,
+     * not freeze at its current value (regression for the interrupted-flip
      * bug). Nudge an unrelated field so the promotion definitely happens. */
     st.epoch++;
     tessera_set_state(e, &st);
@@ -197,6 +221,11 @@ int main(void) {
     settle(e, buf);
     c1 = find_inst(e, 1, false);
     CHECK(c1 && c1->mix < 0.01f);         /* settled fully visible (did not freeze) */
+    if (c1) {
+        vec3 wn; glm_quat_rotatev(c1->rot, (vec3){0.0f, 1.0f, 0.0f}, wn);
+        CHECK(wn[1] > 0.9f);              /* face-up again                     */
+        CHECK(fabsf(c1->pos[1]) < 0.02f); /* the flip arc landed back down     */
+    }
 
     /* ---- grow the pile 5 -> 30: thickness must increase ---- */
     draw.count = 30;
@@ -295,6 +324,62 @@ int main(void) {
     }
     cards[0].hand = 0; cards[0].hand_slot = 0;       /* restore for teardown */
     cards[0].position[0] = -3.0f;
+
+    /* ---- card-anchored effect: the emitter rides the card's live position,
+     * not the placement's fallback tile coord; a dangling card id falls back
+     * to the tile. ---- */
+    settle(e, buf);
+    TesseraParticleSpec ps = {0};
+    ps.mode = TESSERA_EMIT_CONTINUOUS;
+    ps.count = 60;                        /* rate/sec */
+    ps.lifetime_s = 0.15f;
+    ps.duration_s = 0.8f;
+    ps.size_start = ps.size_end = 0.1f;
+    TesseraEffectDef fd = {0};
+    fd.on_add = ps;
+    TesseraDefId fxdef = tessera_register_effect_def(e, &fd);
+    CHECK(fxdef != 0);
+
+    TesseraEffectPlacement fxp[2];
+    memset(fxp, 0, sizeof fxp);
+    fxp[0].id = 900; fxp[0].def = fxdef;
+    fxp[0].coord.x = 5; fxp[0].coord.y = 5;   /* fallback; must NOT be used */
+    fxp[0].attach_card_id = 1;
+    fxp[1].id = 901; fxp[1].def = fxdef;
+    fxp[1].coord.x = 5; fxp[1].coord.y = 5;
+    fxp[1].attach_card_id = 4242;             /* no such card => tile anchor */
+    st.effects = fxp; st.effect_count = 2;
+    cards[0].position[0] = 3.0f;              /* send the card moving again */
+    st.epoch++;
+    tessera_set_state(e, &st);
+    advance(e, buf, 1);                       /* promote: emitters spawn */
+    TsEmitter* em = find_emitter(e, 1);
+    c1 = find_inst(e, 1, false);
+    CHECK(em && c1);
+    if (em && c1) {
+        CHECK(fabsf(em->anchor[0] - c1->pos[0]) < 0.05f);
+        CHECK(fabsf(em->anchor[1] - (c1->pos[1] + 0.05f)) < 0.02f);
+    }
+    advance(e, buf, 6);                       /* mid-move: the emitter followed */
+    em = find_emitter(e, 1);
+    c1 = find_inst(e, 1, false);
+    CHECK(em && c1);
+    if (em && c1) {
+        CHECK(c1->pos[0] > -2.9f);            /* the card really moved */
+        CHECK(fabsf(em->anchor[0] - c1->pos[0]) < 0.05f);
+    }
+    /* the dangling attach fell back to the placement's tile coord */
+    TsEmitter* em2 = find_emitter(e, 4242);
+    CHECK(em2 != NULL);
+    if (em2) {
+        vec3 tile; ts_grid_to_world(5, 5, tile);
+        CHECK(fabsf(em2->anchor[0] - tile[0]) < 0.01f);
+        CHECK(fabsf(em2->anchor[2] - tile[2]) < 0.01f);
+    }
+    settle(e, buf);                           /* emitters expire and cull */
+    CHECK(find_emitter(e, 1) == NULL);
+    st.effects = NULL; st.effect_count = 0;
+    cards[0].position[0] = -3.0f;             /* restore for teardown */
 
     /* ---- remove everything: all card instances cull ---- */
     st.cards = NULL; st.card_count = 0;

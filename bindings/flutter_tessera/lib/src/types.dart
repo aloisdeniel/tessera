@@ -207,10 +207,39 @@ class TesseraEntity {
   final List<(int x, int y)> path;
 }
 
+/// A particle effect placed in the scene, playing the def's `onAdd` burst when
+/// it first appears (by [id]) and its `onRemove` burst when it vanishes. It is
+/// anchored to the tile at ([x], [y]) unless attached to a live object:
+/// [attachCard] glues it just above a card's displayed face — following the
+/// card through deals, lunges, flips and hand reflows — and [attachEntity]
+/// follows an entity ([attachCard] wins when both are set). A continuous
+/// effect (duration > 0) keeps emitting from the live anchor while it plays.
+class TesseraEffect {
+  const TesseraEffect({
+    required this.id,
+    required this.def,
+    this.x = 0,
+    this.y = 0,
+    this.attachEntity = 0,
+    this.attachCard = 0,
+  });
+
+  final int id;
+  final int def;
+  final int x;
+  final int y;
+  final int attachEntity;
+  final int attachCard;
+}
+
 /// A card placed in the world. [orientation] is a quaternion (xyzw; all-zero =>
-/// identity, which lays the card flat, front up). [hidden] shows the concealing
-/// front (crossfades when toggled). If [hand] is non-zero the card is arranged
-/// by that hand's fan ([position]/[orientation] ignored); [handSlot] orders it.
+/// identity, which lays the card flat, front up). Both sides are genuinely
+/// textured, and [hidden] lays the card physically FACE-DOWN: toggling it
+/// animates a real turn-over (a free card arcs up so it flips above the
+/// table), the viewer sees the def's back texture, and the front face wears
+/// the def's concealing hidden texture while face-down so no camera angle can
+/// peek the face. If [hand] is non-zero the card is arranged by that hand's
+/// fan ([position]/[orientation] ignored); [handSlot] orders it.
 ///
 /// [sourceDraw] names a [TesseraCardDraw.id] this card is dealt from: when the
 /// card first appears, if that pile is present it spawns resting on top of the
@@ -665,6 +694,7 @@ class TesseraScene {
   const TesseraScene({
     this.tiles = const [],
     this.entities = const [],
+    this.effects = const [],
     this.cards = const [],
     this.cardDraws = const [],
     this.hands = const [],
@@ -680,6 +710,10 @@ class TesseraScene {
 
   final List<TesseraTile> tiles;
   final List<TesseraEntity> entities;
+
+  /// Particle effects, anchored to tiles or attached to cards/entities (see
+  /// [TesseraEffect]). Diffed by id: new ids play `onAdd`, vanished `onRemove`.
+  final List<TesseraEffect> effects;
   final List<TesseraCard> cards;
   final List<TesseraCardDraw> cardDraws;
   final List<TesseraHand> hands;

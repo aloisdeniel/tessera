@@ -88,18 +88,23 @@ class DuelCardInst {
 }
 
 /// A creature on the board. [hp] is its remaining health (damage persists);
-/// [ready] means it may attack this turn (false the turn it was played).
+/// [ready] means it may attack this turn (false the turn it was played);
+/// [engaged] means it has already attacked this round — rendered as the card
+/// lying turned sideways (the classic "tapped" cue) until it readies again.
 class DuelCreature {
-  const DuelCreature(this.id, this.type, this.hp, {required this.ready});
+  const DuelCreature(this.id, this.type, this.hp,
+      {required this.ready, this.engaged = false});
   final int id;
   final int type;
   final int hp;
   final bool ready;
+  final bool engaged;
 
   int get attack => duelSpecs[type].attack;
 
-  DuelCreature copy({int? hp, bool? ready}) =>
-      DuelCreature(id, type, hp ?? this.hp, ready: ready ?? this.ready);
+  DuelCreature copy({int? hp, bool? ready, bool? engaged}) =>
+      DuelCreature(id, type, hp ?? this.hp,
+          ready: ready ?? this.ready, engaged: engaged ?? this.engaged);
 }
 
 /// One player's whole side: life, unspent mana, deck (draw from the end), the
@@ -147,7 +152,7 @@ class DuelSide {
 /// A just-resolved attack, kept on the state for one beat so render can play
 /// the lunge: card [attackerId] (of [attackerType], post-combat [hp], normally
 /// living in [homeSlot] on the [byYou] side) struck [targetSlot] (-1 = the
-/// enemy hero).
+/// enemy hero, in which case [targetId] is 0).
 class DuelStrike {
   const DuelStrike({
     required this.attackerId,
@@ -156,6 +161,7 @@ class DuelStrike {
     required this.homeSlot,
     required this.byYou,
     required this.targetSlot,
+    required this.targetId,
   });
 
   final int attackerId;
@@ -164,6 +170,7 @@ class DuelStrike {
   final int homeSlot;
   final bool byYou;
   final int targetSlot; // -1 = hero
+  final int targetId; // struck creature's card id; 0 = hero
 }
 
 // ---- actions --------------------------------------------------------------
@@ -426,8 +433,9 @@ DuelState _select(DuelYourTurn s, int id) {
     final targetHp = target.hp - attacker.attack;
     defSlots[targetSlot] = targetHp > 0 ? target.copy(hp: targetHp) : null;
   }
-  atkSlots[homeSlot] =
-      attackerHp > 0 ? attacker.copy(hp: attackerHp, ready: false) : null;
+  atkSlots[homeSlot] = attackerHp > 0
+      ? attacker.copy(hp: attackerHp, ready: false, engaged: true)
+      : null;
 
   return (
     atkSide.copy(slots: atkSlots),
@@ -438,7 +446,8 @@ DuelState _select(DuelYourTurn s, int id) {
         hp: attackerHp,
         homeSlot: homeSlot,
         byYou: byYou,
-        targetSlot: targetSlot),
+        targetSlot: targetSlot,
+        targetId: targetId),
   );
 }
 
@@ -461,7 +470,7 @@ DuelState _endYourTurn(DuelYourTurn s) {
   var (foe, next) = _draw(s.foe, s.nextId);
   foe = foe.copy(
       mana: s.manaCeiling,
-      slots: [for (final c in foe.slots) c?.copy(ready: true)]);
+      slots: [for (final c in foe.slots) c?.copy(ready: true, engaged: false)]);
   return DuelFoeTurn(
       you: s.you, foe: foe, turn: s.turn, nextId: next, seed: s.seed);
 }
@@ -520,7 +529,7 @@ DuelState _foeStep(DuelFoeTurn s) {
   var (you, next) = _draw(s.you, s.nextId);
   you = you.copy(
       mana: math.min(turn, duelManaCap),
-      slots: [for (final c in you.slots) c?.copy(ready: true)]);
+      slots: [for (final c in you.slots) c?.copy(ready: true, engaged: false)]);
   return DuelYourTurn(
       you: you, foe: s.foe, turn: turn, nextId: next, seed: s.seed);
 }
@@ -542,6 +551,10 @@ class DuelController extends GameController<DuelState, DuelAction> {
   static const double _yourRowZ = 1.5;
   static const double _foeRowZ = -1.5;
 
+  /// The "tapped" pose of an engaged board card: a quarter-turn about the
+  /// vertical axis, so the card lies sideways in its slot.
+  static final List<double> _engagedRot = quatAxis(0, 1, 0, -math.pi / 2);
+
   final List<int> _cardDef = List<int>.filled(duelSpecs.length, 0);
   int _feltYou = 0;
   int _feltFoe = 0;
@@ -551,6 +564,12 @@ class DuelController extends GameController<DuelState, DuelAction> {
   int _brazierDef = 0;
   int _crystalDef = 0;
   double _camDistance = 14.0;
+
+  // Particle-effect def ids (registered in registerDefs) and instance ids.
+  int _fxAttack = 0;
+  int _fxDefense = 0;
+  static const int _strikeTrailFx = 9701;
+  static const int _shieldFx = 9702;
 
   // World-model / point-light instance ids.
   static const int _islandId = 9501;
@@ -644,6 +663,45 @@ class DuelController extends GameController<DuelState, DuelAction> {
         cornerRadius: 0.11,
       ));
     }
+
+    // Battle particle effects, both riding cards. The attack trail is a
+    // continuous emitter attached to the lunging attacker (it follows the
+    // card for the length of the lunge); the defense shield is a one-shot
+    // burst on the struck card at the moment of impact.
+    _fxAttack = c.registerEffectType(const TesseraEffectType(
+      onAdd: TesseraParticle(
+        mode: TesseraEmitMode.continuous,
+        count: 90, // rate/sec
+        durationS: 0.45,
+        lifetime: 0.35,
+        lifetimeVar: 0.1,
+        speed: 0.9,
+        speedVar: 0.4,
+        spreadDeg: 70,
+        gravity: -1.5,
+        sizeStart: 0.16,
+        sizeEnd: 0.03,
+        colorStart: [1.0, 0.62, 0.18, 1.0],
+        colorEnd: [1.0, 0.16, 0.08, 0.0],
+        blend: TesseraBlendMode.add,
+      ),
+    ));
+    _fxDefense = c.registerEffectType(const TesseraEffectType(
+      onAdd: TesseraParticle(
+        count: 46,
+        lifetime: 0.5,
+        lifetimeVar: 0.15,
+        speed: 1.8,
+        speedVar: 0.6,
+        spreadDeg: 85,
+        gravity: 0.6,
+        sizeStart: 0.07,
+        sizeEnd: 0.26,
+        colorStart: [0.55, 0.75, 1.0, 1.0],
+        colorEnd: [0.25, 0.45, 1.0, 0.0],
+        blend: TesseraBlendMode.add,
+      ),
+    ));
 
     // …and every sound is a bundled WAV asset played through SDL audio.
     Future<int> snd(String name) async =>
@@ -752,14 +810,21 @@ class DuelController extends GameController<DuelState, DuelAction> {
 
     void boardCard(DuelCreature c, int slot, {required bool you}) {
       var position = _slotPos(slot, you: you);
+      var lunging = false;
       if (lunge && strike != null && c.id == strike.attackerId) {
         position = _strikeTarget(strike);
         attackerPlaced = true;
+        lunging = true;
       }
       cards.add(TesseraCard(
         id: c.id,
         def: _cardDef[c.type],
         position: position,
+        // An engaged creature lies turned sideways — the classic "tapped"
+        // cue that it has already attacked. It stays upright while it is
+        // mid-lunge, so an attacker turns as it slides back home and stands
+        // back up (the engine tweens the orientation) when it readies.
+        orientation: c.engaged && !lunging ? _engagedRot : const [0, 0, 0, 0],
         sourceDraw: you ? _yourDeck : _foeDeck,
       ));
     }
@@ -838,8 +903,31 @@ class DuelController extends GameController<DuelState, DuelAction> {
             position: const [-5.1, 0.02, -3.1]),
     ];
 
+    // Battle effects ride the cards themselves (TesseraEffect.attachCard):
+    // the lunge beat trails sparks from the moving attacker, and the settle
+    // beat — promoted right as the lunge lands — flashes a shield burst on
+    // the struck creature's card (or on the hero's table edge for a face
+    // hit, via the tile-coord fallback).
+    final effects = <TesseraEffect>[];
+    if (strike != null) {
+      if (lunge) {
+        effects.add(TesseraEffect(
+            id: _strikeTrailFx, def: _fxAttack, attachCard: strike.attackerId));
+      } else {
+        final at = _strikeTarget(strike);
+        effects.add(TesseraEffect(
+          id: _shieldFx,
+          def: _fxDefense,
+          x: at[0].round(),
+          y: at[2].round(),
+          attachCard: strike.targetId,
+        ));
+      }
+    }
+
     return TesseraScene(
       tiles: tiles,
+      effects: effects,
       cards: cards,
       hands: hands,
       cardDraws: draws,
@@ -1109,12 +1197,16 @@ class DuelController extends GameController<DuelState, DuelAction> {
     return hl;
   }
 
+  /// A `sync*` generator producing the visual beat sequence straight from the
+  /// state change: an attack yields two scenes — the attacker lunges onto its
+  /// target trailing attack sparks, then the board settles while the struck
+  /// card flashes its defense shield (survivor slides home, casualties fade
+  /// out). Anything else is a single scene. The host pulls one scene at a
+  /// time, awaiting each transition.
   @override
-  List<TesseraScene> render(DuelState s) {
-    // An attack plays as two beats: the attacker lunges onto its target, then
-    // the board settles (survivor slides home, casualties fade out).
-    if (s.strike != null) return [_scene(s, lunge: true), _scene(s)];
-    return [_scene(s)];
+  Iterable<TesseraScene> render(DuelState s) sync* {
+    if (s.strike != null) yield _scene(s, lunge: true);
+    yield _scene(s);
   }
 
   // ---- host wiring --------------------------------------------------------
@@ -1247,9 +1339,13 @@ class DuelController extends GameController<DuelState, DuelAction> {
         }
         if (sel != 0 && state.selectedOnBoard(state.you)) {
           final c = state.you.creatures.firstWhere((c) => c.id == sel);
-          return c.ready
-              ? '${duelSpecs[c.type].name}: tap a red foe card to attack, or '
-                  'Strike the hero.'
+          if (c.ready) {
+            return '${duelSpecs[c.type].name}: tap a red foe card to attack, '
+                'or Strike the hero.';
+          }
+          return c.engaged
+              ? '${duelSpecs[c.type].name} is engaged — it already attacked '
+                  'this round. Tap elsewhere to cancel.'
               : '${duelSpecs[c.type].name} is resting — it can attack next '
                   'round. Tap elsewhere to cancel.';
         }
