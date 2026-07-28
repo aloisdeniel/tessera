@@ -350,6 +350,8 @@ final class TesseraHandPlacement extends Struct {
   external double radius;
   @Float()
   external double cardSpacing;
+  @Uint64()
+  external int selectedCard;
 }
 
 /// enum TesseraOverlayShape: SPRITE samples atlas/uv across the tile (atlas 0
@@ -516,6 +518,37 @@ final class TesseraCamera extends Struct {
   external double fitPadding; // FOCUS_CARD/FOCUS_HAND: frame margin (<=0 => 0.08)
 }
 
+/// A positional light with spherical falloff, adding to the global
+/// directional + ambient light. Diff-keyed by id: appears fade in, vanished
+/// fade out, parameter changes tween.
+final class TesseraPointLightPlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Array(3)
+  external Array<Float> position;
+  @Array(3)
+  external Array<Float> color;
+  @Float()
+  external double intensity;
+  @Float()
+  external double radius; // falloff range, world units (<=0 => default 6)
+}
+
+/// A static decoration model in continuous world coordinates; its origin
+/// plane (position y = 0) sits just below the tiles. Uses an entity def.
+final class TesseraWorldModelPlacement extends Struct {
+  @Uint64()
+  external int id;
+  @Uint32()
+  external int def;
+  @Array(3)
+  external Array<Float> position;
+  @Array(4)
+  external Array<Float> orientation; // quat xyzw (all-zero => identity)
+  @Float()
+  external double scale; // extra multiplier (<=0 => 1)
+}
+
 final class TesseraState extends Struct {
   external Pointer<TesseraTilePlacement> tiles;
   @Size()
@@ -551,6 +584,12 @@ final class TesseraState extends Struct {
   external Pointer<TesseraHighlightPlacement> highlights;
   @Size()
   external int highlightCount;
+  external Pointer<TesseraPointLightPlacement> pointLights;
+  @Size()
+  external int pointLightCount;
+  external Pointer<TesseraWorldModelPlacement> worldModels;
+  @Size()
+  external int worldModelCount;
 }
 
 // ======================================================================

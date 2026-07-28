@@ -32,6 +32,8 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t nov = src->overlays   ? src->overlay_count   : 0;
     size_t nlb = src->labels     ? src->label_count     : 0;
     size_t nhl = src->highlights ? src->highlight_count : 0;
+    size_t npl = src->point_lights ? src->point_light_count : 0;
+    size_t nwm = src->world_models ? src->world_model_count : 0;
 
     /* Entity/card multi-step move paths are caller-owned pointer+count fields;
      * they must be deep-copied into the snapshot block too. Sum their sizes. */
@@ -54,6 +56,8 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t bytes_ov = nov * sizeof(TesseraOverlayPlacement);
     size_t bytes_lb = nlb * sizeof(TesseraLabelPlacement);
     size_t bytes_hl = nhl * sizeof(TesseraHighlightPlacement);
+    size_t bytes_pl = npl * sizeof(TesseraPointLightPlacement);
+    size_t bytes_wm = nwm * sizeof(TesseraWorldModelPlacement);
 
     /* Pack every array into a single allocation, each segment aligned for its
      * element type. Path storage trails the placement arrays. */
@@ -67,7 +71,9 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
     size_t off_ov = ts_align_up(off_di + bytes_di, _Alignof(TesseraOverlayPlacement));
     size_t off_lb = ts_align_up(off_ov + bytes_ov, _Alignof(TesseraLabelPlacement));
     size_t off_hl = ts_align_up(off_lb + bytes_lb, _Alignof(TesseraHighlightPlacement));
-    size_t off_ep = ts_align_up(off_hl + bytes_hl, _Alignof(TesseraCoord));
+    size_t off_pl = ts_align_up(off_hl + bytes_hl, _Alignof(TesseraPointLightPlacement));
+    size_t off_wm = ts_align_up(off_pl + bytes_pl, _Alignof(TesseraWorldModelPlacement));
+    size_t off_ep = ts_align_up(off_wm + bytes_wm, _Alignof(TesseraCoord));
     size_t off_cp = ts_align_up(off_ep + bytes_ep, _Alignof(float));
     size_t total  = off_cp + bytes_cp;
 
@@ -157,6 +163,16 @@ TsSnapshot* ts_snapshot_copy(const TesseraState* src) {
             s->highlights = (TesseraHighlightPlacement*)(base + off_hl);
             memcpy(s->highlights, src->highlights, bytes_hl);
             s->highlight_count = nhl;
+        }
+        if (npl) {
+            s->point_lights = (TesseraPointLightPlacement*)(base + off_pl);
+            memcpy(s->point_lights, src->point_lights, bytes_pl);
+            s->point_light_count = npl;
+        }
+        if (nwm) {
+            s->world_models = (TesseraWorldModelPlacement*)(base + off_wm);
+            memcpy(s->world_models, src->world_models, bytes_wm);
+            s->world_model_count = nwm;
         }
     }
 

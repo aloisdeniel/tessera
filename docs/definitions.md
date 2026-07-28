@@ -263,6 +263,7 @@ typedef struct {
     float spread_deg;   /* total fan angle   (<=0 => default) */
     float radius;       /* fan arc radius    (<=0 => default) */
     float card_spacing; /* lateral spacing   (<=0 => default) */
+    TesseraCardId selected_card; /* 0 = no selection */
 } TesseraHandPlacement;
 ```
 
@@ -279,6 +280,13 @@ Behaviour, all driven by the state diff:
   positions** of the cards whose `hand` equals its id, fanning them in an arc
   that follows the hand's transform (cards tween into their fan slots; `hand_slot`
   orders them). A card with `hand == 0` keeps its own placement.
+- **Hand selection (`selected_card`)** — names one of the hand's cards (0 =
+  none): the fan **parts around it** (its neighbours slide a gap aside) while
+  the chosen card **lifts clear of the arc**, un-rolled and in front of the
+  others, so it is fully visible. Changing/clearing the selection tweens the
+  whole fan. Pairs with the `TESSERA_CAMERA_FOCUS_HAND` camera's
+  `focus_card_id` for a pick-a-card presentation. Ignored when no card in the
+  hand matches the id.
 - **Deal from a pile (`source_draw`)** — when a card **first appears** and its
   `source_draw` names a pile present in the same state, it spawns resting on top
   of that pile and slides (and flips, if the pile top and the card differ) to its
@@ -321,3 +329,60 @@ a clip restarts it (it never overlaps itself).
 Headless environments without a playback device stay silent: registration
 still validates and returns ids, and `tessera_play_sound` returns `false`.
 Sounds are engine-scoped and freed by `tessera_destroy`.
+
+## Point lights — positional sphere lights
+
+```c
+typedef uint64_t TesseraPointLightId;
+#define TESSERA_MAX_POINT_LIGHTS 8
+
+typedef struct {
+    TesseraPointLightId id;   /* stable instance id (diff key; 0 = skipped) */
+    float position[3];        /* world units                                */
+    float color[3];           /* RGB, 0..1                                  */
+    float intensity;          /* scales color (0 = off)                     */
+    float radius;             /* falloff range, world units (<=0 => 6)      */
+} TesseraPointLightPlacement;
+```
+
+A list of positional lights on `TesseraState` (`point_lights` /
+`point_light_count`), lighting the scene **in addition to** the global
+directional + ambient light (`tessera_set_light`). Each contributes a
+cel-ramped lambert term with a smooth quadratic falloff that reaches zero at
+`radius` — braziers, lanterns, spell glows.
+
+Diffed by `id` like every placement: a light that newly appears **fades its
+intensity in**, a vanished one fades out, and position / color / intensity /
+radius changes **tween** from the currently shown values (`move_s`). At most
+`TESSERA_MAX_POINT_LIGHTS` (8) lights are shaded per frame; extras are
+ignored in array order. Tiles, entities, dice, world models and cards all
+receive them.
+
+## World models — decoration around and beneath the board
+
+```c
+typedef uint64_t TesseraWorldModelId;
+
+typedef struct {
+    TesseraWorldModelId id;   /* stable instance id (diff key; 0 = skipped) */
+    TesseraDefId def;         /* registered entity def (its glTF model)     */
+    float position[3];        /* world units; y 0 = the tiles' underside    */
+    float orientation[4];     /* quaternion xyzw (all-zero => identity)     */
+    float scale;              /* extra scale multiplier (<= 0 => 1)         */
+} TesseraWorldModelPlacement;
+```
+
+A list of static models on `TesseraState` (`world_models` /
+`world_model_count`) placed in **continuous world coordinates** rather than
+the tile grid: scenery dressing the space around and under the board — the
+cliff the board sits on, rocks, trees, ruins. The placement's origin plane
+(`position[1] == 0`) is **just below the tiles**: tile tops are y = 0 and the
+tile prism extends down 0.25 world units, so world models attach to the
+board's underside and decoration rises up around it.
+
+Geometry comes from a registered **entity** def (`tessera_register_entity_def`
+— glTF bytes; skinned models render in their rest pose). Diffed by `id`: new
+models **grow in** (`add_s`), vanished ones shrink out (`remove_s`), and
+transform changes tween (`move_s`). World models are lit (sun + point lights)
+and cast/receive shadows, but are **not pickable** and do **not** affect
+`tessera_camera_fit_distance`.

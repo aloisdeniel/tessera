@@ -3,6 +3,8 @@
 import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_tessera/flutter_tessera.dart'
+    show TesseraCameraFocusCard, TesseraCameraFocusHand, TesseraCameraPose;
 
 import 'package:flutter_tessera_example/blackjack.dart';
 import 'package:flutter_tessera_example/chess.dart';
@@ -280,6 +282,87 @@ void main() {
       expect(played, greaterThan(0)); // it can always afford a 1-drop
       expect(t, isA<DuelYourTurn>());
       expect((t as DuelYourTurn).turn, 2);
+    });
+
+    test('two-tap play: selecting arms a hand card, confirming plays it', () {
+      final s = dealt();
+      final card =
+          s.you.hand.firstWhere((h) => duelSpecs[h.type].cost <= s.you.mana);
+      final armed = duelUpdate(s, DlSelect(card.id)) as DuelYourTurn;
+      expect(armed.selected, card.id);
+      expect(armed.you.hand.length, s.you.hand.length); // not played yet
+      // tapping elsewhere cancels…
+      final cancelled = duelUpdate(armed, const DlSelect(0)) as DuelYourTurn;
+      expect(cancelled.selected, 0);
+      expect(cancelled.you.hand.length, s.you.hand.length);
+      // …while confirming plays it and drops the selection
+      final played = duelUpdate(armed, DlPlayCard(card.id)) as DuelYourTurn;
+      expect(played.selected, 0);
+      expect(played.you.creatures.single.id, card.id);
+      // an unknown id is not selectable
+      expect(
+          identical(duelUpdate(s, const DlSelect(31337)), s), isTrue);
+    });
+
+    test('any board card can be focused; only ready own creatures attack', () {
+      final base = dealt();
+      final you = base.you.copy(slots: [
+        const DuelCreature(500, 4, 3, ready: false), // resting Silver Knight
+        null, null, null,
+      ]);
+      final foe = base.foe.copy(slots: [
+        const DuelCreature(501, 2, 3, ready: true), // foe Moon Wolf
+        null, null, null,
+      ]);
+      DuelYourTurn s = DuelYourTurn(
+          you: you, foe: foe, turn: base.turn, nextId: 600, seed: base.seed);
+      // a foe creature is selectable (inspection focus), no attack happens
+      final inspecting = duelUpdate(s, const DlSelect(501)) as DuelYourTurn;
+      expect(inspecting.selected, 501);
+      expect(inspecting.foe.creatures.single.hp, 3);
+      // your resting creature is selectable too, but its attack is refused
+      final resting = duelUpdate(s, const DlSelect(500)) as DuelYourTurn;
+      expect(resting.selected, 500);
+      expect(identical(duelUpdate(resting, const DlAttack(500, 501)), resting),
+          isTrue);
+    });
+
+    test('render arms the hand fan + focus camera for a selected hand card',
+        () {
+      final s = dealt();
+      final card = s.you.hand.first;
+      final armed = duelUpdate(s, DlSelect(card.id)) as DuelYourTurn;
+      final ctl = DuelController();
+
+      final scene = ctl.render(armed).single;
+      final hand = scene.hands.firstWhere((h) => h.id == 1);
+      expect(hand.selectedCard, card.id); // the fan parts around it
+      final cam = scene.camera;
+      expect(cam, isA<TesseraCameraFocusHand>());
+      expect((cam as TesseraCameraFocusHand).cardId, card.id);
+
+      // no selection: still the in-front-of-the-hand camera, nothing armed
+      final idleScene = ctl.render(s).single;
+      expect(idleScene.hands.firstWhere((h) => h.id == 1).selectedCard, 0);
+      expect(idleScene.camera, isA<TesseraCameraFocusHand>());
+      expect((idleScene.camera as TesseraCameraFocusHand).cardId, isNull);
+
+      // a board selection focuses that card instead
+      final board = DuelYourTurn(
+          you: s.you.copy(slots: [
+            const DuelCreature(500, 4, 3, ready: true), null, null, null,
+          ]),
+          foe: s.foe,
+          turn: s.turn,
+          nextId: 600,
+          seed: s.seed,
+          selected: 500);
+      final boardScene = ctl.render(board).single;
+      expect(boardScene.camera, isA<TesseraCameraFocusCard>());
+      expect((boardScene.camera as TesseraCameraFocusCard).cardId, 500);
+      // and the strike beat always pulls back to the table overview
+      final strike = duelUpdate(board, const DlAttack(500, 0));
+      expect(ctl.render(strike).first.camera, isA<TesseraCameraPose>());
     });
 
     test('mana ramps with the round and caps at $duelManaCap', () {

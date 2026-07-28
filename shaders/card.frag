@@ -8,6 +8,11 @@ layout(std140, set = 3, binding = 0) uniform FrameUniform {
     vec4 ambient;
     vec4 light_color;
     vec4 camera_pos;
+    mat4 light_vp;      // unused here; declared to reach the fields below
+    vec4 shadow_params;
+    vec4 point_count;   // x = live point-light count
+    vec4 point_pos[8];   // xyz world pos, w falloff radius
+    vec4 point_color[8]; // rgb color, a intensity
 } frame;
 
 layout(std140, set = 3, binding = 1) uniform CardUniform {
@@ -46,6 +51,24 @@ vec2 remap(vec2 uv, vec4 rect) {
     return rect.xy + uv * (rect.zw - rect.xy);
 }
 
+// Summed cel-shaded point-light contribution (see mesh.frag).
+vec3 point_light_sum(vec3 wp, vec3 n) {
+    vec3 sum = vec3(0.0);
+    int count = int(min(frame.point_count.x, 8.0));
+    for (int i = 0; i < count; ++i) {
+        vec3 toL = frame.point_pos[i].xyz - wp;
+        float dist = length(toL);
+        float radius = max(frame.point_pos[i].w, 1e-3);
+        if (dist >= radius) continue;
+        float att = 1.0 - dist / radius;
+        att *= att;
+        float ndl = max(dot(n, toL / max(dist, 1e-4)), 0.0);
+        sum += frame.point_color[i].rgb * frame.point_color[i].a *
+               cel_ramp(ndl) * att;
+    }
+    return sum;
+}
+
 void main() {
     vec4 texel;
     if (v_face < 0.5) {
@@ -68,7 +91,8 @@ void main() {
     float ramp = cel_ramp(ndl);
     vec3 ambient = srgb_to_linear(frame.ambient.rgb);
     vec3 direct = frame.light_color.rgb * frame.light_color.a * ramp;
-    vec3 lit = albedo * (ambient + direct);
+    vec3 point = point_light_sum(world_pos, n);
+    vec3 lit = albedo * (ambient + direct + point);
 
     float rim = pow(1.0 - max(dot(n, V), 0.0), 4.0);
     lit += rim * 0.10 * frame.light_color.rgb;

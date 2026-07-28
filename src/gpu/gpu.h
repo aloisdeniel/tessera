@@ -59,6 +59,11 @@ typedef struct {
      * declare only the prefix above keep working unchanged. */
     mat4 light_vp;      /* world -> light clip (ortho, fitted per frame) */
     vec4 shadow_params; /* x enable, y 1/resolution, z const bias, w slope bias */
+    /* Positional point lights (state-driven; see TesseraPointLightPlacement).
+     * Appended, same prefix rule as above. */
+    vec4 point_count;   /* x = live light count (as float), yzw unused    */
+    vec4 point_pos[TESSERA_MAX_POINT_LIGHTS];   /* xyz world pos, w radius */
+    vec4 point_color[TESSERA_MAX_POINT_LIGHTS]; /* rgb color, a intensity  */
 } TsFrameUniform;
 
 /* Depth-only pass per-frame uniform (world -> light clip). */

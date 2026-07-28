@@ -9,6 +9,9 @@ struct FrameUniform {
     float4   camera_pos;   // xyz eye position, w unused
     float4x4 light_vp;     // world -> light clip (shadow map)
     float4   shadow_params;// x enable, y 1/resolution, z const bias, w slope bias
+    float4   point_count;  // x = live point-light count
+    float4   point_pos[8];   // xyz world pos, w falloff radius
+    float4   point_color[8]; // rgb color, a intensity
 };
 struct VSOut {
     float4 position [[position]];
@@ -33,6 +36,28 @@ static inline float cel_ramp(float ndl) {
     // narrow smooth transition between adjacent bands
     float soft   = smoothstep(0.35, 0.65, frac);
     return (lower + soft) / bands;
+}
+
+// Summed cel-shaded contribution of the live point lights: lambert quantised
+// through the same ramp as the sun, with a smooth quadratic falloff to each
+// light's radius. Colors follow the directional light's convention (applied
+// on linear albedo without re-linearising the light color itself).
+static float3 point_light_sum(float3 world_pos, float3 n,
+                              constant FrameUniform& frame) {
+    float3 sum = float3(0.0);
+    uint count = min(uint(frame.point_count.x), 8u);
+    for (uint i = 0u; i < count; ++i) {
+        float3 toL = frame.point_pos[i].xyz - world_pos;
+        float dist = length(toL);
+        float radius = max(frame.point_pos[i].w, 1e-3);
+        if (dist >= radius) continue;
+        float att = 1.0 - dist / radius;
+        att *= att;
+        float ndl = max(dot(n, toL / max(dist, 1e-4)), 0.0);
+        sum += frame.point_color[i].rgb * frame.point_color[i].a *
+               cel_ramp(ndl) * att;
+    }
+    return sum;
 }
 
 // Directional shadow-map visibility: project into light clip space, 3x3 PCF
@@ -79,7 +104,8 @@ fragment float4 fs_main(VSOut in [[stage_in]],
 
     float3 ambient = srgb_to_linear(frame.ambient.rgb);
     float3 direct  = frame.light_color.rgb * frame.light_color.a * ramp * vis;
-    float3 lit     = albedo * (ambient + direct);
+    float3 point   = point_light_sum(in.world_pos, n, frame);
+    float3 lit     = albedo * (ambient + direct + point);
 
     // Subtle Fresnel rim to lift silhouettes off the background.
     float rim = pow(1.0 - max(dot(n, V), 0.0), 4.0);

@@ -112,6 +112,7 @@ typedef struct {
 typedef struct {
     TesseraHandId id; float position[3]; float orientation[4];
     float spread_deg, radius, card_spacing;
+    TesseraCardId selected_card;
 } TesseraHandPlacement;
 typedef enum { TESSERA_OVERLAY_SPRITE = 0, TESSERA_OVERLAY_DISC = 1,
                TESSERA_OVERLAY_RING = 2 } TesseraOverlayShape;
@@ -151,6 +152,17 @@ typedef struct {
     float fit_padding;
 } TesseraCamera;
 
+typedef uint64_t TesseraPointLightId;
+typedef uint64_t TesseraWorldModelId;
+typedef struct {
+    TesseraPointLightId id;
+    float position[3]; float color[3];
+    float intensity; float radius;
+} TesseraPointLightPlacement;
+typedef struct {
+    TesseraWorldModelId id; TesseraDefId def;
+    float position[3]; float orientation[4]; float scale;
+} TesseraWorldModelPlacement;
 typedef struct {
     const TesseraTilePlacement*   tiles;    size_t tile_count;
     const TesseraEntityPlacement* entities; size_t entity_count;
@@ -164,6 +176,8 @@ typedef struct {
     const TesseraOverlayPlacement*  overlays;   size_t overlay_count;
     const TesseraLabelPlacement*    labels;     size_t label_count;
     const TesseraHighlightPlacement* highlights; size_t highlight_count;
+    const TesseraPointLightPlacement* point_lights; size_t point_light_count;
+    const TesseraWorldModelPlacement* world_models; size_t world_model_count;
 } TesseraState;
 
 typedef struct {

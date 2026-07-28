@@ -453,6 +453,10 @@ class TesseraController {
         scene.labels.isEmpty ? 1 : scene.labels.length);
     final highlights = calloc<t.TesseraHighlightPlacement>(
         scene.highlights.isEmpty ? 1 : scene.highlights.length);
+    final plights = calloc<t.TesseraPointLightPlacement>(
+        scene.pointLights.isEmpty ? 1 : scene.pointLights.length);
+    final wmodels = calloc<t.TesseraWorldModelPlacement>(
+        scene.world.isEmpty ? 1 : scene.world.length);
     // Per-placement multi-step path buffers, freed after setState (which copies).
     final pathPtrs = <Pointer<NativeType>>[];
 
@@ -542,7 +546,8 @@ class TesseraController {
         ..id = s.id
         ..spreadDeg = s.spreadDeg
         ..radius = s.radius
-        ..cardSpacing = s.cardSpacing;
+        ..cardSpacing = s.cardSpacing
+        ..selectedCard = s.selectedCard;
       for (var k = 0; k < 3; ++k) {
         p.position[k] = s.position[k];
       }
@@ -625,6 +630,33 @@ class TesseraController {
       }
     }
 
+    for (var i = 0; i < scene.pointLights.length; ++i) {
+      final s = scene.pointLights[i];
+      final p = plights[i];
+      p
+        ..id = s.id
+        ..intensity = s.intensity
+        ..radius = s.radius;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+        p.color[k] = s.color[k];
+      }
+    }
+    for (var i = 0; i < scene.world.length; ++i) {
+      final s = scene.world[i];
+      final p = wmodels[i];
+      p
+        ..id = s.id
+        ..def = s.def
+        ..scale = s.scale;
+      for (var k = 0; k < 3; ++k) {
+        p.position[k] = s.position[k];
+      }
+      for (var k = 0; k < 4; ++k) {
+        p.orientation[k] = s.orientation[k];
+      }
+    }
+
     final st = calloc<t.TesseraState>();
     st.ref
       ..tiles = tiles
@@ -647,7 +679,11 @@ class TesseraController {
       ..labels = labels
       ..labelCount = scene.labels.length
       ..highlights = highlights
-      ..highlightCount = scene.highlights.length;
+      ..highlightCount = scene.highlights.length
+      ..pointLights = plights
+      ..pointLightCount = scene.pointLights.length
+      ..worldModels = wmodels
+      ..worldModelCount = scene.world.length;
     // `calloc` zeroed the whole TesseraState, so any camera field a case does
     // not touch stays 0 (mode 0 = ORBIT, ids/target/orientation all zero).
     final cam = st.ref.camera;
@@ -740,6 +776,8 @@ class TesseraController {
     calloc.free(overlays);
     calloc.free(labels);
     calloc.free(highlights);
+    calloc.free(plights);
+    calloc.free(wmodels);
     for (final p in pathPtrs) {
       calloc.free(p);
     }

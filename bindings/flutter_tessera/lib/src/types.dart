@@ -271,6 +271,12 @@ class TesseraCardDraw {
 /// A hand anchor that fans out the cards whose [TesseraCard.hand] equals its id.
 /// [orientation] is a quaternion; identity faces the fronts toward +Z. All of
 /// [spreadDeg]/[radius]/[cardSpacing] default when <= 0.
+///
+/// [selectedCard] (0 = none) singles one of the hand's cards out: the fan
+/// parts around it — the other cards slide aside — while the chosen card lifts
+/// clear of the arc, un-rolled and in front, fully visible. Everything tweens
+/// on change. Pairs naturally with [TesseraCameraFocusHand.cardId]. Ignored
+/// when no card in the hand matches.
 class TesseraHand {
   const TesseraHand({
     required this.id,
@@ -279,6 +285,7 @@ class TesseraHand {
     this.spreadDeg = 0,
     this.radius = 0,
     this.cardSpacing = 0,
+    this.selectedCard = 0,
   });
 
   final int id;
@@ -287,6 +294,7 @@ class TesseraHand {
   final double spreadDeg;
   final double radius;
   final double cardSpacing;
+  final int selectedCard;
 }
 
 /// A flat decal rendered on top of the tile at ([x], [y]) — move-range fills,
@@ -416,6 +424,51 @@ class TesseraHighlight {
   final double pulseS;
   final double pulseMin;
   final double pulseMax;
+}
+
+/// A positional sphere light, lighting the scene IN ADDITION to the global
+/// directional + ambient light ([TesseraController.setLight]). Keyed by [id]
+/// when diffing: a light that newly appears fades its intensity in, one that
+/// vanishes fades out, and position/color/intensity/radius changes tween.
+/// At most 8 lights are shaded per frame (extras are ignored, array order).
+class TesseraPointLight {
+  const TesseraPointLight({
+    required this.id,
+    this.position = const [0, 1, 0],
+    this.color = const [1, 1, 1],
+    this.intensity = 1.0,
+    this.radius = 0,
+  });
+
+  final int id;
+  final List<double> position; // world units
+  final List<double> color; // RGB 0..1
+  final double intensity; // scales color (0 = off)
+  final double radius; // falloff range, world units (<=0 => default 6)
+}
+
+/// A static decoration model placed in continuous WORLD coordinates (not the
+/// tile grid): scenery dressing the space around and under the board. The
+/// placement's origin plane ([position]`[1]` == 0) sits JUST BELOW the tiles,
+/// so decoration attaches to the board's underside and rises around it. Uses
+/// a registered *entity* def for geometry (skinned models render in their
+/// rest pose). Keyed by [id]: new models grow in, vanished ones shrink out,
+/// transform changes tween. World models are lit and shadowed but are not
+/// pickable and do not affect camera fitting.
+class TesseraWorldModel {
+  const TesseraWorldModel({
+    required this.id,
+    required this.def,
+    this.position = const [0, 0, 0],
+    this.orientation = const [0, 0, 0, 0],
+    this.scale = 1.0,
+  });
+
+  final int id;
+  final int def; // registered entity def
+  final List<double> position; // world units; y 0 = the tiles' underside
+  final List<double> orientation; // quat xyzw (all-zero => identity)
+  final double scale; // extra multiplier (<=0 => 1)
 }
 
 /// One typed engine event, delivered on [TesseraController.events] as
@@ -619,6 +672,8 @@ class TesseraScene {
     this.overlays = const [],
     this.labels = const [],
     this.highlights = const [],
+    this.pointLights = const [],
+    this.world = const [],
     required this.camera,
     this.epoch = 0,
   });
@@ -632,6 +687,10 @@ class TesseraScene {
   final List<TesseraOverlay> overlays;
   final List<TesseraLabel> labels;
   final List<TesseraHighlight> highlights;
+  final List<TesseraPointLight> pointLights;
+
+  /// Decoration models around/beneath the board (see [TesseraWorldModel]).
+  final List<TesseraWorldModel> world;
   final TesseraCamera camera;
   final int epoch;
 }

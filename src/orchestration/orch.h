@@ -174,6 +174,39 @@ typedef struct {
     float   color[4]; float alpha;
 } TsHighlightInst;
 
+/* Live per-point-light instance (keyed by id). One tween drives every
+ * parameter together; add/remove fade the intensity in/out. */
+typedef struct {
+    TesseraPointLightId id;
+    vec3    from_pos, to_pos;
+    float   from_color[3], to_color[3];
+    float   from_intensity, to_intensity;
+    float   from_radius, to_radius;
+    TsTween tween;
+    bool    removing;
+    bool    alive;
+    /* current interpolated */
+    vec3    pos; float color[3]; float intensity; float radius;
+} TsPointLightInst;
+
+/* Live per-world-model instance (keyed by id): static scenery placed in
+ * continuous world coordinates (origin plane just below the tiles), drawn with
+ * the entity pipelines. Spawn grows in, removal shrinks out, transform
+ * changes tween. */
+typedef struct {
+    TesseraWorldModelId id;
+    TesseraDefId def;
+    vec3    from_pos, to_pos;
+    versor  from_rot, to_rot;
+    float   from_scale, to_scale;   /* placement scale (def scale on top) */
+    float   from_alpha, to_alpha;
+    TsTween tween;
+    bool    removing;
+    bool    alive;
+    /* current interpolated */
+    vec3    pos; versor rot; float scale, alpha;
+} TsWorldModelInst;
+
 struct TsOrch {
     TsEntityInst*  entities; size_t entity_count,  entity_cap;
     TsTileInst*    tiles;    size_t tile_count,    tile_cap;
@@ -181,6 +214,8 @@ struct TsOrch {
     TsOverlayInst* overlays; size_t overlay_count, overlay_cap;
     TsLabelInst*   labels;   size_t label_count,   label_cap;
     TsHighlightInst* highlights; size_t highlight_count, highlight_cap;
+    TsPointLightInst* point_lights; size_t point_light_count, point_light_cap;
+    TsWorldModelInst* world_models; size_t world_model_count, world_model_cap;
     bool           seeded;   /* first promotion snaps instead of animating */
 };
 
@@ -308,5 +343,18 @@ typedef struct {
 /* Emit one item per live highlight into `arena` (pulse applied). Returns count. */
 size_t ts_orch_build_highlights(struct TsOrch* o, TsArena* arena,
                                 TsHighlightItem** out);
+
+/* One live point light resolved for this frame (fed to the frame uniform). */
+typedef struct {
+    vec3  pos;
+    float radius;      /* falloff range (defaulted when the spec was <= 0) */
+    float color[3];
+    float intensity;   /* fade-scaled; ~0 lights are still emitted        */
+} TsPointLightItem;
+
+/* Copy up to `cap` live point lights into `out`; returns the count written
+ * (array order; the shader cap is TESSERA_MAX_POINT_LIGHTS). */
+size_t ts_orch_get_point_lights(const struct TsOrch* o,
+                                TsPointLightItem* out, size_t cap);
 
 #endif /* TESSERA_ORCH_H */

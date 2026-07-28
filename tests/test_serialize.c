@@ -52,6 +52,8 @@ typedef struct {
     TesseraOverlayPlacement overlays[2];
     TesseraLabelPlacement labels[1];
     TesseraHighlightPlacement hls[2];
+    TesseraPointLightPlacement plights[2];
+    TesseraWorldModelPlacement wmodels[1];
 } MaxArrays;
 
 static void build_maximal(MaxArrays* a, TesseraState* st, DefIds ids) {
@@ -117,6 +119,16 @@ static void build_maximal(MaxArrays* a, TesseraState* st, DefIds ids) {
         .target_id = 101, .kind = TESSERA_HIGHLIGHT_TILE,
         .style = TESSERA_HIGHLIGHT_GLOW, .color = {0.2f, 0.8f, 1.0f, 1.0f} };
 
+    a->plights[0] = (TesseraPointLightPlacement){
+        .id = 80, .position = {1.0f, 1.5f, -2.0f}, .color = {1.0f, 0.6f, 0.2f},
+        .intensity = 2.0f, .radius = 5.0f };
+    a->plights[1] = (TesseraPointLightPlacement){
+        .id = 81, .position = {-1.0f, 0.8f, 2.0f}, .color = {0.3f, 0.5f, 1.0f},
+        .intensity = 1.2f };
+    a->wmodels[0] = (TesseraWorldModelPlacement){
+        .id = 90, .def = ids.entity, .position = {3.0f, -0.5f, 1.0f},
+        .orientation = {0, 0.7071f, 0, 0.7071f}, .scale = 2.5f };
+
     st->tiles = a->tiles;         st->tile_count = 4;
     st->entities = a->ents;       st->entity_count = 2;
     st->effects = a->fx;          st->effect_count = 1;
@@ -127,6 +139,8 @@ static void build_maximal(MaxArrays* a, TesseraState* st, DefIds ids) {
     st->overlays = a->overlays;   st->overlay_count = 2;
     st->labels = a->labels;       st->label_count = 1;
     st->highlights = a->hls;      st->highlight_count = 2;
+    st->point_lights = a->plights; st->point_light_count = 2;
+    st->world_models = a->wmodels; st->world_model_count = 1;
     st->camera = (TesseraCamera){
         .mode = TESSERA_CAMERA_ORBIT, .focus = {0.5f, 0.5f},
         .distance = 8.0f, .yaw = 0.6f, .pitch = 0.8f, .fov = 0.9f,
@@ -184,6 +198,12 @@ static void test_roundtrip(void) {
               && d->labels[0].billboard == true && d->labels[0].anchor_id == 1);
         CHECK(d->highlight_count == 2 && d->highlights[1].kind == TESSERA_HIGHLIGHT_TILE
               && d->highlights[1].style == TESSERA_HIGHLIGHT_GLOW);
+        CHECK(d->point_light_count == 2 && d->point_lights[0].id == 80
+              && fabsf(d->point_lights[0].radius - 5.0f) < 1e-6f
+              && fabsf(d->point_lights[1].intensity - 1.2f) < 1e-6f);
+        CHECK(d->world_model_count == 1 && d->world_models[0].id == 90
+              && fabsf(d->world_models[0].scale - 2.5f) < 1e-6f
+              && fabsf(d->world_models[0].orientation[1] - 0.7071f) < 1e-6f);
         CHECK(d->camera.mode == TESSERA_CAMERA_ORBIT
               && fabsf(d->camera.focus.x - 0.5f) < 1e-6f
               && d->camera.target_id == 7 && d->camera.focus_card_id == 8);

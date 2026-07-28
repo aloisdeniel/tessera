@@ -10,6 +10,9 @@ layout(std140, set = 3, binding = 0) uniform FrameUniform {
     vec4 camera_pos;   // xyz eye position, w unused
     mat4 light_vp;     // world -> light clip (shadow map)
     vec4 shadow_params;// x enable, y 1/resolution, z const bias, w slope bias
+    vec4 point_count;  // x = live point-light count
+    vec4 point_pos[8];   // xyz world pos, w falloff radius
+    vec4 point_color[8]; // rgb color, a intensity
 } frame;
 
 layout(set = 2, binding = 0) uniform sampler2D tex;
@@ -32,6 +35,25 @@ float cel_ramp(float ndl) {
     float frac = scaled - lower;
     float soft = smoothstep(0.35, 0.65, frac);
     return (lower + soft) / bands;
+}
+
+// Summed cel-shaded contribution of the live point lights (see the MSL
+// original in assets/shaders/mesh.fragment.msl).
+vec3 point_light_sum(vec3 wp, vec3 n) {
+    vec3 sum = vec3(0.0);
+    int count = int(min(frame.point_count.x, 8.0));
+    for (int i = 0; i < count; ++i) {
+        vec3 toL = frame.point_pos[i].xyz - wp;
+        float dist = length(toL);
+        float radius = max(frame.point_pos[i].w, 1e-3);
+        if (dist >= radius) continue;
+        float att = 1.0 - dist / radius;
+        att *= att;
+        float ndl = max(dot(n, toL / max(dist, 1e-4)), 0.0);
+        sum += frame.point_color[i].rgb * frame.point_color[i].a *
+               cel_ramp(ndl) * att;
+    }
+    return sum;
 }
 
 // Directional shadow-map visibility: project into light clip space, 3x3 PCF
@@ -70,7 +92,8 @@ void main() {
 
     vec3 ambient = srgb_to_linear(frame.ambient.rgb);
     vec3 direct = frame.light_color.rgb * frame.light_color.a * ramp * vis;
-    vec3 lit = albedo * (ambient + direct);
+    vec3 point = point_light_sum(world_pos, n);
+    vec3 lit = albedo * (ambient + direct + point);
 
     float rim = pow(1.0 - max(dot(n, V), 0.0), 4.0);
     lit += rim * 0.12 * frame.light_color.rgb;

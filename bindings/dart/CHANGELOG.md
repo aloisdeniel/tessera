@@ -6,6 +6,14 @@
   atlas) and `Tessera.playSound` (any-thread, fire-and-forget; clips mix and a
   re-trigger restarts). Mirrors the new C `tessera_register_sound` /
   `tessera_play_sound`.
+- `TesseraHandPlacement` gained `selectedCard` (0 = none): the fan parts around
+  the named card, which lifts clear of the arc, fully visible. State blob format
+  version bumped to 2.
+- `TesseraState` gained two appended placement arrays: `pointLights`
+  (`TesseraPointLightPlacement` — positional sphere lights with radius falloff,
+  shading in addition to the global directional light, up to 8 per frame) and
+  `worldModels` (`TesseraWorldModelPlacement` — static decoration models in
+  continuous world coordinates whose origin plane sits just below the tiles).
 
 ## 0.4.0
 

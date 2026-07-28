@@ -62,7 +62,12 @@ typedef uint64_t TesseraCardDrawId;/* live card-pile instance id (0 = invalid) *
 typedef uint64_t TesseraHandId;   /* live hand instance id (0 = none/invalid)  */
 typedef uint64_t TesseraDiceId;   /* live die instance id (0 = invalid)        */
 typedef uint64_t TesseraLabelId;  /* live text-label instance id (0 = invalid) */
+typedef uint64_t TesseraPointLightId; /* live point-light instance id (0 = invalid) */
+typedef uint64_t TesseraWorldModelId; /* live world-model instance id (0 = invalid) */
 typedef uint64_t TesseraOpId;     /* set_state operation id (0 = none/complete) */
+
+/* Point lights shaded per frame; extra live lights are ignored. */
+#define TESSERA_MAX_POINT_LIGHTS 8
 
 typedef enum {
     TESSERA_LOG_TRACE = 0,
@@ -279,7 +284,14 @@ typedef struct {
 /* A hand: a world-space anchor that fans out the cards assigned to it (the cards
  * whose `hand` field equals this id). `orientation` is a quaternion; identity
  * faces the card fronts toward +Z and spreads the fan along +X. All of
- * `spread_deg` / `radius` / `card_spacing` default when <= 0. */
+ * `spread_deg` / `radius` / `card_spacing` default when <= 0.
+ *
+ * `selected_card` (0 = none) singles one of the hand's cards out: the fan
+ * parts around it — its neighbours slide aside — while the chosen card lifts
+ * clear of the arc, un-rolled and in front, so it is fully visible. Everything
+ * tweens on change like any other placement edit. Pairs naturally with the
+ * FOCUS_HAND camera's `focus_card_id`. Ignored when no card in the hand
+ * matches. */
 typedef struct {
     TesseraHandId id;
     float         position[3];
@@ -287,6 +299,7 @@ typedef struct {
     float         spread_deg;
     float         radius;
     float         card_spacing;
+    TesseraCardId selected_card;  /* 0 = no selection */
 } TesseraHandPlacement;
 
 /* ---- tile overlays (ground decals) ------------------------------------ */
@@ -400,6 +413,40 @@ typedef struct {
     float    pulse_min, pulse_max; /* intensity range (used when max > 0)     */
 } TesseraHighlightPlacement;
 
+/* ---- point lights (positional sphere lights) --------------------------- */
+/* A positional light with spherical falloff, lighting the scene IN ADDITION
+ * to the global directional + ambient light (tessera_set_light). Keyed by
+ * `id` when diffing: a light that newly appears fades its intensity in, one
+ * that vanishes fades out, and position/color/intensity/radius changes tween
+ * from the currently shown values. At most TESSERA_MAX_POINT_LIGHTS lights
+ * are shaded per frame (extras are ignored, nearest-in-array first). */
+typedef struct {
+    TesseraPointLightId id;   /* stable instance id (diff key; 0 = skipped) */
+    float position[3];        /* world units                                */
+    float color[3];           /* RGB, 0..1                                  */
+    float intensity;          /* scales color (0 = off)                     */
+    float radius;             /* falloff range, world units (<=0 => 6)      */
+} TesseraPointLightPlacement;
+
+/* ---- world models (decoration around / beneath the board) -------------- */
+/* A static model placed in continuous WORLD coordinates (not the tile grid):
+ * scenery dressing the space around and under the board — cliffs the board
+ * sits on, rocks, trees, ruins. The placement's origin plane (`position[1]`
+ * == 0) is JUST BELOW THE TILES: tile tops are y=0 and tiles extend down
+ * 0.25 world units, so world models attach to the board's underside and
+ * decoration rises up around it. Uses a registered *entity* def for its
+ * geometry (skinned models render in their rest pose). Keyed by `id`: new
+ * models grow in, vanished ones shrink out, and transform changes tween.
+ * World models cast/receive light and shadows but are not pickable and do
+ * not affect camera fitting. */
+typedef struct {
+    TesseraWorldModelId id;   /* stable instance id (diff key; 0 = skipped) */
+    TesseraDefId def;         /* registered entity def (its glTF model)     */
+    float position[3];        /* world units; y 0 = the tiles' underside    */
+    float orientation[4];     /* quaternion xyzw (all-zero => identity)     */
+    float scale;              /* extra scale multiplier (<= 0 => 1)         */
+} TesseraWorldModelPlacement;
+
 typedef enum {
     TESSERA_CAMERA_ORBIT        = 0, /* grid focus + distance/yaw/pitch (default) */
     TESSERA_CAMERA_MANUAL       = 1, /* eye position + orientation quaternion      */
@@ -457,6 +504,8 @@ typedef struct {
     const TesseraOverlayPlacement*  overlays;   size_t overlay_count;
     const TesseraLabelPlacement*    labels;     size_t label_count;
     const TesseraHighlightPlacement* highlights; size_t highlight_count;
+    const TesseraPointLightPlacement* point_lights; size_t point_light_count;
+    const TesseraWorldModelPlacement* world_models; size_t world_model_count;
 } TesseraState;
 
 /* Deep-copies the snapshot; diffs against current; animates transitions.
@@ -585,7 +634,7 @@ TESSERA_API void tessera_set_event_callback(TesseraEngine* e,
 /* State blob header constants: magic ("TSST" as stored little-endian) +
  * format version. tessera_state_deserialize rejects unknown values cleanly. */
 #define TESSERA_STATE_BLOB_MAGIC   0x54535354u  /* bytes "TSST" on disk */
-#define TESSERA_STATE_BLOB_VERSION 1u
+#define TESSERA_STATE_BLOB_VERSION 2u  /* 2: hands carry selected_card */
 
 /* Serialize `state` into `buf` and return the REQUIRED byte size. Two-call
  * sizing: call with buf=NULL (or cap=0) to measure, allocate, then call again

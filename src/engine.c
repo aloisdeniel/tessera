@@ -88,6 +88,25 @@ static void fill_frame_uniform(TesseraEngine* e, TsFrameUniform* u) {
         glm_mat4_identity(u->light_vp);
         glm_vec4_zero(u->shadow_params);
     }
+
+    /* Live point lights (tweened by the orchestrator); extras are ignored. */
+    TsPointLightItem pls[TESSERA_MAX_POINT_LIGHTS];
+    size_t np = e->orch
+        ? ts_orch_get_point_lights(e->orch, pls, TESSERA_MAX_POINT_LIGHTS) : 0;
+    glm_vec4_zero(u->point_count);
+    u->point_count[0] = (float)np;
+    for (size_t i = 0; i < TESSERA_MAX_POINT_LIGHTS; ++i) {
+        if (i < np) {
+            glm_vec4(pls[i].pos, pls[i].radius, u->point_pos[i]);
+            u->point_color[i][0] = pls[i].color[0];
+            u->point_color[i][1] = pls[i].color[1];
+            u->point_color[i][2] = pls[i].color[2];
+            u->point_color[i][3] = pls[i].intensity;
+        } else {
+            glm_vec4_zero(u->point_pos[i]);
+            glm_vec4_zero(u->point_color[i]);
+        }
+    }
 }
 
 /* Shadow-map resolution from the quality settings: high presets (msaa 4) get a

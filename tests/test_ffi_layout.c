@@ -175,13 +175,14 @@ OFF_IS(TesseraCardDrawPlacement, orientation, 24);
 OFF_IS(TesseraCardDrawPlacement, count, 40);
 OFF_IS(TesseraCardDrawPlacement, top_hidden, 44);
 
-SIZE_IS(TesseraHandPlacement, 48);
+SIZE_IS(TesseraHandPlacement, 56);
 OFF_IS(TesseraHandPlacement, id, 0);
 OFF_IS(TesseraHandPlacement, position, 8);
 OFF_IS(TesseraHandPlacement, orientation, 20);
 OFF_IS(TesseraHandPlacement, spread_deg, 36);
 OFF_IS(TesseraHandPlacement, radius, 40);
 OFF_IS(TesseraHandPlacement, card_spacing, 44);
+OFF_IS(TesseraHandPlacement, selected_card, 48);
 
 SIZE_IS(TesseraOverlayPlacement, 68);
 OFF_IS(TesseraOverlayPlacement, coord, 0);
@@ -230,7 +231,21 @@ OFF_IS(TesseraCamera, target_id, 72);
 OFF_IS(TesseraCamera, focus_card_id, 80);
 OFF_IS(TesseraCamera, fit_padding, 88);
 
-SIZE_IS(TesseraState, 264);
+SIZE_IS(TesseraPointLightPlacement, 40);
+OFF_IS(TesseraPointLightPlacement, id, 0);
+OFF_IS(TesseraPointLightPlacement, position, 8);
+OFF_IS(TesseraPointLightPlacement, color, 20);
+OFF_IS(TesseraPointLightPlacement, intensity, 32);
+OFF_IS(TesseraPointLightPlacement, radius, 36);
+
+SIZE_IS(TesseraWorldModelPlacement, 48);
+OFF_IS(TesseraWorldModelPlacement, id, 0);
+OFF_IS(TesseraWorldModelPlacement, def, 8);
+OFF_IS(TesseraWorldModelPlacement, position, 12);
+OFF_IS(TesseraWorldModelPlacement, orientation, 24);
+OFF_IS(TesseraWorldModelPlacement, scale, 40);
+
+SIZE_IS(TesseraState, 296);
 OFF_IS(TesseraState, tiles, 0);
 OFF_IS(TesseraState, tile_count, 8);
 OFF_IS(TesseraState, entities, 16);
@@ -253,6 +268,10 @@ OFF_IS(TesseraState, labels, 232);
 OFF_IS(TesseraState, label_count, 240);
 OFF_IS(TesseraState, highlights, 248);
 OFF_IS(TesseraState, highlight_count, 256);
+OFF_IS(TesseraState, point_lights, 264);
+OFF_IS(TesseraState, point_light_count, 272);
+OFF_IS(TesseraState, world_models, 280);
+OFF_IS(TesseraState, world_model_count, 288);
 
 /* ======================================================================= *
  *  Engine events
@@ -504,6 +523,7 @@ static void dump_layout(void) {
     D_FIELD(TesseraHandPlacement, spread_deg);
     D_FIELD(TesseraHandPlacement, radius);
     D_FIELD(TesseraHandPlacement, card_spacing);
+    D_FIELD(TesseraHandPlacement, selected_card);
 
     D_STRUCT(TesseraOverlayPlacement);
     D_FIELD(TesseraOverlayPlacement, coord);
@@ -575,6 +595,24 @@ static void dump_layout(void) {
     D_FIELD(TesseraState, label_count);
     D_FIELD(TesseraState, highlights);
     D_FIELD(TesseraState, highlight_count);
+    D_FIELD(TesseraState, point_lights);
+    D_FIELD(TesseraState, point_light_count);
+    D_FIELD(TesseraState, world_models);
+    D_FIELD(TesseraState, world_model_count);
+
+    D_STRUCT(TesseraPointLightPlacement);
+    D_FIELD(TesseraPointLightPlacement, id);
+    D_FIELD(TesseraPointLightPlacement, position);
+    D_FIELD(TesseraPointLightPlacement, color);
+    D_FIELD(TesseraPointLightPlacement, intensity);
+    D_FIELD(TesseraPointLightPlacement, radius);
+
+    D_STRUCT(TesseraWorldModelPlacement);
+    D_FIELD(TesseraWorldModelPlacement, id);
+    D_FIELD(TesseraWorldModelPlacement, def);
+    D_FIELD(TesseraWorldModelPlacement, position);
+    D_FIELD(TesseraWorldModelPlacement, orientation);
+    D_FIELD(TesseraWorldModelPlacement, scale);
 
     D_STRUCT(TesseraEvent);
     D_FIELD(TesseraEvent, time);

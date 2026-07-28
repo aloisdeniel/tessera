@@ -21,18 +21,20 @@
 
 #define TS_SER_MSG " changed — update the wire walk in src/serialize.c " \
                    "(serialize AND deserialize), then this assert"
-_Static_assert(sizeof(TesseraState)              == 264, "TesseraState" TS_SER_MSG);
+_Static_assert(sizeof(TesseraState)              == 296, "TesseraState" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCamera)             ==  96, "TesseraCamera" TS_SER_MSG);
 _Static_assert(sizeof(TesseraTilePlacement)      ==  24, "TesseraTilePlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraEntityPlacement)    ==  48, "TesseraEntityPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraEffectPlacement)    ==  32, "TesseraEffectPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCardPlacement)      ==  88, "TesseraCardPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCardDrawPlacement)  ==  48, "TesseraCardDrawPlacement" TS_SER_MSG);
-_Static_assert(sizeof(TesseraHandPlacement)      ==  48, "TesseraHandPlacement" TS_SER_MSG);
+_Static_assert(sizeof(TesseraHandPlacement)      ==  56, "TesseraHandPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraDicePlacement)      ==  40, "TesseraDicePlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraOverlayPlacement)   ==  68, "TesseraOverlayPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraLabelPlacement)     == 128, "TesseraLabelPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraHighlightPlacement) ==  48, "TesseraHighlightPlacement" TS_SER_MSG);
+_Static_assert(sizeof(TesseraPointLightPlacement) == 40, "TesseraPointLightPlacement" TS_SER_MSG);
+_Static_assert(sizeof(TesseraWorldModelPlacement) == 48, "TesseraWorldModelPlacement" TS_SER_MSG);
 
 /* Blob header: magic u32, version u32, total size u64, epoch u64. */
 #define TS_BLOB_HDR 24u
@@ -44,11 +46,13 @@ _Static_assert(sizeof(TesseraHighlightPlacement) ==  48, "TesseraHighlightPlacem
 #define TS_SER_EFFECT   28u
 #define TS_SER_CARD     65u   /* + path_count * 12 */
 #define TS_SER_DRAW     45u
-#define TS_SER_HAND     48u
+#define TS_SER_HAND     56u
 #define TS_SER_DICE     36u
 #define TS_SER_OVERLAY  68u
 #define TS_SER_LABEL    121u
 #define TS_SER_HL       48u
+#define TS_SER_PLIGHT   40u
+#define TS_SER_WMODEL   44u
 
 /* ---- little-endian writer -------------------------------------------- */
 typedef struct {
@@ -185,6 +189,8 @@ size_t tessera_state_serialize(const TesseraState* state, void* buf, size_t cap)
     size_t nov = state->overlays   ? state->overlay_count   : 0;
     size_t nlb = state->labels     ? state->label_count     : 0;
     size_t nhl = state->highlights ? state->highlight_count : 0;
+    size_t npl = state->point_lights ? state->point_light_count : 0;
+    size_t nwm = state->world_models ? state->world_model_count : 0;
 
     wr_u64(&w, nt);
     for (size_t i = 0; i < nt; ++i) {
@@ -253,6 +259,7 @@ size_t tessera_state_serialize(const TesseraState* state, void* buf, size_t cap)
         wr_f32(&w, p->spread_deg);
         wr_f32(&w, p->radius);
         wr_f32(&w, p->card_spacing);
+        wr_u64(&w, p->selected_card);
     }
 
     wr_u64(&w, ndi);
@@ -309,6 +316,26 @@ size_t tessera_state_serialize(const TesseraState* state, void* buf, size_t cap)
         wr_f32(&w, p->pulse_min); wr_f32(&w, p->pulse_max);
     }
 
+    wr_u64(&w, npl);
+    for (size_t i = 0; i < npl; ++i) {
+        const TesseraPointLightPlacement* p = &state->point_lights[i];
+        wr_u64(&w, p->id);
+        wr_f32s(&w, p->position, 3);
+        wr_f32s(&w, p->color, 3);
+        wr_f32(&w, p->intensity);
+        wr_f32(&w, p->radius);
+    }
+
+    wr_u64(&w, nwm);
+    for (size_t i = 0; i < nwm; ++i) {
+        const TesseraWorldModelPlacement* p = &state->world_models[i];
+        wr_u64(&w, p->id);
+        wr_u32(&w, p->def);
+        wr_f32s(&w, p->position, 3);
+        wr_f32s(&w, p->orientation, 4);
+        wr_f32(&w, p->scale);
+    }
+
     /* patch the total size into the header */
     size_t total = w.off;
     if (w.buf && w.cap >= TS_BLOB_HDR) {
@@ -326,7 +353,7 @@ static size_t ts_ser_align_up(size_t n, size_t align) {
 /* Pass 1: validate the whole blob and tally array + path element counts.
  * Returns false on any structural problem. */
 typedef struct {
-    size_t nt, ne, nf, nc, ncd, nh, ndi, nov, nlb, nhl;
+    size_t nt, ne, nf, nc, ncd, nh, ndi, nov, nlb, nhl, npl, nwm;
     size_t ep_total;   /* summed entity path coords */
     size_t cp_total;   /* summed card path steps    */
 } TsSerCounts;
@@ -370,6 +397,10 @@ static bool ts_ser_scan(TsRd* r, TsSerCounts* c) {
     rd_skip(r, c->nlb * TS_SER_LABEL);
     c->nhl = rd_count(r, TS_SER_HL);
     rd_skip(r, c->nhl * TS_SER_HL);
+    c->npl = rd_count(r, TS_SER_PLIGHT);
+    rd_skip(r, c->npl * TS_SER_PLIGHT);
+    c->nwm = rd_count(r, TS_SER_WMODEL);
+    rd_skip(r, c->nwm * TS_SER_WMODEL);
 
     /* every byte must be accounted for */
     return r->ok && r->off == r->len;
@@ -409,7 +440,11 @@ TesseraState* tessera_state_deserialize(const void* blob, size_t len) {
                                     _Alignof(TesseraLabelPlacement));
     size_t off_hl = ts_ser_align_up(off_lb + c.nlb * sizeof(TesseraLabelPlacement),
                                     _Alignof(TesseraHighlightPlacement));
-    size_t off_ep = ts_ser_align_up(off_hl + c.nhl * sizeof(TesseraHighlightPlacement),
+    size_t off_pl = ts_ser_align_up(off_hl + c.nhl * sizeof(TesseraHighlightPlacement),
+                                    _Alignof(TesseraPointLightPlacement));
+    size_t off_wm = ts_ser_align_up(off_pl + c.npl * sizeof(TesseraPointLightPlacement),
+                                    _Alignof(TesseraWorldModelPlacement));
+    size_t off_ep = ts_ser_align_up(off_wm + c.nwm * sizeof(TesseraWorldModelPlacement),
                                     _Alignof(TesseraCoord));
     size_t off_cp = ts_ser_align_up(off_ep + c.ep_total * sizeof(TesseraCoord),
                                     _Alignof(float));
@@ -526,6 +561,7 @@ TesseraState* tessera_state_deserialize(const void* blob, size_t len) {
             a[i].spread_deg = rd_f32(&r);
             a[i].radius = rd_f32(&r);
             a[i].card_spacing = rd_f32(&r);
+            a[i].selected_card = rd_u64(&r);
         }
         st->hands = a; st->hand_count = c.nh;
     }
@@ -592,6 +628,32 @@ TesseraState* tessera_state_deserialize(const void* blob, size_t len) {
             a[i].pulse_min = rd_f32(&r); a[i].pulse_max = rd_f32(&r);
         }
         st->highlights = a; st->highlight_count = c.nhl;
+    }
+
+    rd_u64(&r);
+    if (c.npl) {
+        TesseraPointLightPlacement* a = (TesseraPointLightPlacement*)(base + off_pl);
+        for (size_t i = 0; i < c.npl; ++i) {
+            a[i].id = rd_u64(&r);
+            rd_f32s(&r, a[i].position, 3);
+            rd_f32s(&r, a[i].color, 3);
+            a[i].intensity = rd_f32(&r);
+            a[i].radius = rd_f32(&r);
+        }
+        st->point_lights = a; st->point_light_count = c.npl;
+    }
+
+    rd_u64(&r);
+    if (c.nwm) {
+        TesseraWorldModelPlacement* a = (TesseraWorldModelPlacement*)(base + off_wm);
+        for (size_t i = 0; i < c.nwm; ++i) {
+            a[i].id = rd_u64(&r);
+            a[i].def = rd_u32(&r);
+            rd_f32s(&r, a[i].position, 3);
+            rd_f32s(&r, a[i].orientation, 4);
+            a[i].scale = rd_f32(&r);
+        }
+        st->world_models = a; st->world_model_count = c.nwm;
     }
 
     if (!r.ok || r.off != r.len) {   /* cannot happen after a good scan */

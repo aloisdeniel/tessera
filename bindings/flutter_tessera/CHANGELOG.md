@@ -6,6 +6,18 @@
   Flutter asset via `rootBundle`) and `playSound` (any-thread, fire-and-forget,
   clips mix) expose the engine's new SDL-audio API, typically triggered off the
   `events` stream so audio lands on the engine's beats.
+- **Point lights.** `TesseraScene.pointLights` (`TesseraPointLight`: position,
+  color, intensity, radius) adds positional sphere lights on top of the global
+  directional + ambient light — braziers, lanterns, spell glows. Diffed by id:
+  they fade in/out and tween on change; up to 8 shade per frame.
+- **World decoration models.** `TesseraScene.world` (`TesseraWorldModel`)
+  places registered entity models in continuous world coordinates, origin just
+  below the tiles — scenery around and beneath the board. Lit and shadowed,
+  never pickable, excluded from camera fitting.
+- **Hand card selection.** `TesseraHand.selectedCard` (0 = none) parts the fan
+  around the named card and lifts it clear, fully visible; combine with
+  `TesseraCameraFocusHand(handId, cardId: …)` for a pick-a-card presentation.
+  Duel uses it for its two-tap confirm-to-play flow.
 - **New example game: Duel** — an MTG-inspired creature battler showcasing
   bundled Flutter assets referenced from SDL: card faces composited from PNG
   assets (front template + illustrations under `example/assets/duel/`,

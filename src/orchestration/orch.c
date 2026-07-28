@@ -51,6 +51,18 @@ static TesseraCoord orch_event_coord(const vec3 p) {
  * fanned out instead of slicing through them. */
 #define TS_HAND_APPROACH_RISE  1.2f  /* world-up lift of the staging point      */
 #define TS_HAND_APPROACH_FRONT 0.7f  /* forward offset (hand-local +Z) of same  */
+/* Selected-card presentation (TesseraHandPlacement.selected_card): the fan
+ * parts around the chosen card, which lifts clear of the arc, un-rolled and in
+ * front of its neighbours so it is fully visible. */
+#define TS_HAND_SEL_GAP   0.6f    /* extra lateral shift, fraction of spacing  */
+#define TS_HAND_SEL_RAISE 0.55f   /* hand-local +Y lift of the selected card   */
+#define TS_HAND_SEL_FRONT 0.25f   /* hand-local +Z pull-out of same            */
+/* Point-light falloff range when the placement leaves radius <= 0. */
+#define TS_PLIGHT_DEFAULT_RADIUS 6.0f
+/* World-model origin plane: the tiles' underside (tile tops are y=0 and the
+ * shared tile prism extends down 0.25 * TS_TILE_SIZE — see ts_build_tile_mesh),
+ * so decoration attaches beneath the board and rises around it. */
+#define TS_WORLD_MODEL_BASE_Y (-0.25f * TS_TILE_SIZE)
 
 /* ------------------------------------------------------------ lifecycle */
 struct TsOrch* ts_orch_create(void) {
@@ -66,6 +78,8 @@ void ts_orch_destroy(struct TsOrch* o) {
     free(o->overlays);
     free(o->labels);
     free(o->highlights);
+    free(o->point_lights);
+    free(o->world_models);
     free(o);
 }
 
@@ -476,9 +490,13 @@ static bool card_before(const TesseraCardPlacement* a, const TesseraCardPlacemen
 /* World transform of a card fanned in a hand: rank r of count N. Cards face the
  * hand's local +Z, spread along local +X and dip at the ends; each is rolled
  * about the front axis so the fan splays. The model front is +Y, so a base
- * rotation stands it up to face +Z. */
+ * rotation stands it up to face +Z.
+ *
+ * `sel_r` is the rank of the hand's selected card (-1 = none): the other cards
+ * shift a gap away from it on their side, and the selected card itself loses
+ * its roll/dip, lifts and comes to the very front — fully visible. */
 static void hand_fan_target(const TesseraHandPlacement* h, uint32_t r, uint32_t n,
-                            vec3 out_pos, versor out_rot) {
+                            int sel_r, vec3 out_pos, versor out_rot) {
     float spread  = h->spread_deg > 0.0f ? glm_rad(h->spread_deg) : TS_HAND_SPREAD;
     float spacing = h->card_spacing > 0.0f ? h->card_spacing : TS_HAND_SPACING;
     float radius  = h->radius > 0.0f ? h->radius : TS_HAND_RADIUS;
@@ -488,6 +506,16 @@ static void hand_fan_target(const TesseraHandPlacement* h, uint32_t r, uint32_t 
     float xoff = ((float)r - (float)(n - 1) * 0.5f) * spacing;
     float yoff = -(1.0f - cosf(theta)) * radius;
     float zoff = (float)r * 0.01f;                 /* stagger toward the viewer */
+    if (sel_r >= 0) {
+        if ((int)r == sel_r) {
+            theta = 0.0f;                          /* straight and readable    */
+            yoff  = TS_HAND_SEL_RAISE;             /* lifted clear of the arc  */
+            zoff  = (float)n * 0.01f + TS_HAND_SEL_FRONT;  /* in front of all  */
+        } else {
+            /* part the fan: slide away from the selected card's side */
+            xoff += ((int)r < sel_r ? -1.0f : 1.0f) * spacing * TS_HAND_SEL_GAP;
+        }
+    }
     vec3 local = { xoff, yoff, zoff };
 
     versor hrot; placement_quat(h->orientation, hrot);
@@ -523,16 +551,32 @@ static void card_target(const TsSnapshot* next, size_t i, vec3 out_pos, versor o
     const TesseraCardPlacement* cp = &next->cards[i];
     const TesseraHandPlacement* h = find_hand(next, cp->hand);
     if (cp->hand != 0 && h) {
-        /* rank within the hand + total count */
+        /* rank within the hand + total count (+ the selected card's rank) */
         uint32_t n = 0, r = 0;
+        int sel_r = -1;
+        const TesseraCardPlacement* sel = NULL;
+        if (h->selected_card != 0) {
+            for (size_t j = 0; j < next->card_count; ++j) {
+                const TesseraCardPlacement* o = &next->cards[j];
+                if (o->id == h->selected_card && o->hand == cp->hand) { sel = o; break; }
+            }
+        }
         for (size_t j = 0; j < next->card_count; ++j) {
             const TesseraCardPlacement* o = &next->cards[j];
             if (o->id == 0 || o->hand != cp->hand) continue;  /* id==0 is skipped by card_diff */
             n++;
             if (j != i && card_before(o, cp)) r++;
         }
+        if (sel) {
+            sel_r = 0;
+            for (size_t j = 0; j < next->card_count; ++j) {
+                const TesseraCardPlacement* o = &next->cards[j];
+                if (o->id == 0 || o->hand != cp->hand || o == sel) continue;
+                if (card_before(o, sel)) sel_r++;
+            }
+        }
         if (n == 0) n = 1;
-        hand_fan_target(h, r, n, out_pos, out_rot);
+        hand_fan_target(h, r, n, sel_r, out_pos, out_rot);
         return;
     }
     out_pos[0] = cp->position[0];
@@ -1063,6 +1107,229 @@ static void label_diff(struct TsOrch* o, const TsSnapshot* next,
     }
 }
 
+/* ============================================================ point lights */
+static TsPointLightInst* orch_add_plight(struct TsOrch* o) {
+    if (o->point_light_count == o->point_light_cap) {
+        size_t nc = o->point_light_cap ? o->point_light_cap * 2 : 8;
+        o->point_lights =
+            (TsPointLightInst*)realloc(o->point_lights, nc * sizeof(TsPointLightInst));
+        o->point_light_cap = nc;
+    }
+    TsPointLightInst* v = &o->point_lights[o->point_light_count++];
+    memset(v, 0, sizeof *v);
+    return v;
+}
+
+static TsPointLightInst* orch_find_plight(struct TsOrch* o, TesseraPointLightId id) {
+    for (size_t i = 0; i < o->point_light_count; ++i)
+        if (o->point_lights[i].id == id) return &o->point_lights[i];
+    return NULL;
+}
+
+static void plight_targets(TsPointLightInst* v, const TesseraPointLightPlacement* p) {
+    glm_vec3_copy((float*)p->position, v->to_pos);
+    memcpy(v->to_color, p->color, 3 * sizeof(float));
+    v->to_intensity = p->intensity;
+    v->to_radius = p->radius > 0.0f ? p->radius : TS_PLIGHT_DEFAULT_RADIUS;
+}
+
+static void plight_snap(TsPointLightInst* v, const TesseraPointLightPlacement* p) {
+    v->id = p->id;
+    plight_targets(v, p);
+    glm_vec3_copy(v->to_pos, v->from_pos);
+    glm_vec3_copy(v->to_pos, v->pos);
+    memcpy(v->from_color, v->to_color, 3 * sizeof(float));
+    memcpy(v->color, v->to_color, 3 * sizeof(float));
+    v->from_intensity = v->intensity = v->to_intensity;
+    v->from_radius = v->radius = v->to_radius;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+static void plight_spawn(TsPointLightInst* v, const TesseraPointLightPlacement* p,
+                         float fade_s) {
+    plight_snap(v, p);
+    v->from_intensity = 0.0f;   /* fade the light up from dark */
+    v->intensity = 0.0f;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+/* Retarget from the current interpolated values; an unchanged, settled
+ * re-emit snaps (zero duration) so it never holds the engine busy. */
+static void plight_retarget(TsPointLightInst* v, const TesseraPointLightPlacement* p,
+                            float move_s) {
+    float to_r = p->radius > 0.0f ? p->radius : TS_PLIGHT_DEFAULT_RADIUS;
+    bool settled = !v->removing && ts_tween_done(&v->tween) &&
+        glm_vec3_distance((float*)p->position, v->pos) < 1e-4f &&
+        fabsf(v->intensity - p->intensity) < 1e-4f &&
+        fabsf(v->radius - to_r) < 1e-4f &&
+        fabsf(v->color[0] - p->color[0]) < 1e-4f &&
+        fabsf(v->color[1] - p->color[1]) < 1e-4f &&
+        fabsf(v->color[2] - p->color[2]) < 1e-4f;
+    glm_vec3_copy(v->pos, v->from_pos);
+    memcpy(v->from_color, v->color, 3 * sizeof(float));
+    v->from_intensity = v->intensity;
+    v->from_radius = v->radius;
+    plight_targets(v, p);
+    v->removing = false;
+    ts_tween_start(&v->tween, settled ? 0.0f : move_s, 0.0f, TS_EASE_IN_OUT_CUBIC);
+}
+
+static void plight_remove(TsPointLightInst* v, float fade_s) {
+    glm_vec3_copy(v->pos, v->from_pos);
+    glm_vec3_copy(v->pos, v->to_pos);
+    memcpy(v->from_color, v->color, 3 * sizeof(float));
+    memcpy(v->to_color, v->color, 3 * sizeof(float));
+    v->from_intensity = v->intensity;
+    v->to_intensity = 0.0f;      /* dim to dark, then cull */
+    v->from_radius = v->to_radius = v->radius;
+    v->removing = true;
+    ts_tween_start(&v->tween, fade_s, 0.0f, TS_EASE_IN_CUBIC);
+}
+
+static void plight_diff(struct TsOrch* o, const TsSnapshot* next,
+                        const TesseraTiming* timing, bool seed) {
+    size_t n = next ? next->point_light_count : 0;
+
+    if (seed) o->point_light_count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        const TesseraPointLightPlacement* p = &next->point_lights[i];
+        if (p->id == 0) continue;
+        if (seed) { plight_snap(orch_add_plight(o), p); continue; }
+        TsPointLightInst* v = orch_find_plight(o, p->id);
+        if (v) plight_retarget(v, p, timing->move_s);
+        else   plight_spawn(orch_add_plight(o), p, timing->add_s);
+    }
+
+    if (seed) return;
+
+    /* live lights absent from next: dim out */
+    for (size_t i = 0; i < o->point_light_count; ++i) {
+        TsPointLightInst* v = &o->point_lights[i];
+        if (v->removing) continue;
+        bool present = false;
+        for (size_t j = 0; j < n; ++j)
+            if (next->point_lights[j].id == v->id) { present = true; break; }
+        if (!present) plight_remove(v, timing->remove_s);
+    }
+}
+
+/* ============================================================ world models */
+static TsWorldModelInst* orch_add_wmodel(struct TsOrch* o) {
+    if (o->world_model_count == o->world_model_cap) {
+        size_t nc = o->world_model_cap ? o->world_model_cap * 2 : 8;
+        o->world_models =
+            (TsWorldModelInst*)realloc(o->world_models, nc * sizeof(TsWorldModelInst));
+        o->world_model_cap = nc;
+    }
+    TsWorldModelInst* v = &o->world_models[o->world_model_count++];
+    memset(v, 0, sizeof *v);
+    return v;
+}
+
+static TsWorldModelInst* orch_find_wmodel(struct TsOrch* o, TesseraWorldModelId id) {
+    for (size_t i = 0; i < o->world_model_count; ++i)
+        if (o->world_models[i].id == id) return &o->world_models[i];
+    return NULL;
+}
+
+/* Placement -> target transform: position is world units with y biased so the
+ * origin plane sits just below the tiles (see TS_WORLD_MODEL_BASE_Y). */
+static void wmodel_targets(TsWorldModelInst* v, const TesseraWorldModelPlacement* p) {
+    v->to_pos[0] = p->position[0];
+    v->to_pos[1] = p->position[1] + TS_WORLD_MODEL_BASE_Y;
+    v->to_pos[2] = p->position[2];
+    placement_quat(p->orientation, v->to_rot);
+    v->to_scale = p->scale > 0.0f ? p->scale : 1.0f;
+    v->to_alpha = 1.0f;
+}
+
+static void wmodel_snap(TsWorldModelInst* v, const TesseraWorldModelPlacement* p) {
+    v->id = p->id;
+    v->def = p->def;
+    wmodel_targets(v, p);
+    glm_vec3_copy(v->to_pos, v->from_pos);
+    glm_vec3_copy(v->to_pos, v->pos);
+    glm_quat_copy(v->to_rot, v->from_rot);
+    glm_quat_copy(v->to_rot, v->rot);
+    v->from_scale = v->scale = v->to_scale;
+    v->from_alpha = v->alpha = v->to_alpha;
+    v->removing = false;
+    v->alive = true;
+    ts_tween_start(&v->tween, 0.0f, 0.0f, TS_EASE_LINEAR);
+}
+
+static void wmodel_spawn(TsWorldModelInst* v, const TesseraWorldModelPlacement* p,
+                         float add_s) {
+    wmodel_snap(v, p);
+    v->from_scale = 0.0f;   /* grow in, like an entity spawn */
+    v->from_alpha = 0.0f;
+    v->scale = 0.0f;
+    v->alpha = 0.0f;
+    ts_tween_start(&v->tween, add_s, 0.0f, TS_EASE_OUT_CUBIC);
+}
+
+static void wmodel_retarget(TsWorldModelInst* v, const TesseraWorldModelPlacement* p,
+                            float move_s) {
+    vec3 tp = { p->position[0], p->position[1] + TS_WORLD_MODEL_BASE_Y, p->position[2] };
+    versor tq; placement_quat(p->orientation, tq);
+    float ts = p->scale > 0.0f ? p->scale : 1.0f;
+    bool settled = !v->removing && ts_tween_done(&v->tween) &&
+        glm_vec3_distance(tp, v->pos) < 1e-4f &&
+        fabsf(glm_quat_dot(tq, v->rot)) > 1.0f - 1e-5f &&
+        fabsf(v->scale - ts) < 1e-4f && fabsf(v->alpha - 1.0f) < 1e-3f;
+    glm_vec3_copy(v->pos, v->from_pos);
+    glm_quat_copy(v->rot, v->from_rot);
+    v->from_scale = v->scale;
+    v->from_alpha = v->alpha;
+    v->def = p->def;
+    wmodel_targets(v, p);
+    v->removing = false;
+    ts_tween_start(&v->tween, settled ? 0.0f : move_s, 0.0f, TS_EASE_IN_OUT_CUBIC);
+}
+
+static void wmodel_remove(TsWorldModelInst* v, float remove_s) {
+    glm_vec3_copy(v->pos, v->from_pos);
+    glm_vec3_copy(v->pos, v->to_pos);
+    glm_quat_copy(v->rot, v->from_rot);
+    glm_quat_copy(v->rot, v->to_rot);
+    v->from_scale = v->scale; v->to_scale = 0.0f;
+    v->from_alpha = v->alpha; v->to_alpha = 0.0f;
+    v->removing = true;
+    ts_tween_start(&v->tween, remove_s, 0.0f, TS_EASE_IN_CUBIC);
+}
+
+static void wmodel_diff(struct TsOrch* o, const TsSnapshot* next,
+                        const TesseraTiming* timing, bool seed) {
+    size_t n = next ? next->world_model_count : 0;
+
+    if (seed) o->world_model_count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        const TesseraWorldModelPlacement* p = &next->world_models[i];
+        if (p->id == 0 || p->def == 0) continue;
+        if (seed) { wmodel_snap(orch_add_wmodel(o), p); continue; }
+        TsWorldModelInst* v = orch_find_wmodel(o, p->id);
+        if (v) wmodel_retarget(v, p, timing->move_s);
+        else   wmodel_spawn(orch_add_wmodel(o), p, timing->add_s);
+    }
+
+    if (seed) return;
+
+    /* live models absent from next: shrink out */
+    for (size_t i = 0; i < o->world_model_count; ++i) {
+        TsWorldModelInst* v = &o->world_models[i];
+        if (v->removing) continue;
+        bool present = false;
+        for (size_t j = 0; j < n; ++j)
+            if (next->world_models[j].id == v->id &&
+                next->world_models[j].def != 0) { present = true; break; }
+        if (!present) wmodel_remove(v, timing->remove_s);
+    }
+}
+
 /* ============================================================ highlights */
 /* Effective highlight color (all-zero => white, matching overlays/labels). */
 static void highlight_color(const TesseraHighlightPlacement* hp, float out[4]) {
@@ -1210,6 +1477,8 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
         overlay_diff(o, next, timing, true);
         label_diff(o, next, timing, true);
         highlight_diff(o, next, timing, true);
+        plight_diff(o, next, timing, true);
+        wmodel_diff(o, next, timing, true);
         o->seeded = true;
         free(targets);
         return;
@@ -1298,6 +1567,8 @@ void ts_orch_on_promote(struct TsOrch* o, TesseraEngine* e, const TsSnapshot* pr
     overlay_diff(o, next, timing, false);
     label_diff(o, next, timing, false);
     highlight_diff(o, next, timing, false);
+    plight_diff(o, next, timing, false);
+    wmodel_diff(o, next, timing, false);
 
     o->seeded = true;
     free(targets);
@@ -1508,6 +1779,43 @@ void ts_orch_advance(struct TsOrch* o, TesseraEngine* e, float dt) {
         }
         ++i;
     }
+
+    /* point lights */
+    for (size_t i = 0; i < o->point_light_count;) {
+        TsPointLightInst* v = &o->point_lights[i];
+        ts_tween_advance(&v->tween, dt);
+        float p = ts_tween_value01(&v->tween);
+        glm_vec3_lerp(v->from_pos, v->to_pos, p, v->pos);
+        for (int k = 0; k < 3; ++k)
+            v->color[k] = ts_lerpf(v->from_color[k], v->to_color[k], p);
+        v->intensity = ts_lerpf(v->from_intensity, v->to_intensity, p);
+        v->radius = ts_lerpf(v->from_radius, v->to_radius, p);
+
+        if (v->removing && ts_tween_done(&v->tween)) {
+            o->point_lights[i] = o->point_lights[o->point_light_count - 1];
+            o->point_light_count--;
+            continue;
+        }
+        ++i;
+    }
+
+    /* world models */
+    for (size_t i = 0; i < o->world_model_count;) {
+        TsWorldModelInst* v = &o->world_models[i];
+        ts_tween_advance(&v->tween, dt);
+        float p = ts_tween_value01(&v->tween);
+        glm_vec3_lerp(v->from_pos, v->to_pos, p, v->pos);
+        glm_quat_slerp(v->from_rot, v->to_rot, p, v->rot);
+        v->scale = ts_lerpf(v->from_scale, v->to_scale, p);
+        v->alpha = ts_lerpf(v->from_alpha, v->to_alpha, p);
+
+        if (v->removing && ts_tween_done(&v->tween)) {
+            o->world_models[i] = o->world_models[o->world_model_count - 1];
+            o->world_model_count--;
+            continue;
+        }
+        ++i;
+    }
 }
 
 /* ----------------------------------------------------------- queries */
@@ -1541,12 +1849,35 @@ bool ts_orch_is_idle(const struct TsOrch* o) {
         const TsHighlightInst* v = &o->highlights[i];
         if (v->removing || !ts_tween_done(&v->tween)) return false;
     }
+    for (size_t i = 0; i < o->point_light_count; ++i) {
+        const TsPointLightInst* v = &o->point_lights[i];
+        if (v->removing || !ts_tween_done(&v->tween)) return false;
+    }
+    for (size_t i = 0; i < o->world_model_count; ++i) {
+        const TsWorldModelInst* v = &o->world_models[i];
+        if (v->removing || !ts_tween_done(&v->tween)) return false;
+    }
     return true;
 }
 
 bool ts_orch_has_content(const struct TsOrch* o) {
     return o->entity_count > 0 || o->tile_count > 0 || o->card_count > 0 ||
-           o->overlay_count > 0 || o->label_count > 0 || o->highlight_count > 0;
+           o->overlay_count > 0 || o->label_count > 0 || o->highlight_count > 0 ||
+           o->point_light_count > 0 || o->world_model_count > 0;
+}
+
+size_t ts_orch_get_point_lights(const struct TsOrch* o,
+                                TsPointLightItem* out, size_t cap) {
+    size_t w = 0;
+    for (size_t i = 0; i < o->point_light_count && w < cap; ++i) {
+        const TsPointLightInst* v = &o->point_lights[i];
+        TsPointLightItem* it = &out[w++];
+        glm_vec3_copy((float*)v->pos, it->pos);
+        it->radius = v->radius;
+        memcpy(it->color, v->color, 3 * sizeof(float));
+        it->intensity = v->intensity;
+    }
+    return w;
 }
 
 bool ts_orch_entity_pos(const struct TsOrch* o, TesseraEntityId id, vec3 out) {
@@ -1658,12 +1989,58 @@ static bool tint_is_zero(const float t[4]) {
 
 size_t ts_orch_build_drawlist(struct TsOrch* o, TesseraEngine* e,
                               TsArena* arena, struct TsDrawItem** out) {
-    size_t cap = o->tile_count + o->entity_count;
+    size_t cap = o->tile_count + o->entity_count + o->world_model_count;
     TsDrawItem* items = cap ? TS_ARENA_ARR(arena, TsDrawItem, cap) : NULL;
     *out = items;
     if (!items) return 0;
 
     size_t w = 0;
+
+    /* world models (decoration): drawn first so they sit visually beneath the
+     * board wherever depth ties. Static scenery — skinned models render in
+     * their rest pose. Not pickable, not highlightable. */
+    for (size_t i = 0; i < o->world_model_count; ++i) {
+        TsWorldModelInst* v = &o->world_models[i];
+        TsDef* d = ts_registry_get(&e->registry, v->def, TS_DEF_ENTITY);
+        if (!d) continue;
+        const TesseraEntityDef* spec = &d->as.entity.spec;
+
+        TsDrawItem* it = &items[w];
+        memset(it, 0, sizeof *it);
+        if (d->as.entity.has_mesh && d->as.entity.mesh.vertex_count > 0)
+            it->mesh = &d->as.entity.mesh;
+        else
+            it->mesh = &e->registry.cube_mesh;
+        it->texture = ts_registry_atlas_texture(&e->registry, spec->atlas);
+
+        if (d->as.entity.skinned) {
+            it->skinned = true;
+            TsSkinData* sd = (TsSkinData*)d->as.entity.skin_data;
+            uint32_t jc = sd ? sd->skeleton.joint_count : 0;
+            mat4* palette = jc > 0 ? TS_ARENA_ARR(arena, mat4, jc) : NULL;
+            if (palette) {
+                TsJointPose pose[TS_MAX_JOINTS];
+                ts_clip_sample(&sd->skeleton, NULL, 0.0f, true, pose); /* rest */
+                ts_skeleton_skinning(&sd->skeleton, pose, palette);
+                it->joints = palette;
+                it->joint_count = jc;
+            }
+        }
+
+        float ds = spec->scale > 0.0f ? spec->scale : 1.0f;
+        float s = v->scale * ds;
+        vec3 svec = { s, s, s };
+        mat4 m;
+        ts_trs(v->pos, v->rot, svec, m);
+        glm_mat4_copy(m, it->model);
+
+        const float* bc = d->as.entity.base_color;
+        it->tint[0] = bc[0]; it->tint[1] = bc[1]; it->tint[2] = bc[2];
+        it->tint[3] = v->alpha * bc[3];
+        it->uv_rect[0] = 0.0f; it->uv_rect[1] = 0.0f;
+        it->uv_rect[2] = 1.0f; it->uv_rect[3] = 1.0f;
+        ++w;
+    }
 
     /* tiles */
     for (size_t i = 0; i < o->tile_count; ++i) {

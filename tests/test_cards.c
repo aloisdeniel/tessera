@@ -149,6 +149,33 @@ int main(void) {
         CHECK(fabsf(sx) > 0.05f);
     }
 
+    /* ---- hand selection: the fan parts and the chosen card lifts ---- */
+    if (h0 && h1) {
+        float h0_before[3] = { h0->pos[0], h0->pos[1], h0->pos[2] };
+        float h1_before[3] = { h1->pos[0], h1->pos[1], h1->pos[2] };
+
+        hand.selected_card = 10;              /* select the first fanned card */
+        st.epoch++;
+        tessera_set_state(e, &st);
+        settle(e, buf);
+        h0 = find_inst(e, 10, false);
+        h1 = find_inst(e, 11, false);
+        CHECK(h0 && h0->pos[1] > h0_before[1] + 0.2f);   /* lifted clear      */
+        CHECK(h0 && h0->pos[2] > h0_before[2] + 0.1f);   /* pulled to the front */
+        CHECK(h1 && h1->pos[0] > h1_before[0] + 0.2f);   /* neighbour parted  */
+
+        /* selecting an id not in the hand is ignored: the fan returns home */
+        hand.selected_card = 9999;
+        st.epoch++;
+        tessera_set_state(e, &st);
+        settle(e, buf);
+        h0 = find_inst(e, 10, false);
+        h1 = find_inst(e, 11, false);
+        CHECK(h0 && fabsf(h0->pos[1] - h0_before[1]) < 0.01f);
+        CHECK(h1 && fabsf(h1->pos[0] - h1_before[0]) < 0.01f);
+        hand.selected_card = 0;
+    }
+
     /* pile thickness reflects 5 cards (thicker than a single card) */
     float thick5 = dpile ? dpile->thick : 0.0f;
     CHECK(dpile && thick5 > 0.03f);
