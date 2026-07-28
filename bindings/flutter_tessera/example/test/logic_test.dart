@@ -8,6 +8,7 @@ import 'package:flutter_tessera_example/blackjack.dart';
 import 'package:flutter_tessera_example/chess.dart';
 import 'package:flutter_tessera_example/chess_gen.dart';
 import 'package:flutter_tessera_example/chess_rules.dart';
+import 'package:flutter_tessera_example/duel.dart';
 import 'package:flutter_tessera_example/dungeon.dart';
 import 'package:flutter_tessera_example/dungeon_art.dart';
 import 'package:flutter_tessera_example/yahtzee.dart';
@@ -149,6 +150,154 @@ void main() {
       final r = dgUpdate(DgRoll(hurt), const DgDrinkPotion()) as DgRoll;
       expect(r.c.hp, 2);
       expect(r.c.handCount(itemPotion), 0);
+    });
+  });
+
+  group('duel', () {
+    /// Deal through to the first player turn.
+    DuelYourTurn dealt({int seed = 0xD0E1}) {
+      DuelState s = DuelIdle(seed: seed);
+      s = duelUpdate(s, const DlStart());
+      var guard = 0;
+      while (s is DuelDealing && guard++ < 20) {
+        s = duelUpdate(s, const DlDealStep());
+      }
+      return s as DuelYourTurn;
+    }
+
+    test('dealing alternates to 4 cards each, then round 1 with 1 mana', () {
+      final s = dealt();
+      expect(s.you.hand.length, duelHandTarget);
+      expect(s.foe.hand.length, duelHandTarget);
+      expect(s.turn, 1);
+      expect(s.you.mana, 1);
+      expect(s.you.deck.length, 2 * duelSpecs.length - duelHandTarget);
+      // every dealt instance id is unique
+      final ids = [...s.you.hand, ...s.foe.hand].map((h) => h.id).toSet();
+      expect(ids.length, duelHandTarget * 2);
+    });
+
+    test('playing a card spends mana, fills a slot, and is not ready', () {
+      final s = dealt();
+      final affordable =
+          s.you.hand.firstWhere((h) => duelSpecs[h.type].cost <= s.you.mana);
+      final after =
+          duelUpdate(s, DlPlayCard(affordable.id)) as DuelYourTurn;
+      expect(after.you.hand.length, s.you.hand.length - 1);
+      expect(after.you.creatures.single.id, affordable.id);
+      expect(after.you.creatures.single.ready, isFalse);
+      expect(after.you.mana, s.you.mana - duelSpecs[affordable.type].cost);
+      // an unaffordable card is refused outright
+      final rich = s.you.hand
+          .where((h) => duelSpecs[h.type].cost > s.you.mana)
+          .firstOrNull;
+      if (rich != null) {
+        expect(identical(duelUpdate(s, DlPlayCard(rich.id)), s), isTrue);
+      }
+    });
+
+    test('a fresh creature cannot attack; it readies next round', () {
+      var s = dealt();
+      final card =
+          s.you.hand.firstWhere((h) => duelSpecs[h.type].cost <= s.you.mana);
+      s = duelUpdate(s, DlPlayCard(card.id)) as DuelYourTurn;
+      // summoning sickness: the attack is refused
+      expect(identical(duelUpdate(s, DlAttack(card.id, 0)), s), isTrue);
+      // pass the round: end turn, then run the foe until it hands play back
+      DuelState t = duelUpdate(s, const DlEndTurn());
+      var guard = 0;
+      while (t is DuelFoeTurn && guard++ < 30) {
+        t = duelUpdate(t, const DlFoeStep());
+      }
+      if (t is DuelYourTurn) {
+        expect(t.turn, 2);
+        expect(t.you.mana, 2); // mana ramps with the round
+        expect(
+            t.you.creatures.singleWhere((c) => c.id == card.id).ready, isTrue);
+      } else {
+        expect(t, isA<DuelOver>()); // (a rush this fast never happens, but…)
+      }
+    });
+
+    test('a face strike costs the hero exactly the attack', () {
+      final base = dealt();
+      final you = base.you.copy(slots: [
+        const DuelCreature(500, 7, 5, ready: true), // Elder Dragon 7/5
+        null, null, null,
+      ]);
+      final s = DuelYourTurn(
+          you: you, foe: base.foe, turn: base.turn, nextId: 600,
+          seed: base.seed);
+      final after = duelUpdate(s, const DlAttack(500, 0)) as DuelYourTurn;
+      expect(after.foe.life, duelStartLife - 7);
+      expect(after.strike!.targetSlot, -1);
+      expect(after.you.creatures.single.ready, isFalse); // spent
+    });
+
+    test('creature combat trades damage and clears the dead', () {
+      final base = dealt();
+      // Storm Archer 3/1 attacks Silver Knight 3/3: both die.
+      final you = base.you.copy(
+          slots: [const DuelCreature(501, 3, 1, ready: true), null, null, null]);
+      final foe = base.foe.copy(
+          slots: [const DuelCreature(502, 4, 3, ready: true), null, null, null]);
+      final s = DuelYourTurn(
+          you: you, foe: foe, turn: base.turn, nextId: 600, seed: base.seed);
+      final after = duelUpdate(s, const DlAttack(501, 502)) as DuelYourTurn;
+      expect(after.you.creatures, isEmpty);
+      expect(after.foe.creatures, isEmpty);
+      expect(after.foe.life, duelStartLife); // face untouched
+      expect(after.strike!.hp, lessThanOrEqualTo(0)); // attacker died striking
+    });
+
+    test('reducing the foe to 0 wins with the killing strike attached', () {
+      final base = dealt();
+      final you = base.you.copy(
+          slots: [const DuelCreature(500, 7, 5, ready: true), null, null, null]);
+      final foe = base.foe.copy(life: 6);
+      final s = DuelYourTurn(
+          you: you, foe: foe, turn: base.turn, nextId: 600, seed: base.seed);
+      final after = duelUpdate(s, const DlAttack(500, 0));
+      expect(after, isA<DuelOver>());
+      expect((after as DuelOver).youWon, isTrue);
+      expect(after.foe.life, lessThanOrEqualTo(0));
+      expect(after.strike, isNotNull);
+    });
+
+    test('the foe develops, attacks and eventually passes the round', () {
+      var s = dealt();
+      DuelState t = duelUpdate(s, const DlEndTurn());
+      expect(t, isA<DuelFoeTurn>());
+      expect(t.foe.hand.length, duelHandTarget + 1); // it drew a card
+      expect(t.foe.mana, 1);
+      var guard = 0;
+      var played = 0;
+      while (t is DuelFoeTurn && guard++ < 30) {
+        final before = t.foe.creatures.length;
+        t = duelUpdate(t, const DlFoeStep());
+        if (t.foe.creatures.length > before) played++;
+      }
+      expect(played, greaterThan(0)); // it can always afford a 1-drop
+      expect(t, isA<DuelYourTurn>());
+      expect((t as DuelYourTurn).turn, 2);
+    });
+
+    test('mana ramps with the round and caps at $duelManaCap', () {
+      DuelState s = dealt();
+      for (var round = 1; round <= duelManaCap + 3; round++) {
+        if (s is! DuelYourTurn) break;
+        expect(s.you.mana, lessThanOrEqualTo(duelManaCap));
+        expect(s.you.mana,
+            math.min(round, duelManaCap) - 0); // refilled at round start
+        s = duelUpdate(s, const DlEndTurn());
+        var guard = 0;
+        // The foe never attacks here (you keep an empty board and it prefers
+        // face only via strikes — those still end); just run it to the pass.
+        while (s is DuelFoeTurn && guard++ < 30) {
+          s = duelUpdate(s, const DlFoeStep());
+        }
+        if (s is DuelOver) break; // face damage can end the mock game
+      }
     });
   });
 

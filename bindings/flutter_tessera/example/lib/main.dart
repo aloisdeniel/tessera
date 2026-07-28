@@ -2,6 +2,8 @@
 // Flutter. The app opens on a menu; each game is a `GameController` (a sealed
 // action + sealed state + pure reducer, see game.dart) driven by `GameScreen`.
 //
+//   • Duel      — an MTG-inspired battler; bundled PNG/WAV Flutter assets
+//                 referenced from SDL (textures + engine-played sounds).
 //   • Chess     — entities on a grid (tap to move, or watch the AI).
 //   • Checkers  — chained jumps as multi-step entity paths; capture particles.
 //   • Snakes    — the Dice APIs with a token-following camera (a two-player race).

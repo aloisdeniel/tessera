@@ -295,3 +295,29 @@ Behaviour, all driven by the state diff:
 `tessera_is_idle` returns `false` while any card is moving, flipping or a pile is
 resizing. See `examples/cards` for a full showcase (flat cards, a flip, a moving
 card, a fanned hand and a growing pile).
+
+## Sounds — WAV effects on SDL audio
+
+```c
+typedef uint32_t TesseraSoundId;   /* 0 = invalid / none */
+
+TesseraSoundId tessera_register_sound(TesseraEngine* e, const TesseraBytes* wav);
+bool           tessera_play_sound(TesseraEngine* e, TesseraSoundId id, float gain);
+```
+
+Short fire-and-forget clips — card flips, dice landings, fanfares — played
+through the system's default output. `wav` is WAV file bytes or a path (like an
+atlas image; anything SDL's WAV loader parses: PCM 8/16/24/32-bit, float,
+ADPCM). Register during setup like the other defs; ids are small and monotonic
+(first is 1).
+
+`tessera_play_sound` (re)starts a clip at `gain` (1 = as authored, clamped at
+0) and may be called from **any thread** — typically a host event handler
+reacting to the engine event stream (`CARD_DEALT` → a shuffle swish,
+`DICE_SETTLED` → a clack), so audio lands exactly on the engine's beats. Each
+clip owns its own device stream: different clips mix freely, and re-triggering
+a clip restarts it (it never overlaps itself).
+
+Headless environments without a playback device stay silent: registration
+still validates and returns ids, and `tessera_play_sound` returns `false`.
+Sounds are engine-scoped and freed by `tessera_destroy`.

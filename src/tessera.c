@@ -4,6 +4,7 @@
 #include "orchestration/orch.h"
 #include "fx/fx.h"
 #include "dice/dice.h"
+#include "audio/audio.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,6 +62,7 @@ TesseraEngine* tessera_create(const TesseraConfig* cfg) {
 void tessera_destroy(TesseraEngine* e) {
     if (!e) return;
     if (e->gpu.device) SDL_WaitForGPUIdle(e->gpu.device);
+    if (e->audio) ts_audio_destroy(e->audio);
     if (e->dice) ts_dice_destroy(e->dice);
     if (e->fx) ts_fx_destroy(e->fx, &e->gpu);
     if (e->orch) ts_orch_destroy(e->orch);
@@ -146,6 +148,21 @@ TesseraDefId tessera_register_font(TesseraEngine* e, const TesseraBytes* ttf,
     TesseraDefId id = ts_registry_add_font(&e->registry, ttf, pixel_height, err, sizeof err);
     if (!id) ts_engine_set_error(e, "%s", err);
     return id;
+}
+
+/* ---- sounds ---- */
+TesseraSoundId tessera_register_sound(TesseraEngine* e, const TesseraBytes* wav) {
+    if (!e || !wav) return 0;
+    if (!e->audio) e->audio = ts_audio_create(&e->log);
+    if (!e->audio) { ts_engine_set_error(e, "register_sound: audio init failed"); return 0; }
+    char err[TS_ERR_CAP]; err[0] = 0;
+    TesseraSoundId id = ts_audio_register(e->audio, wav, err, sizeof err);
+    if (!id) ts_engine_set_error(e, "%s", err);
+    return id;
+}
+bool tessera_play_sound(TesseraEngine* e, TesseraSoundId id, float gain) {
+    if (!e || !e->audio) return false;
+    return ts_audio_play(e->audio, id, gain);
 }
 
 /* ---- dice ---- */

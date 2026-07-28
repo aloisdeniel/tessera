@@ -769,6 +769,10 @@ typedef _RegFontC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraBytes
 typedef _RegFontD = int Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>, double);
 typedef _RegDiceC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
 typedef _RegDiceD = int Function(Pointer<TesseraEngine>, Pointer<TesseraDiceDef>);
+typedef _RegSoundC = Uint32 Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>);
+typedef _RegSoundD = int Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>);
+typedef _PlaySoundC = Bool Function(Pointer<TesseraEngine>, Uint32, Float);
+typedef _PlaySoundD = bool Function(Pointer<TesseraEngine>, int, double);
 typedef _DiceFaceCountC = Uint32 Function(Pointer<TesseraEngine>, Uint32);
 typedef _DiceFaceCountD = int Function(Pointer<TesseraEngine>, int);
 typedef _DiceCountC = Uint32 Function(Pointer<TesseraEngine>);
@@ -932,6 +936,10 @@ class Tessera {
       _lib.lookupFunction<_RegFontC, _RegFontD>('tessera_register_font');
   late final _RegDiceD _registerDiceDef =
       _lib.lookupFunction<_RegDiceC, _RegDiceD>('tessera_register_dice_def');
+  late final _RegSoundD _registerSound =
+      _lib.lookupFunction<_RegSoundC, _RegSoundD>('tessera_register_sound');
+  late final _PlaySoundD _playSound =
+      _lib.lookupFunction<_PlaySoundC, _PlaySoundD>('tessera_play_sound');
   late final _DiceFaceCountD _diceDefFaceCount = _lib
       .lookupFunction<_DiceFaceCountC, _DiceFaceCountD>('tessera_dice_def_face_count');
   late final _DiceCountD _diceCount =
@@ -1094,6 +1102,15 @@ class Tessera {
   /// [TesseraLabelPlacement.font] in [setState].
   int registerFont(Pointer<TesseraBytes> ttf, double pixelHeight) =>
       _registerFont(_engine, ttf, pixelHeight);
+
+  // ---- sounds ----
+  /// Register a sound effect from WAV file bytes or a path (like an atlas).
+  /// Returns a TesseraSoundId (0 = fail). Play it with [playSound].
+  int registerSound(Pointer<TesseraBytes> wav) => _registerSound(_engine, wav);
+
+  /// (Re)start a registered sound at [gain] (1 = as authored). Any-thread.
+  /// False when the id is unknown or no playback device is available.
+  bool playSound(int id, double gain) => _playSound(_engine, id, gain);
 
   // ---- dice (state-driven: place dice via setState / TesseraDicePlacement) ----
   /// Register a dice def (per-face sprites); returns a TesseraDefId (0 = fail).

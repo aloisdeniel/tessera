@@ -226,6 +226,10 @@ TesseraDefId tessera_register_card_def(TesseraEngine*, const TesseraCardDef*);
 
 TesseraDefId tessera_register_font(TesseraEngine*, const TesseraBytes*, float pixel_height);
 
+typedef uint32_t TesseraSoundId;
+TesseraSoundId tessera_register_sound(TesseraEngine*, const TesseraBytes* wav);
+bool           tessera_play_sound(TesseraEngine*, TesseraSoundId, float gain);
+
 TesseraDefId tessera_register_dice_def(TesseraEngine*, const TesseraDiceDef*);
 uint32_t     tessera_dice_def_face_count(TesseraEngine*, TesseraDefId);
 uint32_t     tessera_dice_count(TesseraEngine*);

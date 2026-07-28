@@ -930,8 +930,26 @@ TESSERA_API TesseraDefId tessera_register_font(TesseraEngine* e, const TesseraBy
                                                float pixel_height);
 
 /* =======================================================================
- *  Debug / dev hooks
+ *  Sound effects (SDL audio playback)
+ *
+ *  Short fire-and-forget clips played through the system's default output —
+ *  card flips, dice landings, fanfares — typically triggered by the host off
+ *  the engine event stream. Each clip gets its own device stream, so
+ *  different clips mix freely and re-triggering a clip restarts it. When no
+ *  playback device exists (headless CI) registration still validates and
+ *  returns ids, and playback is a silent no-op returning false.
  * ===================================================================== */
+
+typedef uint32_t TesseraSoundId;  /* 0 = invalid / none */
+
+/* Register a sound from WAV file bytes or a path (`wav`, like an atlas
+ * image; any PCM/float WAV SDL can parse). Call during setup, like the other
+ * register calls. Returns 0 on failure (see tessera_last_error). */
+TESSERA_API TesseraSoundId tessera_register_sound(TesseraEngine* e, const TesseraBytes* wav);
+
+/* (Re)start clip `id` at `gain` (1 = as authored, clamped at 0). Any-thread.
+ * Returns false when the id is unknown or playback is unavailable. */
+TESSERA_API bool tessera_play_sound(TesseraEngine* e, TesseraSoundId id, float gain);
 
 /* =======================================================================
  *  Debug / dev hooks

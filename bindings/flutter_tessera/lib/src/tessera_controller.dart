@@ -305,6 +305,32 @@ class TesseraController {
     return id;
   }
 
+  /// Register a sound effect from WAV file bytes (PCM/float WAV — e.g. a
+  /// Flutter asset loaded with `rootBundle.load`). Returns its sound id
+  /// (0 = failure). Play it with [playSound]; typically triggered off the
+  /// [events] stream so audio lands exactly on the engine's beats.
+  int registerSound(Uint8List wav) {
+    final bytes = calloc<Uint8>(wav.length);
+    bytes.asTypedList(wav.length).setAll(0, wav);
+    final def = calloc<t.TesseraBytes>();
+    def.ref
+      ..data = bytes.cast<Void>()
+      ..size = wav.length;
+    final id = _engine.registerSound(def); // copies/decodes the bytes
+    calloc.free(def);
+    calloc.free(bytes);
+    return id;
+  }
+
+  /// (Re)start a registered sound at [gain] (1 = as authored; different sounds
+  /// mix, re-triggering one restarts it). Any-thread; safe while the render
+  /// loop runs. Returns false when [id] is unknown, playback is unavailable,
+  /// or the controller is disposed.
+  bool playSound(int id, {double gain = 1.0}) {
+    if (_disposed) return false;
+    return _engine.playSound(id, gain);
+  }
+
   /// Set the directional light + ambient.
   void setLight(TesseraLightData light) {
     final l = calloc<t.TesseraLight>();

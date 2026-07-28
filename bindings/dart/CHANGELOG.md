@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add the sound API: `Tessera.registerSound` (WAV file bytes or a path, like an
+  atlas) and `Tessera.playSound` (any-thread, fire-and-forget; clips mix and a
+  re-trigger restarts). Mirrors the new C `tessera_register_sound` /
+  `tessera_play_sound`.
+
 ## 0.4.0
 
 - **Breaking:** dice are now state-driven. Removed the imperative
