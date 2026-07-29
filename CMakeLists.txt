@@ -27,6 +27,9 @@ set_target_properties(tessera_thirdparty PROPERTIES POSITION_INDEPENDENT_CODE ON
 file(GLOB_RECURSE TESSERA_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 list(REMOVE_ITEM TESSERA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/thirdparty_impl.c)
+# src/platform/<name>/ holds per-platform embedding shims; only the matching
+# platform compiles them into the library (web is its own executable target).
+list(FILTER TESSERA_SOURCES EXCLUDE REGEX "src/platform/")
 
 if(TESSERA_BUILD_SHARED)
     add_library(tessera SHARED ${TESSERA_SOURCES})
@@ -64,6 +67,37 @@ set_target_properties(tessera PROPERTIES C_VISIBILITY_PRESET hidden)
 if(TESSERA_ASAN)
     target_compile_options(tessera PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(tessera PUBLIC -fsanitize=address,undefined)
+endif()
+
+# ---- web (Emscripten + WebGPU) ----------------------------------------------
+# Built by tools/web/build_web.sh against the WebGPU-patched SDL staged in
+# build-web/SDL-src (see tools/web/patch_sdl.sh). Produces a modularized
+# tessera_web.js/.wasm pair with the WGSL shaders embedded in MEMFS.
+if(EMSCRIPTEN)
+    if(NOT DEFINED TESSERA_WEB_EXPORTS_FILE OR NOT DEFINED TESSERA_WEB_SHADER_DIR)
+        message(FATAL_ERROR "Use tools/web/build_web.sh for the Emscripten build "
+                            "(it stages shaders and generates the export list).")
+    endif()
+    add_executable(tessera_web ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/web/tessera_web.c)
+    target_include_directories(tessera_web PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(tessera_web PRIVATE tessera SDL3::SDL3 tessera_thirdparty)
+    set_target_properties(tessera_web PROPERTIES SUFFIX ".js")
+    target_link_options(tessera_web PRIVATE
+        "--no-entry"
+        "-sMODULARIZE=1"
+        "-sEXPORT_NAME=createTesseraModule"
+        "-sENVIRONMENT=web"
+        "-sASYNCIFY=1"
+        "-sASYNCIFY_STACK_SIZE=131072"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sEXPORTED_FUNCTIONS=@${TESSERA_WEB_EXPORTS_FILE}"
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAP8,HEAPU8,HEAP16,HEAPU16,HEAP32,HEAPU32,HEAPF32,HEAPF64"
+        "--use-port=emdawnwebgpu"
+        "--embed-file=${TESSERA_WEB_SHADER_DIR}@/tessera_assets/shaders")
+    # Re-link when the embedded WGSL shaders change — the embed happens at
+    # link time and CMake would otherwise consider the target up to date.
+    file(GLOB TESSERA_WEB_WGSL ${TESSERA_WEB_SHADER_DIR}/*.wgsl)
+    set_property(TARGET tessera_web APPEND PROPERTY LINK_DEPENDS ${TESSERA_WEB_WGSL})
 endif()
 
 # ---- examples ---------------------------------------------------------------

@@ -27,7 +27,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -38,6 +37,7 @@ import 'chess_gen.dart';
 import 'dice_art.dart';
 import 'dungeon_art.dart';
 import 'game.dart';
+import 'save_store/save_store.dart';
 import 'quat.dart';
 
 // ---- the fixed track ------------------------------------------------------
@@ -683,8 +683,7 @@ class DungeonController extends GameController<DgState, DgAction> {
   // *board* restores through tessera's deserialize path):
   //   'DGS1' · u32-le header length · header JSON · serializeScene bytes.
 
-  static final String _savePath =
-      '${Directory.systemTemp.path}/tessera_dungeon_save.bin';
+  static const String _saveKey = 'tessera_dungeon_save';
 
   DgState _save(DgRoll s) {
     final ctrl = _c;
@@ -716,7 +715,9 @@ class DungeonController extends GameController<DgState, DgAction> {
         ..add(len.buffer.asUint8List())
         ..add(head)
         ..add(blob);
-      File(_savePath).writeAsBytesSync(out.takeBytes());
+      if (!SaveStore.write(_saveKey, out.takeBytes())) {
+        throw Exception('write failed');
+      }
       _note = 'saved ✓';
     } catch (_) {
       _note = 'save failed'; // disk trouble is a status note, never a crash
@@ -730,8 +731,10 @@ class DungeonController extends GameController<DgState, DgAction> {
     final Core core;
     final Uint8List blob;
     try {
-      final bytes = File(_savePath).readAsBytesSync();
-      if (bytes.length < 8 || String.fromCharCodes(bytes, 0, 4) != 'DGS1') {
+      final bytes = SaveStore.read(_saveKey);
+      if (bytes == null ||
+          bytes.length < 8 ||
+          String.fromCharCodes(bytes, 0, 4) != 'DGS1') {
         throw const FormatException('bad save magic');
       }
       final headLen =
@@ -1208,7 +1211,7 @@ class DungeonController extends GameController<DgState, DgAction> {
               icon: Icons.replay));
         }
         out.add(const GameButton('Save', DgSave(), icon: Icons.save_outlined));
-        if (File(_savePath).existsSync()) {
+        if (SaveStore.exists(_saveKey)) {
           out.add(const GameButton('Load', DgLoad(), icon: Icons.folder_open));
         }
         return out;
@@ -1226,7 +1229,7 @@ class DungeonController extends GameController<DgState, DgAction> {
         return [
           const GameButton('New crawl', DgReset(),
               icon: Icons.refresh, tone: GameButtonTone.primary),
-          if (File(_savePath).existsSync())
+          if (SaveStore.exists(_saveKey))
             const GameButton('Load save', DgLoad(), icon: Icons.folder_open),
         ];
       default:

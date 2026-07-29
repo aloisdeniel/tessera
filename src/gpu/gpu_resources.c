@@ -33,6 +33,15 @@ bool ts_gpu_upload_mesh_raw(TsGpu* g, const void* verts, uint32_t vcount,
     uint8_t* map = (uint8_t*)SDL_MapGPUTransferBuffer(g->device, tbuf, false);
     memcpy(map, verts, vbytes);
     memcpy(map + vbytes, indices, ibytes);
+#ifdef TESSERA_WEB_DEBUG_UPLOAD
+    {
+        uint32_t sum = 0; const uint8_t* q = map;
+        for (uint32_t k = 0; k < vbytes + ibytes; ++k) sum = sum * 33 + q[k];
+        const float* fv = (const float*)map;
+        SDL_Log("[upload] vb=%u ib=%u sum=%08x v0=(%.3f %.3f %.3f) v1=(%.3f %.3f %.3f)",
+                vbytes, ibytes, sum, fv[0], fv[1], fv[2], fv[8], fv[9], fv[10]);
+    }
+#endif
     SDL_UnmapGPUTransferBuffer(g->device, tbuf);
 
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(g->device);

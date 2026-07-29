@@ -21,12 +21,19 @@
 
 #define TS_SER_MSG " changed — update the wire walk in src/serialize.c " \
                    "(serialize AND deserialize), then this assert"
-_Static_assert(sizeof(TesseraState)              == 296, "TesseraState" TS_SER_MSG);
+/* Pointer-bearing structs shrink on 32-bit targets (wasm); the wire format is
+ * pointer-free and identical on both, so pin each layout per pointer width. */
+#if UINTPTR_MAX > 0xffffffffu
+#define TS_SER_PTRSIZE(sz64, sz32) (sz64)
+#else
+#define TS_SER_PTRSIZE(sz64, sz32) (sz32)
+#endif
+_Static_assert(sizeof(TesseraState)              == TS_SER_PTRSIZE(296, 200), "TesseraState" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCamera)             ==  96, "TesseraCamera" TS_SER_MSG);
 _Static_assert(sizeof(TesseraTilePlacement)      ==  24, "TesseraTilePlacement" TS_SER_MSG);
-_Static_assert(sizeof(TesseraEntityPlacement)    ==  48, "TesseraEntityPlacement" TS_SER_MSG);
+_Static_assert(sizeof(TesseraEntityPlacement)    == TS_SER_PTRSIZE(48, 40), "TesseraEntityPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraEffectPlacement)    ==  40, "TesseraEffectPlacement" TS_SER_MSG);
-_Static_assert(sizeof(TesseraCardPlacement)      ==  88, "TesseraCardPlacement" TS_SER_MSG);
+_Static_assert(sizeof(TesseraCardPlacement)      == TS_SER_PTRSIZE(88, 80), "TesseraCardPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraCardDrawPlacement)  ==  48, "TesseraCardDrawPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraHandPlacement)      ==  56, "TesseraHandPlacement" TS_SER_MSG);
 _Static_assert(sizeof(TesseraDicePlacement)      ==  40, "TesseraDicePlacement" TS_SER_MSG);

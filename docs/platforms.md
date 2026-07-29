@@ -1,9 +1,10 @@
 # Platforms, threading & the loop model
 
-Tessera ships the same C core on **macOS, Linux, iOS, and Android**. Rendering
-goes through SDL3's GPU API; on this build the active backend is Metal (query it
-at runtime with `tessera_backend_name`). What differs per platform is how frames
-are paced and how the native view is attached.
+Tessera ships the same C core on **macOS, Linux, iOS, Android, and the web**
+(WebAssembly + WebGPU — see [web.md](web.md)). Rendering goes through SDL3's
+GPU API; on this build the active backend is Metal (query it at runtime with
+`tessera_backend_name`). What differs per platform is how frames are paced and
+how the native view is attached.
 
 ## Native-view attachment
 

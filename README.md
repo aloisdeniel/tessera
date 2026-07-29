@@ -58,6 +58,7 @@ PNGs of each stage.
 - [Getting started](docs/getting-started.md)
 - [State model & transitions](docs/state-model.md)
 - [FFI & bindings (Dart + Lua)](docs/ffi.md)
+- [Web binding (WebAssembly + WebGPU)](docs/web.md)
 
 ## Dependencies (vendored under `third_party/`)
 

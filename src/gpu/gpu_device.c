@@ -25,8 +25,9 @@ bool ts_gpu_init(TsGpu* g, const TesseraConfig* cfg, const TsLog* log,
         return false;
     }
 
-    /* We accept MSL (Metal) and SPIR-V (Vulkan) shader formats. */
-    SDL_GPUShaderFormat formats = SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV;
+    /* We accept MSL (Metal), SPIR-V (Vulkan) and WGSL (WebGPU) shader formats. */
+    SDL_GPUShaderFormat formats = SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV |
+                                  TS_GPU_SHADERFORMAT_WGSL;
     g->device = SDL_CreateGPUDevice(formats, cfg->debug, NULL);
     if (!g->device) {
         snprintf(err, err_sz, "SDL_CreateGPUDevice failed: %s", SDL_GetError());

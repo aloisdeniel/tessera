@@ -52,6 +52,9 @@ SDL_GPUShader* ts_gpu_load_shader(TsGpu* g, const char* name,
     if (fmts & SDL_GPU_SHADERFORMAT_MSL) {
         ext = "msl"; use_fmt = SDL_GPU_SHADERFORMAT_MSL;
         entry = (stage == SDL_GPU_SHADERSTAGE_VERTEX) ? "vs_main" : "fs_main";
+    } else if (fmts & TS_GPU_SHADERFORMAT_WGSL) {
+        ext = "wgsl"; use_fmt = TS_GPU_SHADERFORMAT_WGSL;
+        entry = "main";
     } else if (fmts & SDL_GPU_SHADERFORMAT_SPIRV) {
         ext = "spv"; use_fmt = SDL_GPU_SHADERFORMAT_SPIRV;
         entry = "main";

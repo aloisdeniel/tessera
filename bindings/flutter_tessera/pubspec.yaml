@@ -15,6 +15,11 @@ dependencies:
   tessera:
     path: ../dart
   ffi: ^2.1.0
+  # Web support: JS interop bindings + the web plugin registrant API. The
+  # engine itself ships as an Emscripten/WebGPU wasm module in assets/web/.
+  web: ^1.1.0
+  flutter_web_plugins:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:
@@ -31,3 +36,12 @@ flutter:
       android:
         package: com.tessera.flutter_tessera
         pluginClass: FlutterTesseraPlugin
+      web:
+        pluginClass: FlutterTesseraWebPlugin
+        fileName: flutter_tessera_web.dart
+
+  # The Emscripten/WebGPU engine build, loaded at runtime by the web binding
+  # (lib/src/web/tessera_wasm.dart). Built by tools/web/build_web.sh.
+  assets:
+    - assets/web/tessera_web.js
+    - assets/web/tessera_web.wasm

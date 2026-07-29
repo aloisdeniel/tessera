@@ -10,6 +10,15 @@
 #include "core/core.h"
 #include "core/tmath.h"
 
+/* WGSL shader format bit of the WebGPU-patched SDL (tools/web/sdl_webgpu.patch).
+ * Mirrored here so the engine also compiles against an unpatched SDL, where the
+ * bit is simply never reported by SDL_GetGPUShaderFormats(). */
+#ifdef SDL_GPU_SHADERFORMAT_WGSL
+#define TS_GPU_SHADERFORMAT_WGSL SDL_GPU_SHADERFORMAT_WGSL
+#else
+#define TS_GPU_SHADERFORMAT_WGSL (1u << 6)
+#endif
+
 /* Canonical interleaved vertex used by all static meshes. */
 typedef struct {
     float pos[3];

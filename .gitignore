@@ -6,6 +6,9 @@
 # Prebuilt native libs installed by publish.sh (regenerated, never committed)
 /bindings/flutter_tessera/native/
 /bindings/dart/native/
+
+# Wasm module installed by tools/web/build_web.sh (regenerated, never committed)
+/bindings/flutter_tessera/assets/web/
 *.o
 *.a
 *.dylib

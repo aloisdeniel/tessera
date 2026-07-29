@@ -17,6 +17,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_tessera/flutter_tessera.dart';
@@ -51,14 +52,18 @@ Future<int> registerGameFont(TesseraController c,
       final data = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
       bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     } catch (_) {
-      for (final path in const [
-        '/System/Library/Fonts/Supplemental/Arial.ttf',
-        '/Library/Fonts/Arial.ttf',
-      ]) {
-        final f = File(path);
-        if (f.existsSync()) {
-          bytes = f.readAsBytesSync();
-          break;
+      // Desktop-only fallback; on web there is no filesystem (the bundled
+      // asset above is the only source).
+      if (!kIsWeb) {
+        for (final path in const [
+          '/System/Library/Fonts/Supplemental/Arial.ttf',
+          '/Library/Fonts/Arial.ttf',
+        ]) {
+          final f = File(path);
+          if (f.existsSync()) {
+            bytes = f.readAsBytesSync();
+            break;
+          }
         }
       }
     }

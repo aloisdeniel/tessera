@@ -22,6 +22,13 @@
 /// (cards) and Yahtzee (dice) — on a small shared reducer framework.
 library;
 
-export 'src/tessera_controller.dart';
-export 'src/tessera_view.dart';
+// The controller/view pair is platform-conditional: the io files drive a
+// native platform view over FFI + a method channel; the web files drive the
+// Emscripten/WebGPU wasm build of the engine bound to a <canvas>. Both expose
+// the exact same public API. The io files import dart:ffi and must never be
+// reachable on the web (and vice versa).
+export 'src/tessera_controller.dart'
+    if (dart.library.js_interop) 'src/web/tessera_controller_web.dart';
+export 'src/tessera_view.dart'
+    if (dart.library.js_interop) 'src/web/tessera_view_web.dart';
 export 'src/types.dart';
