@@ -1073,6 +1073,30 @@ static void apply_camera(TesseraEngine* e, const TesseraCamera* c) {
     e->cam_active = true;
 }
 
+/* Snap variant for the imperative tessera_set_camera path: adopt the spec and
+ * jump the live camera straight to the resolved goal — no tween — so a
+ * pose-per-pointer-move stream renders with zero lag. Mirrors apply_camera's
+ * first-pose branch; follow modes keep tracking from there (advance_camera
+ * re-resolves the remembered spec each tick). */
+static void apply_camera_snap(TesseraEngine* e, const TesseraCamera* c) {
+    e->cam_spec = *c;
+    e->cam_spec_have = true;
+
+    float aspect = current_aspect(e);
+    TsCamPose G;
+    if (!resolve_camera_goal(e, c, aspect, &G)) {
+        /* Target not live yet: keep whatever pose we already have (no jump). */
+        return;
+    }
+    ts_camera_set_look(&e->camera, &G, aspect);
+    e->cam_cur = G;
+    e->cam_from = G;
+    e->cam_to = G;
+    e->cam_have = true;
+    e->cam_active = false;
+    e->cam_follow_y_have = false;   /* re-seat the height filter */
+}
+
 /* Modes that frame a live *moving* point via the orbit rig — their goal height
  * bounces as the tracked object hops/tumbles, so its Y is worth low-passing. */
 static bool cam_mode_tracks_position(uint32_t mode) {
@@ -1179,6 +1203,24 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
             e->op_inflight = next->op_id;
             e->op_has_inflight = true;
         }
+    }
+
+    /* Imperative camera goal (tessera_set_camera): taken under the state
+     * mutex, applied here on the tick thread — after any promote, so an
+     * explicit camera set in the same tick wins over the state's camera.
+     * Unlike a promoted state's camera it does NOT tween: the pose snaps,
+     * so a gesture streaming poses gets frame-exact visual feedback. */
+    {
+        TesseraCamera cam;
+        bool have = false;
+        SDL_LockMutex(e->state_mutex);
+        if (e->cam_pending_have) {
+            cam = e->cam_pending;
+            e->cam_pending_have = false;
+            have = true;
+        }
+        SDL_UnlockMutex(e->state_mutex);
+        if (have) apply_camera_snap(e, &cam);
     }
 
     float mult = e->timing.speed_multiplier > 0.0f ? e->timing.speed_multiplier : 1.0f;

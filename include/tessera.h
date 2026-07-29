@@ -526,6 +526,16 @@ typedef struct {
  * not promoted yet) completes no later than the operation that superseded it. */
 TESSERA_API TesseraOpId tessera_set_state(TesseraEngine* e, const TesseraState* state);
 
+/* Imperatively retarget the camera WITHOUT pushing a new state: the camera
+ * SNAPS straight to the goal resolved from `cam` (any mode, including the
+ * follow/focus modes) — no tween — and the scene itself is untouched.
+ * Any-thread; applied on the next tick, so a gesture streaming a pose per
+ * pointer move renders with zero lag between input and visual feedback (a
+ * promoted state's camera, by contrast, glides over `timing.camera_s`). The
+ * goal holds until the next tessera_set_camera or the next promoted state's
+ * camera. */
+TESSERA_API void tessera_set_camera(TesseraEngine* e, const TesseraCamera* cam);
+
 /* True once operation `op` has completed (its transition fully animated). Ids
  * are monotonic, so this is `op <= tessera_last_completed_operation(e)`. op == 0
  * always returns true (nothing to wait for). Any-thread. */

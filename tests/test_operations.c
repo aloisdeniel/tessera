@@ -125,6 +125,32 @@ int main(void) {
     CHECK(tessera_operation_completed(e, opC));
     CHECK(tessera_last_completed_operation(e) == opC);
 
+    /* ---- imperative camera: tessera_set_camera retargets WITHOUT a state
+     *      push and WITHOUT a tween — one tick later the view has snapped to
+     *      the goal (a world point lands on a different pixel) and the engine
+     *      is already idle again (no glide to wait out). ---- */
+    TesseraScreenPos p_before, p_after;
+    const float probe[3] = {2.0f, 0.0f, 0.0f};
+    CHECK(tessera_world_to_screen(e, probe, &p_before));
+
+    TesseraCamera cam2 = cam;
+    cam2.yaw += 1.2f;
+    cam2.distance = cam.distance + 3.0f;
+    tessera_set_camera(e, &cam2);
+    CHECK(!tessera_is_idle(e));                       /* pending until the tick */
+    tick(e, buf);                                     /* applies as a snap */
+    CHECK(tessera_is_idle(e));                        /* no tween followed */
+    CHECK(tessera_world_to_screen(e, probe, &p_after));
+    float moved = (p_after.x - p_before.x) * (p_after.x - p_before.x) +
+                  (p_after.y - p_before.y) * (p_after.y - p_before.y);
+    CHECK(moved > 1.0f);                              /* already AT the new pose */
+
+    /* the next promoted state's camera takes over again */
+    sc.epoch = 6;
+    tessera_set_state(e, &sc);
+    settle(e, buf);
+    CHECK(tessera_world_to_screen(e, probe, &p_after));
+
     tessera_destroy(e);
     printf(g_fail ? "test_operations: %d FAIL\n" : "test_operations: ok\n", g_fail);
     return g_fail ? 1 : 0;

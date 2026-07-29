@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `Tessera.setCamera` mirrors the new C `tessera_set_camera`: imperatively
+  retarget the camera (any camera mode) without pushing a state. It snaps —
+  no tween — so a drag can stream poses with zero input-to-view lag.
 - `TesseraEffectPlacement` gained `attachCardId` (0 = none): the effect anchors
   just above a live single card's displayed face and follows it through deals,
   moves and flips (wins over `attachEntityId`). State blob format version

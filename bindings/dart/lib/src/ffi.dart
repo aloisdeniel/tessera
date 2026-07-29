@@ -894,6 +894,8 @@ typedef _FitDistanceD = bool Function(Pointer<TesseraEngine>, Pointer<Uint64>, i
     Pointer<Uint64>, int, double, Pointer<Float>);
 typedef _SetTimingC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
 typedef _SetTimingD = void Function(Pointer<TesseraEngine>, Pointer<TesseraTiming>);
+typedef _SetCameraC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraCamera>);
+typedef _SetCameraD = void Function(Pointer<TesseraEngine>, Pointer<TesseraCamera>);
 typedef _IsIdleC = Bool Function(Pointer<TesseraEngine>);
 typedef _IsIdleD = bool Function(Pointer<TesseraEngine>);
 typedef _SetQualityC = Void Function(Pointer<TesseraEngine>, Pointer<TesseraQuality>);
@@ -1039,6 +1041,8 @@ class Tessera {
       _lib.lookupFunction<_FitDistanceC, _FitDistanceD>('tessera_camera_fit_distance');
   late final _SetTimingD _setTiming =
       _lib.lookupFunction<_SetTimingC, _SetTimingD>('tessera_set_timing');
+  late final _SetCameraD _setCamera =
+      _lib.lookupFunction<_SetCameraC, _SetCameraD>('tessera_set_camera');
   late final _IsIdleD _isIdle = _lib.lookupFunction<_IsIdleC, _IsIdleD>('tessera_is_idle');
   late final _SetQualityD _setQuality =
       _lib.lookupFunction<_SetQualityC, _SetQualityD>('tessera_set_quality');
@@ -1181,6 +1185,12 @@ class Tessera {
   /// The transition it triggers is complete once [operationCompleted] is true /
   /// [lastCompletedOperation] reaches it / the operation callback fires with it.
   int setState(Pointer<TesseraState> s) => _setState(_engine, s);
+
+  /// Imperatively retarget the camera without pushing a new state: it SNAPS
+  /// straight to the goal resolved from [cam] (any mode) — no tween — leaving
+  /// the scene untouched. Any-thread; streams from a drag with zero lag.
+  /// Holds until the next [setCamera] or the next promoted state's camera.
+  void setCamera(Pointer<TesseraCamera> cam) => _setCamera(_engine, cam);
 
   // ---- state serialization / save / undo / replay ----
   // Pure-data calls (no engine involved, any-thread); they live here because

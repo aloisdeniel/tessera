@@ -19,6 +19,14 @@
   `Iterable<TesseraScene>`, so games can project a state change into its
   visual beat sequence with a `sync*` generator (Duel yields lunge → settle
   lazily) — existing `List`-returning games are unaffected.
+- **Imperative camera.** `TesseraController.setCamera(TesseraCamera)` mirrors
+  the new C `tessera_set_camera`: it retargets the camera alone — no scene
+  re-push, no state diff — and SNAPS straight to the goal (a `setScene`
+  camera, by contrast, glides over `timing.cameraS`), so streaming a pose per
+  pointer move gives zero lag between gesture and view. The goal holds until
+  the next `setCamera` or `setScene`. The example app's View mode drives its
+  drag/pinch orbit through it, while entering/leaving the mode glide via the
+  scene path.
 - **View mode (example app).** Every example game's navigation bar gained a
   shared free-look toggle (`example/lib/view_mode.dart`, hosted by
   `GameScreen`): while armed, dragging orbits the camera around the centre of

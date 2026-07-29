@@ -251,6 +251,7 @@ bool         tessera_dice_face(TesseraEngine*, TesseraDiceId, uint32_t* out_face
 bool         tessera_dice_all_idle(TesseraEngine*);
 
 TesseraOpId tessera_set_state(TesseraEngine*, const TesseraState*);
+void tessera_set_camera(TesseraEngine*, const TesseraCamera*);
 size_t tessera_state_serialize(const TesseraState* state, void* buf, size_t cap);
 TesseraState* tessera_state_deserialize(const void* blob, size_t len);
 void tessera_state_free(TesseraState* state);

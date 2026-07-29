@@ -283,15 +283,25 @@ void tessera_set_timing(TesseraEngine* e, const TesseraTiming* t) {
 bool tessera_is_idle(TesseraEngine* e) {
     if (!e) return true;
     if (e->cam_active) return false;
-    /* not idle while a pending snapshot is waiting to promote */
+    /* not idle while a pending snapshot or camera goal awaits the tick */
     bool pending;
     SDL_LockMutex(e->state_mutex);
-    pending = e->state && e->state->has_pending;
+    pending = (e->state && e->state->has_pending) || e->cam_pending_have;
     SDL_UnlockMutex(e->state_mutex);
     if (pending) return false;
     if (e->fx && !ts_fx_is_idle(e->fx)) return false;
     if (e->dice && !ts_dice_all_idle(e->dice)) return false;
     return !e->orch || ts_orch_is_idle(e->orch);
+}
+void tessera_set_camera(TesseraEngine* e, const TesseraCamera* cam) {
+    /* Any-thread: stashed under the state mutex; the tick thread applies it
+     * as a SNAP (resolving the goal against the live scene must run there).
+     * Streaming calls simply overwrite the not-yet-applied goal. */
+    if (!e || !cam) return;
+    SDL_LockMutex(e->state_mutex);
+    e->cam_pending = *cam;
+    e->cam_pending_have = true;
+    SDL_UnlockMutex(e->state_mutex);
 }
 void tessera_set_quality(TesseraEngine* e, const TesseraQuality* q) {
     /* Any-thread: written under the state mutex; the render thread takes one

@@ -3,10 +3,13 @@
 //
 // An app-bar toggle arms it; while armed the player grabs the scene and
 // orbits the camera around the centre of the board by dragging, and zooms
-// with a pinch (or trackpad pinch). The game itself is frozen for the
-// duration — no auto-play, no taps. Leaving the mode (the toggle again, a
-// board tap, or any other interaction) glides the camera back to wherever
-// the game had put it and hands control back.
+// with a pinch (or trackpad pinch). Every gesture update goes through the
+// engine's IMPERATIVE camera (`TesseraController.setCamera`), which snaps the
+// pose with no tween — zero lag between the finger and the view. The game
+// itself is frozen for the duration — no auto-play, no taps. Entering eases
+// onto the orbit pose, and leaving the mode (the toggle again, a board tap,
+// or any other interaction) glides the camera back to wherever the game had
+// put it — those two transitions ride the scene path, which tweens.
 
 import 'package:flutter/widgets.dart' show ChangeNotifier, Offset;
 import 'package:flutter_tessera/flutter_tessera.dart';
@@ -14,46 +17,40 @@ import 'package:flutter_tessera/flutter_tessera.dart';
 class ViewModeController extends ChangeNotifier {
   TesseraController? _tessera;
   TesseraScene? _scene; // the game's live scene, with its own camera
-  TesseraTimingData _timing = const TesseraTimingData();
   TesseraCameraPose? _pose; // the orbit pose while active
   double _baseDistance = 0; // pinch reference (gesture-start distance)
 
   /// Whether view mode is currently armed.
   bool get active => _pose != null;
 
-  /// The snappy camera tween used while dragging, so the orbit tracks the
-  /// finger instead of trailing it by the game's stately camera timing.
-  static const double _dragCameraS = 0.12;
   static const double _minPitch = 0.15, _maxPitch = 1.45;
   static const double _minDistance = 4.0, _maxDistance = 40.0;
 
   /// Arm view mode over [scene] (the game's last-pushed scene): the camera
-  /// eases onto an orbit pose around the centre of the board, and [timing] is
-  /// remembered so [exit] can restore it.
+  /// glides onto an orbit pose around the centre of the board (a scene push,
+  /// so it tweens at the game's own camera timing).
   void enter({
     required TesseraController tessera,
     required TesseraScene scene,
-    required TesseraTimingData timing,
   }) {
     if (active) return;
     _tessera = tessera;
     _scene = scene;
-    _timing = timing;
-    _pose = _orbitPoseOf(scene);
-    tessera.setTiming(_withCameraS(timing, _dragCameraS));
-    _push();
+    final pose = _orbitPoseOf(scene);
+    _pose = pose;
+    tessera.setScene(_withCamera(scene, pose));
     notifyListeners();
   }
 
-  /// Disarm: restore the game's camera timing and glide the camera back to
-  /// the scene's own (initial) camera. Safe to call when inactive.
+  /// Disarm: glide the camera back to the scene's own (initial) camera —
+  /// again via the scene path, so the return home tweens instead of jumping.
+  /// Safe to call when inactive.
   void exit() {
     if (!active) return;
     final tessera = _tessera;
     final scene = _scene;
     _pose = null;
     if (tessera != null && scene != null) {
-      tessera.setTiming(_timing);
       tessera.setScene(scene); // the original camera: tweens back home
     }
     notifyListeners();
@@ -80,15 +77,10 @@ class ViewModeController extends ChangeNotifier {
       pitch: (p.pitch + delta.dy * 0.008).clamp(_minPitch, _maxPitch).toDouble(),
       fov: p.fov,
     );
-    _push();
-  }
-
-  void _push() {
-    final tessera = _tessera;
-    final scene = _scene;
-    final pose = _pose;
-    if (tessera == null || scene == null || pose == null) return;
-    tessera.setScene(_withCamera(scene, pose));
+    // The imperative camera API: retargets the camera alone — no scene
+    // re-push, no state diff — and SNAPS instead of tweening, so the view
+    // tracks the finger frame-for-frame.
+    _tessera?.setCamera(_pose!);
   }
 
   /// The orbit pose view mode starts from: the scene's own camera when it
@@ -109,17 +101,6 @@ class ViewModeController extends ChangeNotifier {
     return TesseraCameraPose(
         focusX: fx, focusY: fy, distance: 14, yaw: 0, pitch: 0.9, fov: 0.72);
   }
-
-  static TesseraTimingData _withCameraS(TesseraTimingData t, double cameraS) =>
-      TesseraTimingData(
-        moveS: t.moveS,
-        addS: t.addS,
-        removeS: t.removeS,
-        tileS: t.tileS,
-        reflowS: t.reflowS,
-        cameraS: cameraS,
-        speedMultiplier: t.speedMultiplier,
-      );
 
   static TesseraScene _withCamera(TesseraScene s, TesseraCamera camera) =>
       TesseraScene(

@@ -374,8 +374,7 @@ class _GameScreenState<S, A> extends State<GameScreen<S, A>> {
                       _viewMode.exit();
                       _pump();
                     } else if (c != null && scene != null) {
-                      _viewMode.enter(
-                          tessera: c, scene: scene, timing: game.timing);
+                      _viewMode.enter(tessera: c, scene: scene);
                     }
                   },
           ),

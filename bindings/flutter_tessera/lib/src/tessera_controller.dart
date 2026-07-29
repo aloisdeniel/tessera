@@ -430,6 +430,22 @@ class TesseraController {
     return _awaitOperation(op);
   }
 
+  /// Imperatively retarget the camera WITHOUT pushing a new scene: the camera
+  /// SNAPS straight to the goal resolved from [camera] (any [TesseraCamera]
+  /// case, including the follow/focus modes) — no tween — and the scene
+  /// itself is untouched. Any-thread, applied on the next tick, so a gesture
+  /// streaming a pose per pointer move gets zero lag between input and view
+  /// (a [setScene] camera, by contrast, glides over `timing.cameraS`). The
+  /// goal holds until the next [setCamera] or [setScene]. No-op after
+  /// [dispose].
+  void setCamera(TesseraCamera camera) {
+    if (_disposed) return;
+    final cam = calloc<t.TesseraCamera>();
+    _fillCamera(cam.ref, camera);
+    _engine.setCamera(cam); // copies under the engine mutex
+    calloc.free(cam);
+  }
+
   /// Marshal [scene] into a native `TesseraState`, run [body] with it, then
   /// free every allocation (the engine deep-copies whatever it keeps). The
   /// shared bridge under [setScene], [serializeScene] and replay recording.
@@ -700,8 +716,36 @@ class TesseraController {
       ..worldModelCount = scene.world.length;
     // `calloc` zeroed the whole TesseraState, so any camera field a case does
     // not touch stays 0 (mode 0 = ORBIT, ids/target/orientation all zero).
-    final cam = st.ref.camera;
-    switch (scene.camera) {
+    _fillCamera(st.ref.camera, scene.camera);
+
+    // Whatever [body] does (set_state, serialize, replay-append) deep-copies
+    // what it keeps, so everything is safe to free as soon as it returns.
+    final result = body(st);
+    calloc.free(st);
+    calloc.free(tiles);
+    calloc.free(ents);
+    calloc.free(effects);
+    calloc.free(cards);
+    calloc.free(draws);
+    calloc.free(hands);
+    calloc.free(dice);
+    calloc.free(overlays);
+    calloc.free(labels);
+    calloc.free(highlights);
+    calloc.free(plights);
+    calloc.free(wmodels);
+    for (final p in pathPtrs) {
+      calloc.free(p);
+    }
+    return result;
+  }
+
+  /// Marshal a high-level [TesseraCamera] case into the native struct [cam],
+  /// which must arrive zeroed (any field a case does not touch stays 0 —
+  /// mode 0 = ORBIT, ids/target/orientation all zero). Shared by the scene
+  /// bridge and [setCamera].
+  static void _fillCamera(t.TesseraCamera cam, TesseraCamera camera) {
+    switch (camera) {
       case TesseraCameraPose c:
         cam
           ..mode = 0
@@ -776,27 +820,6 @@ class TesseraController {
           ..fitPadding = c.padding
           ..fov = c.fov;
     }
-
-    // Whatever [body] does (set_state, serialize, replay-append) deep-copies
-    // what it keeps, so everything is safe to free as soon as it returns.
-    final result = body(st);
-    calloc.free(st);
-    calloc.free(tiles);
-    calloc.free(ents);
-    calloc.free(effects);
-    calloc.free(cards);
-    calloc.free(draws);
-    calloc.free(hands);
-    calloc.free(dice);
-    calloc.free(overlays);
-    calloc.free(labels);
-    calloc.free(highlights);
-    calloc.free(plights);
-    calloc.free(wmodels);
-    for (final p in pathPtrs) {
-      calloc.free(p);
-    }
-    return result;
   }
 
   // ---- state serialization, save / undo & replay ----

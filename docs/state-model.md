@@ -132,6 +132,17 @@ If a new state arrives mid-animation, the engine re-diffs from the *current
 interpolated transforms* (not the last target), so motion blends smoothly with
 no snapping. `tessera_is_idle()` reports when *all* transitions have settled.
 
+## Imperative camera
+
+`tessera_set_camera(e, &cam)` retargets the camera **without pushing a state**:
+the camera **snaps** straight to the goal resolved from the spec (any mode,
+follow/focus included) — no tween — and the scene is untouched. Any-thread,
+applied on the next tick, so a drag-to-orbit control streaming a pose per
+pointer move gets zero lag between gesture and visual feedback (a promoted
+state's camera, by contrast, glides over `timing.camera_s`). The goal holds
+until the next `tessera_set_camera` or the next promoted state's camera
+reasserts itself.
+
 ## Operation ids & completion events
 
 `tessera_set_state` returns a monotonic, nonzero **operation id**. That id's
