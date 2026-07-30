@@ -9,6 +9,7 @@ import 'duel.dart';
 import 'dungeon.dart';
 import 'game.dart';
 import 'memory.dart';
+import 'reversi.dart';
 import 'snakes.dart';
 import 'yahtzee.dart';
 
@@ -37,6 +38,7 @@ final List<_Entry> _games = [
   _entry(() => DuelController()),
   _entry(() => ChessController()),
   _entry(() => CheckersController()),
+  _entry(() => ReversiController()),
   _entry(() => SnakesController()),
   _entry(() => BlackjackController()),
   _entry(() => MemoryController()),
@@ -56,7 +58,7 @@ class MenuPage extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.fromLTRB(8, 8, 8, 16),
             child: Text(
-              'Eight tabletop games rendered with the Tessera engine.\n'
+              'Nine tabletop games rendered with the Tessera engine.\n'
               'Pick one to play, or tap the robot to watch it auto-play.',
               style: TextStyle(fontSize: 14, height: 1.4),
             ),

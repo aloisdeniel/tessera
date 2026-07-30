@@ -18,6 +18,7 @@ import 'package:flutter_tessera_example/chess_rules.dart';
 import 'package:flutter_tessera_example/duel.dart';
 import 'package:flutter_tessera_example/dungeon.dart';
 import 'package:flutter_tessera_example/dungeon_art.dart';
+import 'package:flutter_tessera_example/reversi.dart';
 import 'package:flutter_tessera_example/yahtzee.dart';
 
 void main() {
@@ -499,6 +500,62 @@ void main() {
       final next = chessUpdate(s, a!);
       expect(next, isA<ChessPlaying>());
       expect((next as ChessPlaying).board.ply, 1);
+    });
+  });
+
+  group('reversi', () {
+    test('the opening position has the four classic moves for black', () {
+      final b = rvInitialBoard();
+      expect(rvLegalMoves(b, rvBlack),
+          unorderedEquals([2 * 8 + 3, 3 * 8 + 2, 4 * 8 + 5, 5 * 8 + 4]));
+    });
+
+    test('a move flips exactly the flanked run and swaps the side', () {
+      RvState s = RvPlaying(rvInitialBoard(), side: rvBlack);
+      // d3 (r2 c3) flanks the white disc at d4 (r3 c3).
+      s = rvUpdate(s, const RvPlace(2 * 8 + 3));
+      s as RvPlaying;
+      expect(s.side, rvWhite);
+      expect(s.flipped, [3 * 8 + 3]);
+      expect(s.board[2 * 8 + 3], rvBlack);
+      expect(s.board[3 * 8 + 3], rvBlack);
+      expect(s.count(rvBlack), 4);
+      expect(s.count(rvWhite), 1);
+    });
+
+    test('an illegal placement is ignored', () {
+      final s = RvPlaying(rvInitialBoard(), side: rvBlack);
+      expect(rvUpdate(s, const RvPlace(0)), same(s)); // no flanked run
+      expect(rvUpdate(s, const RvPlace(3 * 8 + 3)), same(s)); // occupied
+    });
+
+    test('wiping the opponent out ends the game', () {
+      // Black at a1, white's only disc at b1: black plays c1, flipping it —
+      // no white discs remain, so neither side has a move -> RvOver.
+      final b = List<int>.filled(64, 0);
+      b[0] = rvBlack;
+      b[1] = rvWhite;
+      final s = rvUpdate(RvPlaying(b, side: rvBlack), const RvPlace(2));
+      expect(s, isA<RvOver>());
+      expect(s.count(rvBlack), 3);
+      expect(s.count(rvWhite), 0);
+    });
+
+    test('full AI self-play always ends with a legal, full accounting', () {
+      final rng = math.Random(7);
+      final ai = ReversiController();
+      RvState s = RvPlaying(rvInitialBoard(), side: rvBlack);
+      var guard = 0;
+      while (s is RvPlaying && guard++ < 200) {
+        final a = ai.autoAction(s, rng);
+        expect(a, isA<RvPlace>());
+        final next = rvUpdate(s, a!);
+        expect(identical(next, s), isFalse); // the AI never picks illegally
+        s = next;
+      }
+      expect(s, isA<RvOver>());
+      expect(s.count(rvBlack) + s.count(rvWhite), lessThanOrEqualTo(64));
+      expect(s.count(rvBlack) + s.count(rvWhite), greaterThanOrEqualTo(5));
     });
   });
 }

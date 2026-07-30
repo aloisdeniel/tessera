@@ -6,6 +6,7 @@
 //                 referenced from SDL (textures + engine-played sounds).
 //   • Chess     — entities on a grid (tap to move, or watch the AI).
 //   • Checkers  — chained jumps as multi-step entity paths; capture particles.
+//   • Reversi   — discs as circle-cut cards; captures are real card flips.
 //   • Snakes    — the Dice APIs with a token-following camera (a two-player race).
 //   • Blackjack — the Card APIs (hands, a draw pile, a dealer reveal).
 //   • Memory    — freely placed cards, per-card flips and picking.
