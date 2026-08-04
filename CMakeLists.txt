@@ -16,11 +16,17 @@ find_package(SDL3 REQUIRED CONFIG)
 
 set(TP ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
-# Header-only vendored deps compiled once here (single-TU IMPLEMENTATION).
-add_library(tessera_thirdparty STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/thirdparty_impl.c)
+# Header-only vendored deps compiled once here (single-TU IMPLEMENTATION),
+# plus vendored Lua 5.4 (interpreter library only — no lua/luac standalones).
+file(GLOB LUA_SOURCES ${TP}/lua/*.c)
+list(REMOVE_ITEM LUA_SOURCES ${TP}/lua/lua.c ${TP}/lua/luac.c)
+add_library(tessera_thirdparty STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/thirdparty_impl.c
+    ${LUA_SOURCES})
 target_include_directories(tessera_thirdparty PUBLIC
     ${TP}
-    ${TP}/cglm/include)
+    ${TP}/cglm/include
+    ${TP}/lua)
 set_target_properties(tessera_thirdparty PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---- library ----------------------------------------------------------------
