@@ -18,8 +18,11 @@ set(TP ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # Header-only vendored deps compiled once here (single-TU IMPLEMENTATION),
 # plus vendored Lua 5.4 (interpreter library only — no lua/luac standalones).
+# The os/io stdlibs are excluded outright: the embedded VM never opens them
+# (sandbox), and loslib.c's system() does not compile on iOS.
 file(GLOB LUA_SOURCES ${TP}/lua/*.c)
-list(REMOVE_ITEM LUA_SOURCES ${TP}/lua/lua.c ${TP}/lua/luac.c)
+list(REMOVE_ITEM LUA_SOURCES ${TP}/lua/lua.c ${TP}/lua/luac.c
+     ${TP}/lua/loslib.c ${TP}/lua/liolib.c ${TP}/lua/linit.c)
 add_library(tessera_thirdparty STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/thirdparty_impl.c
     ${LUA_SOURCES})

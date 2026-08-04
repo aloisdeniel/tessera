@@ -1231,6 +1231,11 @@ void ts_engine_advance(TesseraEngine* e, double dt) {
 
     ts_engine_settle_operation(e);
 
+    /* Drive the embedded Lua game AFTER the settle, so its sequential
+     * playback sees a fresh op ledger and can push the next queued state
+     * the same tick the previous one completes. */
+    if (e->lua) ts_lua_advance(e);
+
     /* Deliver this tick's events to the callback, after everything (incl. the
      * op settle above) has emitted, outside the state mutex. */
     ts_engine_flush_events(e);

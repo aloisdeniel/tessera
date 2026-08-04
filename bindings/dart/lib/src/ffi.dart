@@ -14,6 +14,7 @@
 // manual padding.
 
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:ffi';
 import 'dart:typed_data';
 
@@ -915,6 +916,16 @@ typedef _RenderRgbaC =
     Bool Function(Pointer<TesseraEngine>, Double, Int32, Int32, Pointer<Void>, Size);
 typedef _RenderRgbaD =
     bool Function(Pointer<TesseraEngine>, double, int, int, Pointer<Void>, int);
+// Shared by tessera_lua_load_bundle / tessera_lua_load_game (same signature).
+typedef _LuaLoadC = Bool Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>);
+typedef _LuaLoadD = bool Function(Pointer<TesseraEngine>, Pointer<TesseraBytes>);
+typedef _LuaEventC =
+    Bool Function(Pointer<TesseraEngine>, Pointer<Utf8>, Pointer<Double>, Size);
+typedef _LuaEventD =
+    bool Function(Pointer<TesseraEngine>, Pointer<Utf8>, Pointer<Double>, int);
+// Shared by tessera_def_count / tessera_sound_count (same signature).
+typedef _EngCountC = Uint32 Function(Pointer<TesseraEngine>);
+typedef _EngCountD = int Function(Pointer<TesseraEngine>);
 
 /// Override the directory that holds the engine's `shaders/` folder, read when
 /// pipelines are built. Process-global — call BEFORE constructing a [Tessera]
@@ -1059,6 +1070,17 @@ class Tessera {
       _lib.lookupFunction<_CaptureC, _CaptureD>('tessera_capture_png');
   late final _RenderRgbaD _renderRgba =
       _lib.lookupFunction<_RenderRgbaC, _RenderRgbaD>('tessera_render_rgba');
+
+  late final _LuaLoadD _luaLoadBundle =
+      _lib.lookupFunction<_LuaLoadC, _LuaLoadD>('tessera_lua_load_bundle');
+  late final _LuaLoadD _luaLoadGame =
+      _lib.lookupFunction<_LuaLoadC, _LuaLoadD>('tessera_lua_load_game');
+  late final _LuaEventD _luaEvent =
+      _lib.lookupFunction<_LuaEventC, _LuaEventD>('tessera_lua_event');
+  late final _EngCountD _defCount =
+      _lib.lookupFunction<_EngCountC, _EngCountD>('tessera_def_count');
+  late final _EngCountD _soundCount =
+      _lib.lookupFunction<_EngCountC, _EngCountD>('tessera_sound_count');
 
   /// Create an engine and (when [nativeWindow] is null) its own window.
   ///
@@ -1459,6 +1481,90 @@ class Tessera {
 
   /// Depth-of-field; pass nullptr to disable.
   void setFocus(Pointer<TesseraFocus> focus) => _setFocus(_engine, focus);
+
+  // ---- embedded Lua game scripting ----
+  /// Load a little-endian "TSAB" asset bundle for use by Lua scripts (entries
+  /// become `tessera.asset("name")`; pack with tools/pack_bundle.py). May be
+  /// called repeatedly — later bundles add to / override earlier names. The
+  /// engine copies the bytes. Setup/tick thread only (not concurrent with
+  /// tick). Throws [StateError] with the engine error on parse failure.
+  bool luaLoadBundle(Uint8List bundle) {
+    final bytes = calloc<Uint8>(bundle.isEmpty ? 1 : bundle.length);
+    final def = calloc<TesseraBytes>();
+    try {
+      bytes.asTypedList(bundle.length).setAll(0, bundle);
+      def.ref
+        ..data = bytes.cast<Void>()
+        ..size = bundle.length;
+      if (!_luaLoadBundle(_engine, def)) {
+        throw StateError('tessera_lua_load_bundle failed: $lastError');
+      }
+      return true;
+    } finally {
+      calloc.free(def);
+      calloc.free(bytes);
+    }
+  }
+
+  /// Load and start a Lua 5.4 game script whose chunk returns
+  /// `function(event) -> array of state tables` (see docs/lua.md). [source] is
+  /// the chunk as a [String] or raw [Uint8List] bytes. The chunk's top-level
+  /// code runs immediately (typically registering defs from bundle assets);
+  /// the game function then runs on the tick thread — once with
+  /// `{name="start"}` on the next tick and once per [luaEvent] thereafter,
+  /// each returned state playing in order after the previous op settles.
+  /// Replaces any previously loaded game. Setup/tick thread only. Throws
+  /// [StateError] with the engine error on compile/runtime failure.
+  bool luaLoadGame(Object source) {
+    final Uint8List script = switch (source) {
+      final String s => Uint8List.fromList(utf8.encode(s)),
+      final Uint8List b => b,
+      _ => throw ArgumentError.value(
+          source, 'source', 'expected a String or Uint8List Lua chunk'),
+    };
+    final bytes = calloc<Uint8>(script.isEmpty ? 1 : script.length);
+    final def = calloc<TesseraBytes>();
+    try {
+      bytes.asTypedList(script.length).setAll(0, script);
+      def.ref
+        ..data = bytes.cast<Void>()
+        ..size = script.length;
+      if (!_luaLoadGame(_engine, def)) {
+        throw StateError('tessera_lua_load_game failed: $lastError');
+      }
+      return true;
+    } finally {
+      calloc.free(def);
+      calloc.free(bytes);
+    }
+  }
+
+  /// Queue an input event for the running Lua game, delivered on the tick
+  /// thread as `{name=name, args={...}}` (numbers only). Any-thread, cheap.
+  /// Returns false when no game is loaded. Events queue in order; each
+  /// invocation's returned states append to the playback queue.
+  bool luaEvent(String name, List<double> args) {
+    final n = name.toNativeUtf8();
+    Pointer<Double> a = nullptr;
+    try {
+      if (args.isNotEmpty) {
+        a = calloc<Double>(args.length);
+        a.asTypedList(args.length).setAll(0, args);
+      }
+      return _luaEvent(_engine, n, a, args.length);
+    } finally {
+      if (a != nullptr) calloc.free(a);
+      calloc.free(n);
+    }
+  }
+
+  /// Number of registered definitions of any kind (defs are never freed, so
+  /// also the total ever registered — including from an embedded Lua script).
+  int get defCount => _defCount(_engine);
+
+  /// Number of registered sounds (ids are 1..count), including registrations
+  /// made by an embedded Lua script.
+  int get soundCount => _soundCount(_engine);
 
   // ---- dev hooks ----
   void debugOrbit(double dyaw, double dpitch, double dzoom) =>

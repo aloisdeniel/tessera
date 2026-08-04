@@ -526,6 +526,16 @@ typedef struct {
  * not promoted yet) completes no later than the operation that superseded it. */
 TESSERA_API TesseraOpId tessera_set_state(TesseraEngine* e, const TesseraState* state);
 
+/* Imperatively retarget the camera WITHOUT pushing a new state: the camera
+ * SNAPS straight to the goal resolved from `cam` (any mode, including the
+ * follow/focus modes) — no tween — and the scene itself is untouched.
+ * Any-thread; applied on the next tick, so a gesture streaming a pose per
+ * pointer move renders with zero lag between input and visual feedback (a
+ * promoted state's camera, by contrast, glides over `timing.camera_s`). The
+ * goal holds until the next tessera_set_camera or the next promoted state's
+ * camera. */
+TESSERA_API void tessera_set_camera(TesseraEngine* e, const TesseraCamera* cam);
+
 /* True once operation `op` has completed (its transition fully animated). Ids
  * are monotonic, so this is `op <= tessera_last_completed_operation(e)`. op == 0
  * always returns true (nothing to wait for). Any-thread. */
@@ -1037,6 +1047,62 @@ TESSERA_API bool tessera_render_rgba(TesseraEngine* e, double dt_seconds,
  * bundled (app bundle / extracted from the APK) rather than at the build-time
  * path. Harmless on desktop (the default already points at the build tree). */
 TESSERA_API void tessera_set_asset_dir(const char* dir);
+
+/* =======================================================================
+ *  Embedded Lua game scripting
+ *
+ *  A sandboxed Lua 5.4 VM inside the engine: load an asset bundle plus a
+ *  game script whose chunk returns `function(event) -> array of state
+ *  tables`, and the engine plays each returned sequence of states in order,
+ *  each one awaiting the previous operation's settle. See docs/lua.md for
+ *  the script API (the `tessera.*` module) and the state table schema.
+ * ===================================================================== */
+
+/* Load an asset bundle for use by Lua scripts. The bundle is a little-endian
+ * "TSAB" container of named blobs (see docs/lua.md; pack with tools/pack_bundle.py).
+ * Entries become available to scripts as tessera.asset("name"). May be called
+ * multiple times; later bundles add to / override earlier names. The bytes are
+ * copied; the caller may free them on return. Returns false on parse failure
+ * (see tessera_last_error). Call on the setup/tick thread (not concurrent with tick). */
+TESSERA_API bool tessera_lua_load_bundle(TesseraEngine* e, const TesseraBytes* bundle);
+
+/* Load and start a Lua 5.4 game script. The chunk must return a function
+ *   function(event) -> { state_table, state_table, ... }
+ * The engine invokes it once with event {name="start"} on the next tick, and once per
+ * tessera_lua_event() call thereafter, on the tick thread. Each returned state table is
+ * converted to a TesseraState and pushed via set_state sequentially — each state waits
+ * for the previous operation to settle, so a returned sequence plays as ordered beats.
+ * The chunk's top-level code runs immediately on the calling thread (typically to
+ * register defs from bundle assets via the tessera.* API — see docs/lua.md).
+ * Replaces any previously loaded game (its queued states/events are dropped).
+ * Returns false on compile/runtime error (see tessera_last_error).
+ * Call on the setup/tick thread (not concurrent with tick).
+ *
+ * WARNING: while a game is loaded, the script must be the sole producer of
+ * states. tessera_set_state shares the single pending-state slot with Lua
+ * playback: whichever snapshot is published last before the next tick wins,
+ * the other is silently dropped, and the superseded operation still reports
+ * completed without ever having been displayed. Load a replacement game (or
+ * don't run one) before driving the scene from the host, or funnel
+ * host-driven changes through tessera_lua_event. */
+TESSERA_API bool tessera_lua_load_game(TesseraEngine* e, const TesseraBytes* script);
+
+/* Queue an input event for the running Lua game. Delivered on the tick thread as
+ * {name=name, args={...}} (args is a Lua array of doubles; args may be NULL when
+ * arg_count is 0). Any-thread, lock-protected, cheap. Returns false if no game is
+ * loaded. Events queue in order; each invocation's returned states append to the
+ * playback queue. */
+TESSERA_API bool tessera_lua_event(TesseraEngine* e, const char* name, const double* args, size_t arg_count);
+
+/* Number of currently registered definitions of ANY kind (atlas/tile/entity/
+ * effect/dice/card/font). Defs are never freed while an engine lives, so this
+ * is also the total ever registered — including registrations made by an
+ * embedded Lua script. 0 for a NULL engine. */
+TESSERA_API uint32_t tessera_def_count(TesseraEngine* e);
+
+/* Number of registered sounds (ids are 1..count), including registrations
+ * made by an embedded Lua script. 0 for a NULL engine. */
+TESSERA_API uint32_t tessera_sound_count(TesseraEngine* e);
 
 #ifdef __cplusplus
 } /* extern "C" */

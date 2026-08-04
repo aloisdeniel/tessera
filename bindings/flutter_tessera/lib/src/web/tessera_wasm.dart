@@ -25,12 +25,13 @@ extension type _EmscriptenModule(JSObject _) implements JSObject {
   external JSAny? ccall(
       JSString name, JSString? returnType, JSArray<JSAny?> argTypes,
       JSArray<JSAny?> args, JSObject opts);
-  external JSNumber _malloc(JSNumber size);
-  external void _free(JSNumber ptr);
+  // Emscripten export names are fixed by the JS module, not our style guide.
+  // ignore: non_constant_identifier_names
   external JSString UTF8ToString(JSNumber ptr);
 
   // Heap views. Re-read on every use: they are detached whenever the wasm
   // memory grows (ALLOW_MEMORY_GROWTH=1).
+  // ignore: non_constant_identifier_names
   external JSUint8Array get HEAPU8;
 }
 

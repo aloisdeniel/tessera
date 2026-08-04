@@ -287,6 +287,13 @@ void tessera_set_focus(TesseraEngine*, const TesseraFocus*);
 
 void tessera__debug_orbit(TesseraEngine*, float dyaw, float dpitch, float dzoom);
 bool tessera_capture_png(TesseraEngine*, int w, int h, const char* png_path);
+
+bool tessera_lua_load_bundle(TesseraEngine*, const TesseraBytes* bundle);
+bool tessera_lua_load_game(TesseraEngine*, const TesseraBytes* script);
+bool tessera_lua_event(TesseraEngine*, const char* name, const double* args, size_t arg_count);
+
+uint32_t tessera_def_count(TesseraEngine*);
+uint32_t tessera_sound_count(TesseraEngine*);
 ]]
 
 local lib = ffi.load("tessera")

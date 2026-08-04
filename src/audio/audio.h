@@ -27,4 +27,7 @@ uint32_t ts_audio_register(TsAudio* a, const TesseraBytes* wav,
  * False when the id is unknown or there is no playback device. */
 bool ts_audio_play(TsAudio* a, uint32_t id, float gain);
 
+/* Number of registered sounds (ids are 1..count). 0 for NULL. */
+uint32_t ts_audio_sound_count(const TsAudio* a);
+
 #endif /* TESSERA_AUDIO_H */

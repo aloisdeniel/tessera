@@ -5,6 +5,7 @@
 #include "fx/fx.h"
 #include "dice/dice.h"
 #include "audio/audio.h"
+#include "lua/lua_vm.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -55,6 +56,14 @@ TesseraEngine* tessera_create(const TesseraConfig* cfg) {
     }
     ts_camera_init(&e->camera);
     e->state = ts_state_create();
+    /* The Lua VM is created eagerly so e->lua is published before any other
+     * thread can exist (tessera_lua_event is any-thread — a lazily created VM
+     * would race its own publication). */
+    e->lua = ts_lua_create(e);
+    if (!e->lua) {
+        ts_engine_set_error(e, "lua: vm init failed");
+        return e;
+    }
     TS_LOGI(&e->log, "tessera %s ready", tessera_version_string());
     return e;
 }
@@ -62,6 +71,7 @@ TesseraEngine* tessera_create(const TesseraConfig* cfg) {
 void tessera_destroy(TesseraEngine* e) {
     if (!e) return;
     if (e->gpu.device) SDL_WaitForGPUIdle(e->gpu.device);
+    if (e->lua) ts_lua_destroy(e->lua);
     if (e->audio) ts_audio_destroy(e->audio);
     if (e->dice) ts_dice_destroy(e->dice);
     if (e->fx) ts_fx_destroy(e->fx, &e->gpu);
@@ -382,4 +392,31 @@ bool tessera_render_rgba(TesseraEngine* e, double dt_seconds, int w, int h,
 
 void tessera_set_asset_dir(const char* dir) {
     ts_gpu_set_asset_dir(dir);
+}
+
+/* ---- embedded Lua game scripting ---- */
+/* The VM is created eagerly in tessera_create; e->lua is NULL only when
+ * engine creation failed part-way (last_error already set). */
+
+bool tessera_lua_load_bundle(TesseraEngine* e, const TesseraBytes* bundle) {
+    if (!e || !e->lua || !bundle) return false;
+    return ts_lua_load_bundle(e->lua, bundle);
+}
+
+bool tessera_lua_load_game(TesseraEngine* e, const TesseraBytes* script) {
+    if (!e || !e->lua || !script) return false;
+    return ts_lua_load_game(e->lua, script);
+}
+
+bool tessera_lua_event(TesseraEngine* e, const char* name, const double* args, size_t arg_count) {
+    if (!e || !e->lua || !name) return false;
+    return ts_lua_queue_event(e->lua, name, args, arg_count);
+}
+
+uint32_t tessera_def_count(TesseraEngine* e) {
+    return e ? (uint32_t)e->registry.defs.count : 0;
+}
+
+uint32_t tessera_sound_count(TesseraEngine* e) {
+    return e ? ts_audio_sound_count(e->audio) : 0;
 }

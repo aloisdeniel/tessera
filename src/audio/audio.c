@@ -92,6 +92,10 @@ uint32_t ts_audio_register(TsAudio* a, const TesseraBytes* wav,
     return ++a->count;   /* ids are index+1, first id is 1 */
 }
 
+uint32_t ts_audio_sound_count(const TsAudio* a) {
+    return a ? a->count : 0;
+}
+
 bool ts_audio_play(TsAudio* a, uint32_t id, float gain) {
     if (!a || id == 0 || id > a->count) return false;
     TsSound* s = &a->sounds[id - 1];

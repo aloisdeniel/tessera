@@ -67,6 +67,9 @@ flutter:
     # referenced from SDL.
     - assets/duel/
     - assets/duel/sfx/
+    # Lua Tic-Tac-Toe: the TSAB asset bundle (tool/generate_ttt_assets.py) and
+    # the game script the engine's embedded Lua VM runs (lib/lua_ttt.dart).
+    - assets/ttt/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

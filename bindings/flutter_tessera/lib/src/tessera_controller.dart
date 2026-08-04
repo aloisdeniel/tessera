@@ -331,6 +331,44 @@ class TesseraController {
     return _engine.playSound(id, gain);
   }
 
+  // ---- embedded Lua game scripting ----
+
+  /// Load a "TSAB" asset bundle for the embedded Lua VM (e.g. a Flutter asset
+  /// loaded with `rootBundle.load`; pack with tools/pack_bundle.py). Entries
+  /// become `tessera.asset("name")` in scripts. May be called repeatedly —
+  /// later bundles add to / override earlier names. A setup-phase call (like
+  /// [registerAtlas]): run it before [start] or between ticks. Throws
+  /// [StateError] with the engine error on a malformed bundle. No-op after
+  /// [dispose].
+  Future<void> loadLuaBundle(Uint8List bytes) async {
+    if (_disposed) return;
+    _engine.luaLoadBundle(bytes);
+  }
+
+  /// Load and start a Lua 5.4 game script whose chunk returns
+  /// `function(event) -> array of state tables` (see docs/lua.md). The chunk's
+  /// top-level code runs immediately (typically registering defs from bundle
+  /// assets); the game function is then invoked on the engine tick thread —
+  /// once with `{name="start"}` on the next tick and once per [sendLuaEvent]
+  /// thereafter — and each returned state plays in order, awaiting the
+  /// previous transition's settle. Replaces any previously loaded game. A
+  /// setup-phase call, like [loadLuaBundle]. Throws [StateError] with the
+  /// engine error on a compile/runtime failure. No-op after [dispose].
+  Future<void> runLuaGame(String source) async {
+    if (_disposed) return;
+    _engine.luaLoadGame(source);
+  }
+
+  /// Queue an input event for the running Lua game, delivered on the tick
+  /// thread as `{name=name, args={...}}` (numbers only). Any-thread; safe
+  /// while the render loop runs. Events queue in order; each invocation's
+  /// returned states append to the playback queue. Silently dropped when no
+  /// game is loaded or after [dispose].
+  void sendLuaEvent(String name, [List<double> args = const []]) {
+    if (_disposed) return;
+    _engine.luaEvent(name, args);
+  }
+
   /// Set the directional light + ambient.
   void setLight(TesseraLightData light) {
     final l = calloc<t.TesseraLight>();

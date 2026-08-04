@@ -31,9 +31,16 @@ add_subdirectory("${SDL3_SOURCE_DIR}" SDL3-build)
 file(GLOB_RECURSE TESSERA_SOURCES CONFIGURE_DEPENDS ${TESSERA_ROOT}/src/*.c)
 list(REMOVE_ITEM TESSERA_SOURCES ${TESSERA_ROOT}/src/thirdparty_impl.c)
 
+# Vendored Lua 5.4 (interpreter library only — no lua/luac standalones),
+# mirroring the root CMakeLists' tessera_thirdparty setup.
+file(GLOB LUA_SOURCES ${TP}/lua/*.c)
+list(REMOVE_ITEM LUA_SOURCES ${TP}/lua/lua.c ${TP}/lua/luac.c
+     ${TP}/lua/loslib.c ${TP}/lua/liolib.c ${TP}/lua/linit.c)
+
 add_library(tessera SHARED
     ${TESSERA_SOURCES}
     ${TESSERA_ROOT}/src/thirdparty_impl.c
+    ${LUA_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/tessera_bridge.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tessera_jni.c)
 
@@ -42,7 +49,8 @@ target_include_directories(tessera
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${TESSERA_ROOT}/src
             ${TP}
-            ${TP}/cglm/include)
+            ${TP}/cglm/include
+            ${TP}/lua)
 
 target_compile_definitions(tessera PRIVATE
     TESSERA_BUILD_SHARED

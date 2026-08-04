@@ -8,6 +8,7 @@ import 'chess.dart';
 import 'duel.dart';
 import 'dungeon.dart';
 import 'game.dart';
+import 'lua_ttt.dart';
 import 'memory.dart';
 import 'reversi.dart';
 import 'snakes.dart';
@@ -43,6 +44,10 @@ final List<_Entry> _games = [
   _entry(() => BlackjackController()),
   _entry(() => MemoryController()),
   _entry(() => YahtzeeController()),
+  // Not a GameController: the game logic lives in a Lua script run by the
+  // engine's embedded VM, so it hosts its own minimal screen.
+  _Entry(LuaTicTacToePage.title, LuaTicTacToePage.subtitle, LuaTicTacToePage.icon,
+      () => const LuaTicTacToePage()),
 ];
 
 class MenuPage extends StatelessWidget {
@@ -58,7 +63,7 @@ class MenuPage extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.fromLTRB(8, 8, 8, 16),
             child: Text(
-              'Nine tabletop games rendered with the Tessera engine.\n'
+              'Ten tabletop games rendered with the Tessera engine.\n'
               'Pick one to play, or tap the robot to watch it auto-play.',
               style: TextStyle(fontSize: 14, height: 1.4),
             ),

@@ -22,6 +22,7 @@ typedef struct TsOrch       TsOrch;         /* orchestration/orch.h — M4 */
 typedef struct TsFx         TsFx;           /* fx/fx.h  — M6 */
 typedef struct TsDice       TsDice;         /* dice/dice.h — thrown dice */
 typedef struct TsAudio      TsAudio;        /* audio/audio.h — sound effects */
+typedef struct TsLua        TsLua;          /* lua/lua_vm.h — embedded game scripting */
 
 #define TS_ERR_CAP 512
 
@@ -105,6 +106,7 @@ struct TesseraEngine {
     TsFx*         fx;       /* particle systems (M6)                     */
     TsDice*       dice;     /* imperatively-thrown dice (outside state)  */
     TsAudio*      audio;    /* sound effects (lazy, first register)      */
+    TsLua*        lua;      /* embedded Lua game (lazy, first load)      */
 
     double        clock;          /* accumulated engine time (s) */
     bool          have_rendered;
@@ -146,6 +148,12 @@ void ts_engine_set_error(TesseraEngine* e, const char* fmt, ...);
  * event for the end-of-tick callback flush. Cheap: no allocation. */
 void ts_engine_emit_event(TesseraEngine* e, uint32_t type, uint32_t subject,
                           uint64_t subject_id, TesseraCoord coord, float value);
+
+/* Drive the embedded Lua game's playback queue (lua/lua_vm.c). Called on the
+ * tick thread from ts_engine_advance, right after the op settle, so a queued
+ * state is pushed the same tick the previous operation completes. No-op while
+ * e->lua is NULL. */
+void ts_lua_advance(TesseraEngine* e);
 
 /* Advance animation clocks + render exactly one frame. */
 void ts_engine_tick(TesseraEngine* e, double dt);

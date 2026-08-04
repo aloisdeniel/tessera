@@ -21,6 +21,7 @@
 // when the underlying async call resolves.
 
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:math' as math;
@@ -486,6 +487,82 @@ class TesseraController {
     _call('tessera_play_sound', 'number', [_engine, id, gain])
         .catchError((_) => null);
     return true;
+  }
+
+  // ---- embedded Lua game scripting ----
+
+  /// Load a "TSAB" asset bundle for the embedded Lua VM (e.g. a Flutter asset
+  /// loaded with `rootBundle.load`; pack with tools/pack_bundle.py). Entries
+  /// become `tessera.asset("name")` in scripts. May be called repeatedly —
+  /// later bundles add to / override earlier names. Same contract as the io
+  /// controller: a setup-phase call, throwing [StateError] with the engine
+  /// error on a malformed bundle. No-op after [dispose].
+  Future<void> loadLuaBundle(Uint8List bytes) =>
+      _luaLoad('loadLuaBundle', 'tessera_lua_load_bundle', bytes);
+
+  /// Load and start a Lua 5.4 game script whose chunk returns
+  /// `function(event) -> array of state tables` (see docs/lua.md). The chunk's
+  /// top-level code runs immediately (typically registering defs from bundle
+  /// assets); the game function is then invoked per event on the engine tick
+  /// path, and each returned state plays in order, awaiting the previous
+  /// transition's settle. Replaces any previously loaded game. Throws
+  /// [StateError] with the engine error on a compile/runtime failure. No-op
+  /// after [dispose].
+  Future<void> runLuaGame(String source) => _luaLoad('runLuaGame',
+      'tessera_lua_load_game', Uint8List.fromList(utf8.encode(source)));
+
+  /// bytes -> TesseraBytes struct in wasm memory -> tessera_lua_load_*.
+  Future<void> _luaLoad(String what, String symbol, Uint8List bytes) async {
+    if (_disposed) return;
+    final ptr = _wasm.allocBytes(bytes);
+    final def = _wasm.allocBytes(_bytesStruct(ptr, bytes.length));
+    try {
+      final ok = await _call(symbol, 'number', [_engine, def]) as int;
+      if (ok == 0) {
+        final msg = await _call('tessera_last_error', 'string', [_engine]);
+        throw StateError('flutter_tessera: $what failed — $msg');
+      }
+      // The script's top-level code may have registered defs/sounds inside
+      // the engine, advancing the counters the register* id predictions are
+      // based on — resync the predictors from the engine so later Dart-side
+      // register* calls stay correct.
+      _defCount = await _call('tessera_def_count', 'number', [_engine]) as int;
+      _soundCount =
+          await _call('tessera_sound_count', 'number', [_engine]) as int;
+    } finally {
+      _wasm.free(def);
+      _wasm.free(ptr);
+    }
+  }
+
+  /// Queue an input event for the running Lua game, delivered on the tick
+  /// thread as `{name=name, args={...}}` (numbers only). Fire-and-forget
+  /// behind the serialized call chain (like [playSound]); events queue in
+  /// order and each invocation's returned states append to the playback
+  /// queue. Silently dropped when no game is loaded or after [dispose].
+  void sendLuaEvent(String name, [List<double> args = const []]) {
+    if (_disposed) return;
+    var argsPtr = 0;
+    if (args.isNotEmpty) {
+      // A packed little-endian double[] for wasm memory.
+      final b = Uint8List(args.length * 8);
+      final d = ByteData.sublistView(b);
+      for (var i = 0; i < args.length; ++i) {
+        d.setFloat64(i * 8, args[i], _le);
+      }
+      argsPtr = _wasm.allocBytes(b);
+    }
+    final ptr = argsPtr;
+    () async {
+      try {
+        final ok = await _call(
+            'tessera_lua_event', 'number', [_engine, name, ptr, args.length])
+            as int;
+        if (ok == 0) _lastError('sendLuaEvent: dropped');
+      } finally {
+        _wasm.free(ptr);
+      }
+    }();
   }
 
   /// Set the directional light + ambient.
