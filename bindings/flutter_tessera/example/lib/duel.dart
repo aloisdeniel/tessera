@@ -1139,13 +1139,18 @@ class DuelController extends GameController<DuelState, DuelAction> {
 
     final hl = <TesseraHighlight>[];
     if (s.selected != 0) {
-      // The focused card in gold; when it is an armed attacker, every legal
-      // target pulses red.
+      // The focused card in gold; hand cards take a crisp outline so the face
+      // stays readable, board creatures glow. When the selection is an armed
+      // attacker, every legal target pulses red.
+      final inHand = s.selectedInHand(s.you);
       hl.add(TesseraHighlight(
         targetId: s.selected,
         kind: TesseraHighlightKind.card,
-        style: TesseraHighlightStyle.glow,
+        style: inHand
+            ? TesseraHighlightStyle.outline
+            : TesseraHighlightStyle.glow,
         color: const [1.0, 0.84, 0.35, 1.0],
+        thickness: inHand ? 5 : 0,
         pulseS: 1.1,
         pulseMin: 0.5,
         pulseMax: 1.0,
@@ -1168,14 +1173,16 @@ class DuelController extends GameController<DuelState, DuelAction> {
         }
       }
     } else {
-      // Affordable cards glow green; rested attackers get a quiet outline.
+      // Affordable hand cards take a green outline (not a glow, so the card
+      // face stays readable); ready attackers get a quiet outline too.
       for (final h in s.you.hand) {
         if (duelSpecs[h.type].cost <= s.you.mana && s.you.hasFreeSlot) {
           hl.add(TesseraHighlight(
             targetId: h.id,
             kind: TesseraHighlightKind.card,
-            style: TesseraHighlightStyle.glow,
+            style: TesseraHighlightStyle.outline,
             color: const [0.45, 1.0, 0.55, 1.0],
+            thickness: 4,
             pulseS: 1.6,
             pulseMin: 0.35,
             pulseMax: 0.8,
